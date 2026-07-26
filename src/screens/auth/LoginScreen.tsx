@@ -4,15 +4,7 @@ import LinearGradient from 'react-native-linear-gradient';
 import {useAuth} from '../../context/AuthContext';
 import {useTheme} from '../../context/ThemeContext';
 import {BRAND_GRADIENT} from '../../theme/colors';
-import {Icon, IconName} from '../../components/Icon';
-
-const DEMO: {role: string; id: string; icon: IconName}[] = [
-  {role: 'Doctor',  id: 'DOC001', icon: 'user'},
-  {role: 'Staff',   id: 'STF001', icon: 'userCard'},
-  {role: 'Valet',   id: 'VAL001', icon: 'key'},
-  {role: 'Driver',  id: 'DRV001', icon: 'car'},
-  {role: 'Admin',   id: 'ADM001', icon: 'shield'},
-];
+import {Icon} from '../../components/Icon';
 
 export function LoginScreen() {
   const {login} = useAuth();
@@ -74,7 +66,7 @@ export function LoginScreen() {
                   <Icon name="userCard" size={18} color={colors.textMuted} style={{marginRight: 4}} />
                   <TextInput
                     style={[s.input, {color: colors.textPrimary}]}
-                    placeholder="e.g. DOC001"
+                    placeholder="Enter your Employee ID"
                     placeholderTextColor={colors.textMuted}
                     value={empId}
                     onChangeText={t => { setEmpId(t); setError(''); }}
@@ -136,34 +128,12 @@ export function LoginScreen() {
 
           </Animated.View>
 
-          {/* Login as */}
-          <View style={s.demoSection}>
-            <View style={s.demoHeaderRow}>
-              <View style={[s.demoDivider, {backgroundColor: colors.border}]} />
-              <Text style={[s.demoHeader, {color: colors.textMuted}]}>LOGIN AS</Text>
-              <View style={[s.demoDivider, {backgroundColor: colors.border}]} />
-            </View>
-            <View style={s.roleRow}>
-              {DEMO.map(d => (
-                <TouchableOpacity
-                  key={d.role}
-                  style={[s.roleTile, {borderColor: colors.border, backgroundColor: colors.surface}]}
-                  onPress={() => { setEmpId(d.id); setPassword('1234'); setError(''); }}
-                  activeOpacity={0.7}
-                >
-                  <Icon name={d.icon} size={22} color={colors.primary} />
-                  <Text style={[s.roleLabel, {color: colors.textPrimary}]}>{d.role}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-
           <View style={s.footer}>
             <View style={s.footerBadge}>
               <Icon name="shield" size={13} color={colors.textMuted} />
               <Text style={[s.footerBadgeTxt, {color: colors.textMuted}]}>Secure Enterprise Login</Text>
             </View>
-            <Text style={[s.version, {color: colors.textMuted}]}>KIMS Valet System v2.0</Text>
+            <Text style={[s.version, {color: colors.textMuted}]}>KIMS Parking System v1.1</Text>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -197,14 +167,6 @@ const s = StyleSheet.create({
   checkbox: {width: 20, height: 20, borderRadius: 5, borderWidth: 2, alignItems: 'center', justifyContent: 'center', marginTop: 1},
   keepTitle: {fontSize: 13, fontWeight: '700'},
   keepSub: {fontSize: 11, marginTop: 2},
-
-  demoSection: {paddingHorizontal: 20, marginBottom: 8},
-  demoHeaderRow: {flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 14},
-  demoDivider: {flex: 1, height: 1},
-  demoHeader: {fontSize: 10, fontWeight: '800', letterSpacing: 1.5},
-  roleRow: {flexDirection: 'row', justifyContent: 'space-between', gap: 8},
-  roleTile: {flex: 1, alignItems: 'center', gap: 6, borderWidth: 1, borderRadius: 14, paddingVertical: 12, paddingHorizontal: 4},
-  roleLabel: {fontSize: 11, fontWeight: '700'},
 
   footer: {alignItems: 'center', paddingBottom: 8, gap: 6},
   footerBadge: {flexDirection: 'row', alignItems: 'center', gap: 6},

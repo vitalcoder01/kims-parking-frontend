@@ -91,6 +91,8 @@ export const authApi = {
 export const usersApi = {
   lookupByCardCode: (code: string) =>
     client.get(`/users/by-card/${code}`).then(r => r.data.user),
+  updateMe: (patch: {carNumber?: string; phone?: string}) =>
+    client.patch('/users/me', patch).then(r => r.data.user),
 };
 
 // ── Tasks ────────────────────────────────────────────────────────────────
@@ -98,7 +100,7 @@ export const tasksApi = {
   list: (params?: {doctorId?: string; driverId?: string; status?: string; type?: string}) =>
     client.get('/tasks', {params}).then(r => r.data.tasks),
   get: (id: string) => client.get(`/tasks/${id}`).then(r => r.data.task),
-  create: (data: {type: 'park' | 'retrieve'; doctorId: string; carNumber: string; slotId?: string}) =>
+  create: (data: {type: 'park' | 'retrieve'; doctorId: string; carNumber: string; slotId?: string; destinationLat?: number; destinationLng?: number}) =>
     client.post('/tasks', data).then(r => r.data.task),
   assignDriver: (id: string, driverId: string) =>
     client.patch(`/tasks/${id}/assign`, {driverId}).then(r => r.data.task),
@@ -158,6 +160,19 @@ export const attendanceApi = {
 // ── Admin ────────────────────────────────────────────────────────────────
 export const adminApi = {
   dashboard: () => client.get('/admin/dashboard').then(r => r.data),
+  listUsers: () => client.get('/admin/users').then(r => r.data.users),
+  createUser: (data: {
+    employeeId: string; name: string; role: 'doctor' | 'staff' | 'valet' | 'driver' | 'admin';
+    password: string; department?: string; cardCode?: string; phone?: string; carNumber?: string;
+  }) => client.post('/admin/users', data).then(r => r.data.user),
+  updateUser: (id: string, patch: {
+    name?: string; role?: 'doctor' | 'staff' | 'valet' | 'driver' | 'admin';
+    department?: string; cardCode?: string; phone?: string; carNumber?: string;
+  }) => client.patch(`/admin/users/${id}`, patch).then(r => r.data.user),
+  resetPassword: (id: string, password: string) =>
+    client.patch(`/admin/users/${id}/password`, {password}).then(r => r.data),
+  deleteUser: (id: string) => client.delete(`/admin/users/${id}`).then(() => undefined),
+  attendanceToday: () => client.get('/admin/attendance/today').then(r => r.data.attendance),
 };
 
 export default client;

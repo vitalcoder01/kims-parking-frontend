@@ -4,29 +4,21 @@ import {WebView} from 'react-native-webview';
 import {useTheme} from '../../context/ThemeContext';
 import {useAppState, ParkingTask} from '../../context/AppStateContext';
 import {useAuth} from '../../context/AuthContext';
-import {computeLiveProgress} from '../../utils/geo';
+import {computeTrip} from '../../utils/geo';
 
 const {height} = Dimensions.get('window');
 
-// KIMS Hospital Secunderabad approximate coords
-const HOSPITAL = {lat: 17.4399, lng: 78.3489};
-
-// Simulated parking route waypoints from entrance to parking block A
-const PARK_ROUTE: [number, number][] = [
-  [17.4399, 78.3489],  // Hospital gate
-  [17.4396, 78.3492],  // Main drive
-  [17.4393, 78.3496],  // Parking entrance
-  [17.4391, 78.3500],  // Block A row 1
-  [17.4389, 78.3503],  // Block A row 2
-  [17.4387, 78.3505],  // Destination slot
-];
-
-const RETRIEVE_ROUTE: [number, number][] = [...PARK_ROUTE].reverse();
-
-function buildMapHTML(lat: number, lng: number, routePoints: [number,number][], isDark: boolean) {
-  const routeJSON = JSON.stringify(routePoints);
+// buildMapHTML centers on whatever real position is actually known (the
+// driver's current fix, falling back to the destination, falling back to a
+// neutral world view) — never a fixed hardcoded location, since that made
+// the map jump wildly the moment a real GPS fix arrived from wherever the
+// device actually is.
+function buildMapHTML(
+  centerLat: number, centerLng: number,
+  destLat: number | null, destLng: number | null,
+  isDark: boolean,
+) {
   const bgColor = isDark ? '#0F1829' : '#EEF2FF';
-  const textColor = isDark ? '#F1F5F9' : '#0F172A';
 
   return `<!DOCTYPE html>
 <html>
@@ -44,45 +36,42 @@ function buildMapHTML(lat: number, lng: number, routePoints: [number,number][], 
 <div id="map"></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-  var map = L.map('map', {zoomControl: false, attributionControl: false}).setView([${lat}, ${lng}], 17);
+  var map = L.map('map', {zoomControl: false, attributionControl: false}).setView([${centerLat}, ${centerLng}], 17);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19}).addTo(map);
 
-  var routePoints = ${routeJSON};
+  var destination = ${destLat != null && destLng != null ? `[${destLat}, ${destLng}]` : 'null'};
+  var routeLine = null;
 
-  // Draw route polyline
-  var routeLine = L.polyline(routePoints, {
-    color: '${isDark ? '#818CF8' : '#4F46E5'}',
-    weight: 5,
-    opacity: 0.8,
-    dashArray: '8, 6',
-    lineCap: 'round',
-  }).addTo(map);
-  map.fitBounds(routeLine.getBounds(), {padding: [40, 40]});
+  if (destination) {
+    L.circleMarker(destination, {
+      radius: 10, color: '${isDark ? '#F59E0B' : '#D97706'}',
+      fillColor: '${isDark ? '#F59E0B' : '#D97706'}', fillOpacity: 1, weight: 3,
+    }).addTo(map).bindPopup('<b>Destination</b>');
+  }
 
-  // Start marker
-  L.circleMarker(routePoints[0], {
-    radius: 10, color: '${isDark ? '#10B981' : '#059669'}',
-    fillColor: '${isDark ? '#10B981' : '#059669'}', fillOpacity: 1, weight: 3,
-  }).addTo(map).bindPopup('<b>Valet Counter</b>');
-
-  // End marker
-  L.circleMarker(routePoints[routePoints.length-1], {
-    radius: 10, color: '${isDark ? '#F59E0B' : '#D97706'}',
-    fillColor: '${isDark ? '#F59E0B' : '#D97706'}', fillOpacity: 1, weight: 3,
-  }).addTo(map).bindPopup('<b>Parking Slot</b>');
-
-  // Car marker — starts at the route's origin and only moves when a real
-  // GPS fix arrives from React Native (no scripted/fake motion).
+  // Car marker — starts at the map's initial center (a real known position)
+  // and only moves when a real GPS fix arrives from React Native.
   var carIcon = L.divIcon({className: '', html: '<div class="car-icon">🚗</div>', iconSize: [32, 32], iconAnchor: [16, 16]});
-  var carMarker = L.marker(routePoints[0], {icon: carIcon}).addTo(map);
+  var carMarker = L.marker([${centerLat}, ${centerLng}], {icon: carIcon}).addTo(map);
+
+  function refreshRoute(pos) {
+    if (!destination) return;
+    if (routeLine) map.removeLayer(routeLine);
+    routeLine = L.polyline([pos, destination], {
+      color: '${isDark ? '#818CF8' : '#4F46E5'}', weight: 4, opacity: 0.75, dashArray: '8, 6', lineCap: 'round',
+    }).addTo(map);
+  }
+  refreshRoute([${centerLat}, ${centerLng}]);
 
   // Listen for real GPS location from React Native
   document.addEventListener('message', function(e) {
     try {
       var data = JSON.parse(e.data);
       if (data.type === 'realGPS') {
-        carMarker.setLatLng([data.lat, data.lng]);
-        map.panTo([data.lat, data.lng], {animate: true, duration: 1.0});
+        var pos = [data.lat, data.lng];
+        carMarker.setLatLng(pos);
+        map.panTo(pos, {animate: true, duration: 1.0});
+        refreshRoute(pos);
       }
     } catch(err) {}
   });
@@ -101,7 +90,7 @@ export function LiveTrackingScreen({task: taskProp, onBack}: Props) {
   const {user} = useAuth();
   const {tasks} = useAppState();
   const webRef = useRef<any>(null);
-  const [progress, setProgress] = useState(0);
+  const [trip, setTrip] = useState<{progress: number; etaMinutes: number; distanceRemainingM: number | null} | null>(null);
   const progressAnim = useRef(new Animated.Value(0)).current;
   const sheetAnim = useRef(new Animated.Value(260)).current;
 
@@ -110,7 +99,6 @@ export function LiveTrackingScreen({task: taskProp, onBack}: Props) {
   // Used bare (no `task` prop) from the driver's "Track" tab — resolve their
   // own active task instead of rendering an empty/unrelated screen.
   const task = taskProp ?? (isDriver ? tasks.find(t => t.driverId === myDriverId && t.status !== 'completed') : undefined);
-  const routePoints = task?.type === 'retrieve' ? RETRIEVE_ROUTE : PARK_ROUTE;
   const arrived = task?.status === 'completed';
   const realLat = task?.driverLat ?? null;
   const realLng = task?.driverLng ?? null;
@@ -122,20 +110,24 @@ export function LiveTrackingScreen({task: taskProp, onBack}: Props) {
     if (realLat == null || realLng == null) return;
     webRef.current?.postMessage(JSON.stringify({type: 'realGPS', lat: realLat, lng: realLng}));
 
-    const frac = computeLiveProgress(task?.driverStartLat, task?.driverStartLng, realLat, realLng) ?? 0;
-    setProgress(frac);
-    Animated.timing(progressAnim, {toValue: frac, duration: 400, useNativeDriver: false}).start();
-  }, [realLat, realLng, task?.driverStartLat, task?.driverStartLng]);
+    const result = computeTrip({
+      startLat: task?.driverStartLat, startLng: task?.driverStartLng,
+      lat: realLat, lng: realLng,
+      destinationLat: task?.destinationLat, destinationLng: task?.destinationLng,
+      mode: task?.type === 'retrieve' ? 'walk' : 'drive',
+    });
+    if (!result) return;
+    setTrip(result);
+    Animated.timing(progressAnim, {toValue: result.progress, duration: 400, useNativeDriver: false}).start();
+  }, [realLat, realLng, task?.driverStartLat, task?.driverStartLng, task?.destinationLat, task?.destinationLng, task?.type]);
 
   // Animate bottom sheet in
   useEffect(() => {
     Animated.spring(sheetAnim, {toValue: 0, useNativeDriver: true, speed: 12, bounciness: 4}).start();
   }, []);
 
+  const progress = trip?.progress ?? 0;
   const progressWidth = progressAnim.interpolate({inputRange: [0, 1], outputRange: ['0%', '100%']});
-  const eta = Math.max(0, Math.round((1 - progress) * 8));
-
-  const mapHTML = buildMapHTML(HOSPITAL.lat, HOSPITAL.lng, routePoints, isDark);
 
   if (!task) {
     return (
@@ -146,6 +138,13 @@ export function LiveTrackingScreen({task: taskProp, onBack}: Props) {
       </View>
     );
   }
+
+  // Center on whatever real position we actually know — current GPS first,
+  // then the destination, then a neutral fallback (never a fixed demo
+  // coordinate unrelated to where this device really is).
+  const centerLat = realLat ?? task.destinationLat ?? 20.5937;
+  const centerLng = realLng ?? task.destinationLng ?? 78.9629;
+  const mapHTML = buildMapHTML(centerLat, centerLng, task.destinationLat ?? null, task.destinationLng ?? null, isDark);
 
   return (
     <View style={[s.root, {backgroundColor: colors.background}]}>
@@ -198,7 +197,7 @@ export function LiveTrackingScreen({task: taskProp, onBack}: Props) {
                 {task?.type === 'park' ? 'Car Parked Successfully!' : 'Car Retrieved!'}
               </Text>
               <Text style={[s.arrivedSub, {color: colors.textMuted}]}>
-                {task?.slotId ? `Slot: ${task.slotId}` : 'Delivered to valet counter'}
+                {task?.type === 'retrieve' ? 'Ready at the gate' : task?.slotId ? `Slot: ${task.slotId}` : 'Delivered to valet counter'}
               </Text>
             </View>
           </View>
@@ -213,11 +212,23 @@ export function LiveTrackingScreen({task: taskProp, onBack}: Props) {
                   {task?.carNumber ?? 'Vehicle'} · {task?.driverName ?? 'Driver en route'}
                 </Text>
               </View>
-              <View style={[s.etaBox, {backgroundColor: colors.primary}]}>
-                <Text style={s.etaNum}>{eta}</Text>
-                <Text style={s.etaUnit}>min</Text>
-              </View>
+              {trip ? (
+                <View style={[s.etaBox, {backgroundColor: colors.primary}]}>
+                  <Text style={s.etaNum}>{trip.etaMinutes}</Text>
+                  <Text style={s.etaUnit}>min</Text>
+                </View>
+              ) : (
+                <View style={[s.etaBox, {backgroundColor: colors.textMuted}]}>
+                  <Text style={s.etaUnit}>Waiting{'\n'}for GPS</Text>
+                </View>
+              )}
             </View>
+
+            {trip?.distanceRemainingM != null && (
+              <Text style={[s.distanceNote, {color: colors.textMuted}]}>
+                {trip.distanceRemainingM < 1000 ? `${trip.distanceRemainingM} m` : `${(trip.distanceRemainingM / 1000).toFixed(1)} km`} remaining
+              </Text>
+            )}
 
             <View style={s.stepsRow}>
               {['Key Collected', 'In Transit', task?.type === 'park' ? 'Parked ✓' : 'At Gate ✓'].map((step, i) => {
@@ -265,13 +276,14 @@ const s = StyleSheet.create({
   sheet: {position: 'absolute', bottom: 0, left: 0, right: 0, borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 20, paddingTop: 8, paddingBottom: 32, shadowColor: '#000', shadowOffset: {width: 0, height: -4}, shadowOpacity: 0.15, shadowRadius: 16, elevation: 24},
   progressTrack: {height: 4, borderRadius: 2, marginVertical: 16, overflow: 'hidden'},
   progressFill: {height: '100%', borderRadius: 2},
-  sheetHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20},
+  sheetHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8},
   sheetTitle: {fontSize: 17, fontWeight: '800'},
   sheetSub: {fontSize: 12, marginTop: 3},
+  distanceNote: {fontSize: 11, fontWeight: '600', marginBottom: 12},
   etaBox: {borderRadius: 14, paddingHorizontal: 14, paddingVertical: 10, alignItems: 'center'},
   etaNum: {color: '#fff', fontSize: 22, fontWeight: '900'},
-  etaUnit: {color: 'rgba(255,255,255,0.75)', fontSize: 10, fontWeight: '600'},
-  stepsRow: {flexDirection: 'row', alignItems: 'center', marginBottom: 16},
+  etaUnit: {color: '#fff', fontSize: 10, fontWeight: '700', textAlign: 'center'},
+  stepsRow: {flexDirection: 'row', alignItems: 'center', marginBottom: 16, marginTop: 8},
   step: {flex: 1, alignItems: 'center', position: 'relative'},
   stepDot: {width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginBottom: 6},
   stepCheck: {color: '#fff', fontSize: 12, fontWeight: '900'},

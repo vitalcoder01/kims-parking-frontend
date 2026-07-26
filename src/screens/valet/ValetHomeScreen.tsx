@@ -1,12 +1,34 @@
 import React, {useState} from 'react';
-import {View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, TextInput, Linking, Alert} from 'react-native';
+import {View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, TextInput, Linking, Alert, Platform, PermissionsAndroid} from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
+import Geolocation from 'react-native-geolocation-service';
 import {useAuth} from '../../context/AuthContext';
 import {useAppState} from '../../context/AppStateContext';
 import {useTheme} from '../../context/ThemeContext';
 import {BRAND_GRADIENT, BRAND_GRADIENT_DARK} from '../../theme/colors';
 import {Icon} from '../../components/Icon';
 import {usersApi} from '../../services/api';
+
+// Best-effort — the valet's current position becomes the retrieve trip's
+// real destination (see handleRetrieve). If permission is denied or the fix
+// times out, the task is still created without one; the driver/doctor just
+// fall back to the nominal-distance progress estimate for that trip.
+async function getCurrentPositionSafe(): Promise<{lat: number; lng: number} | null> {
+  if (Platform.OS === 'android') {
+    const granted = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+      {title: 'Location Permission', message: 'KIMS Parking needs your location to guide the driver back to you.', buttonPositive: 'Allow'},
+    );
+    if (granted !== PermissionsAndroid.RESULTS.GRANTED) return null;
+  }
+  return new Promise(resolve => {
+    Geolocation.getCurrentPosition(
+      pos => resolve({lat: pos.coords.latitude, lng: pos.coords.longitude}),
+      () => resolve(null),
+      {enableHighAccuracy: true, timeout: 8000, maximumAge: 10000},
+    );
+  });
+}
 
 function sendWhatsApp(mobile: string, name: string, carNumber: string, token: string, slot?: string) {
   const msg = `🏥 *KIMS Hospital Parking*\n\nHello ${name},\n\nYour car *${carNumber}* has been safely received by our valet service.\n\n📍 *Token:* ${token}\n🅿️ *Slot:* ${slot ?? 'Being assigned...'}\n\n_You will be notified once your car is parked._\n\nTo retrieve your car, reply *RETRIEVE* or contact our desk.\n\n_KIMS Smart Parking · Secure · Real-time_`;
@@ -56,6 +78,9 @@ export function ValetHomeScreen() {
     try {
       const found = await usersApi.lookupByCardCode(trimmed);
       setFoundUser(found);
+      // Reuse the car number already on file for this person — no need for
+      // the valet to retype it every single visit.
+      setCarNumber(found.carNumber ?? '');
       setCode('');
     } catch (err) {
       setCodeError('No user found with this code');
@@ -111,6 +136,10 @@ export function ValetHomeScreen() {
   const handleRetrieve = async (slot: typeof parkedSlots[number]) => {
     try {
       const origTask = tasks.find(t => t.id === slot.taskId);
+      // The valet's own position right now IS the real destination — this is
+      // where the driver needs to bring the car — so distance/ETA on the
+      // tracking map become genuinely accurate instead of a guessed constant.
+      const here = await getCurrentPositionSafe();
       const id = await addTask({
         type: 'retrieve',
         doctorId: slot.doctorId ?? '',
@@ -119,6 +148,8 @@ export function ValetHomeScreen() {
         slotId: slot.id,
         status: 'assigned',
         assignedAt: Date.now(),
+        destinationLat: here?.lat,
+        destinationLng: here?.lng,
       });
       setPendingTaskId(id);
       setScreen('assign');

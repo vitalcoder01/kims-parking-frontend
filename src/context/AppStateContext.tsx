@@ -38,6 +38,8 @@ export interface ParkingTask {
   locationUpdatedAt?: number;
   driverStartLat?: number;
   driverStartLng?: number;
+  destinationLat?: number;
+  destinationLng?: number;
 }
 
 export interface ParkingSlot {
@@ -239,6 +241,8 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
       doctorId: task.doctorId,
       carNumber: task.carNumber,
       slotId: task.slotId,
+      destinationLat: task.destinationLat,
+      destinationLng: task.destinationLng,
     });
     const mapped = mapTask(created);
     setTasks(p => [...p, mapped]);

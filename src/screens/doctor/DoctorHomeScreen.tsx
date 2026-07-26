@@ -25,9 +25,17 @@ export function DoctorHomeScreen() {
   const [showTracking, setShowTracking]   = useState(false);
   const pulse = useRef(new Animated.Value(1)).current;
 
+  // `tasks` comes back from the backend newest-first (createdAt desc) — the
+  // most recent task for this doctor is index 0, not the last index. Using
+  // the wrong end of the array was the real cause of stale slot/driver info
+  // showing up: once there was more than one task in history, "latest"
+  // silently meant "oldest".
   const myTasks   = tasks.filter(t => t.doctorId === user?.id);
   const activeTask = myTasks.find(t => t.status !== 'completed');
-  const latestTask = myTasks[myTasks.length - 1];
+  const latestTask = myTasks[0];
+  const displayTask = activeTask ?? latestTask;
+  const carIsParked = displayTask?.type === 'park' && displayTask.status === 'completed';
+  const carJustRetrieved = displayTask?.type === 'retrieve' && displayTask.status === 'completed';
 
   useEffect(() => {
     if (departureSet && countdown !== null && countdown > 0) {
@@ -46,7 +54,7 @@ export function DoctorHomeScreen() {
   const handleDeparture = (eta: number) => {
     setDepartureSet(true);
     setCountdown(eta * 60);
-    const slot = latestTask?.slotId ?? 'parking slot';
+    const slot = displayTask?.slotId ?? 'parking slot';
     // Immediate in-app + tray confirmation for the doctor.
     pushNotification({
       targetRole: 'valet',
@@ -74,8 +82,8 @@ export function DoctorHomeScreen() {
   };
   const statusInfo = activeTask ? statusMap[activeTask.status] : null;
 
-  if (showTracking && (activeTask || latestTask)) {
-    return <LiveTrackingScreen task={activeTask ?? latestTask} onBack={() => setShowTracking(false)} />;
+  if (showTracking && displayTask) {
+    return <LiveTrackingScreen task={displayTask} onBack={() => setShowTracking(false)} />;
   }
 
   return (
@@ -115,18 +123,24 @@ export function DoctorHomeScreen() {
               )}
             </View>
 
-            {activeTask || latestTask ? (
+            {displayTask ? (
               <>
-                {(activeTask?.slotId ?? latestTask?.slotId) && (
+                {carIsParked && displayTask.slotId && (
                   <LinearGradient colors={isDark ? ['#162040','#1C2A50'] : ['#EEF2FF','#DBEAFE']} style={s.slotBanner} start={{x:0,y:0}} end={{x:1,y:0}}>
                     <Text style={[s.slotLabel, {color: colors.textMuted}]}>PARKED AT SLOT</Text>
-                    <Text style={[s.slotValue, {color: colors.primary}]}>{activeTask?.slotId ?? latestTask?.slotId}</Text>
+                    <Text style={[s.slotValue, {color: colors.primary}]}>{displayTask.slotId}</Text>
+                  </LinearGradient>
+                )}
+                {carJustRetrieved && (
+                  <LinearGradient colors={isDark ? ['#0D2A1C', '#0F3323'] : ['#ECFDF5', '#D1FAE5']} style={s.slotBanner} start={{x:0,y:0}} end={{x:1,y:0}}>
+                    <Text style={[s.slotLabel, {color: colors.success}]}>🚗 CAR READY AT ENTRANCE</Text>
+                    <Text style={[s.slotValue, {color: colors.success, fontSize: 22}]}>Please collect at the gate</Text>
                   </LinearGradient>
                 )}
                 <View style={s.metaRow}>
                   {[
-                    {label: 'Vehicle', value: activeTask?.carNumber ?? latestTask?.carNumber ?? '—'},
-                    {label: 'Driver', value: activeTask?.driverName ?? latestTask?.driverName ?? 'Unassigned'},
+                    {label: 'Vehicle', value: displayTask.carNumber ?? '—'},
+                    {label: 'Driver', value: displayTask.driverName ?? 'Unassigned'},
                   ].map(m => (
                     <View key={m.label} style={[s.metaCell, {borderColor: colors.border}]}>
                       <Text style={[s.metaCellLabel, {color: colors.textMuted}]}>{m.label.toUpperCase()}</Text>
@@ -134,12 +148,14 @@ export function DoctorHomeScreen() {
                     </View>
                   ))}
                 </View>
-                <TouchableOpacity style={[s.trackBtn, {backgroundColor: colors.primary + '10', borderColor: colors.primary + '30'}]}
-                  onPress={() => setShowTracking(true)} activeOpacity={0.8}>
-                  <Icon name="map" size={18} color={colors.primary} />
-                  <Text style={[s.trackBtnTxt, {color: colors.primary}]}>View Live Tracking Map</Text>
-                  <Icon name="arrowRight" size={18} color={colors.primary} />
-                </TouchableOpacity>
+                {!carJustRetrieved && (
+                  <TouchableOpacity style={[s.trackBtn, {backgroundColor: colors.primary + '10', borderColor: colors.primary + '30'}]}
+                    onPress={() => setShowTracking(true)} activeOpacity={0.8}>
+                    <Icon name="map" size={18} color={colors.primary} />
+                    <Text style={[s.trackBtnTxt, {color: colors.primary}]}>View Live Tracking Map</Text>
+                    <Icon name="arrowRight" size={18} color={colors.primary} />
+                  </TouchableOpacity>
+                )}
               </>
             ) : (
               <View style={[s.emptySlot, {borderColor: colors.border}]}>
@@ -149,8 +165,9 @@ export function DoctorHomeScreen() {
             )}
           </View>
 
-          {/* Departure */}
-          {(latestTask?.status === 'completed') && !departureSet && (
+          {/* Departure — only offered while the car is actually parked and
+              waiting; once it's been retrieved there's nothing to request. */}
+          {carIsParked && !departureSet && (
             <View style={[s.departureCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
               <LinearGradient colors={BRAND_GRADIENT} style={s.departureHeader} start={{x:0,y:0}} end={{x:1,y:0}}>
                 <Text style={s.departureHeaderTxt}>Ready to Leave?</Text>

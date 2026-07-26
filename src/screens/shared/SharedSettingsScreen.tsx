@@ -6,6 +6,7 @@ import {
   StyleSheet,
   SafeAreaView,
   TouchableOpacity,
+  TextInput,
   Alert,
 } from 'react-native';
 import {useTheme} from '../../context/ThemeContext';
@@ -13,6 +14,7 @@ import {useAuth} from '../../context/AuthContext';
 import {ThemeToggleRow, AppSwitch} from '../../components/AppSwitch';
 import {Card} from '../../components/Card';
 import {typography, spacing, radius} from '../../theme';
+import {usersApi} from '../../services/api';
 
 type ThemeMode = 'light' | 'dark' | 'system';
 
@@ -23,12 +25,29 @@ const ROLE_LABELS: Record<string, string> = {
 
 export function SharedSettingsScreen() {
   const {colors, mode, setMode} = useTheme();
-  const {user, logout} = useAuth();
+  const {user, logout, updateProfile} = useAuth();
 
   const [notifTasks,    setNotifTasks]    = React.useState(true);
   const [notifShift,    setNotifShift]    = React.useState(true);
   const [notifUpdates,  setNotifUpdates]  = React.useState(false);
   const [biometrics,    setBiometrics]    = React.useState(true);
+
+  const showVehicleField = user?.role === 'doctor' || user?.role === 'staff';
+  const [carNumber, setCarNumber] = React.useState(user?.carNumber ?? '');
+  const [savingCar, setSavingCar] = React.useState(false);
+
+  const handleSaveCarNumber = async () => {
+    setSavingCar(true);
+    try {
+      const updated = await usersApi.updateMe({carNumber: carNumber.trim()});
+      updateProfile({carNumber: updated.carNumber});
+      Alert.alert('Saved', 'Your car number is on file — the valet won’t need to ask for it again.');
+    } catch (err: any) {
+      Alert.alert('Could not save', err.message || 'Something went wrong');
+    } finally {
+      setSavingCar(false);
+    }
+  };
 
   const modeOptions: {value: ThemeMode; label: string; icon: string}[] = [
     {value: 'light', label: 'Light', icon: '☀️'},
@@ -60,6 +79,35 @@ export function SharedSettingsScreen() {
             <Text style={[styles.profileId, {color: colors.primary}]}>{user?.employeeId ?? '—'}</Text>
           </View>
         </Card>
+
+        {/* Vehicle — doctor/staff only, reused by the valet at key handover */}
+        {showVehicleField && (
+          <>
+            <Text style={[styles.sectionTitle, {color: colors.textMuted}]}>VEHICLE</Text>
+            <Card>
+              <Text style={[styles.cardTitle, {color: colors.textSecondary}]}>Car Number Plate</Text>
+              <View style={styles.carRow}>
+                <TextInput
+                  style={[styles.carInput, {borderColor: colors.border, backgroundColor: colors.cardAlt, color: colors.textPrimary}]}
+                  value={carNumber}
+                  onChangeText={t => setCarNumber(t.toUpperCase())}
+                  placeholder="e.g. TN09 AB 1234"
+                  placeholderTextColor={colors.textMuted}
+                  autoCapitalize="characters"
+                />
+                <TouchableOpacity
+                  style={[styles.carSaveBtn, {backgroundColor: colors.primary, opacity: savingCar ? 0.6 : 1}]}
+                  onPress={handleSaveCarNumber} disabled={savingCar}
+                >
+                  <Text style={styles.carSaveTxt}>Save</Text>
+                </TouchableOpacity>
+              </View>
+              <Text style={[styles.carHint, {color: colors.textMuted}]}>
+                Saved here once — the valet will see it automatically next time you hand over your key.
+              </Text>
+            </Card>
+          </>
+        )}
 
         {/* Appearance */}
         <Text style={[styles.sectionTitle, {color: colors.textMuted}]}>APPEARANCE</Text>
@@ -131,7 +179,7 @@ export function SharedSettingsScreen() {
         <Text style={[styles.sectionTitle, {color: colors.textMuted}]}>ABOUT</Text>
         <Card>
           {[
-            ['App Version', '1.0.0'],
+            ['App Version', '1.1'],
             ['Build', 'Release'],
             ['Hospital', 'KIMS Hospitals'],
           ].map(([label, value]) => (
@@ -191,6 +239,12 @@ const styles = StyleSheet.create({
   },
   modeIcon: {fontSize: 20},
   modeLabel: {fontSize: typography.sizes.xs, fontWeight: typography.weights.bold, textTransform: 'uppercase', letterSpacing: 0.5},
+
+  carRow: {flexDirection: 'row', gap: spacing.sm},
+  carInput: {flex: 1, borderWidth: 1.5, borderRadius: radius.md, paddingHorizontal: spacing.sm, height: 46, fontSize: typography.sizes.sm, fontWeight: typography.weights.bold},
+  carSaveBtn: {borderRadius: radius.md, paddingHorizontal: spacing.md, height: 46, alignItems: 'center', justifyContent: 'center'},
+  carSaveTxt: {color: '#fff', fontSize: typography.sizes.sm, fontWeight: typography.weights.bold},
+  carHint: {fontSize: typography.sizes.xs, marginTop: spacing.sm, lineHeight: 16},
 
   divider: {height: 1, marginVertical: spacing.xs},
 

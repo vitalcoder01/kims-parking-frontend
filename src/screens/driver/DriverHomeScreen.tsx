@@ -3,10 +3,7 @@ import {View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Text
 import {useAuth} from '../../context/AuthContext';
 import {useAppState} from '../../context/AppStateContext';
 import {useTheme} from '../../context/ThemeContext';
-import {computeLiveProgress} from '../../utils/geo';
-
-const PARK_ROUTE = ['Valet Counter', 'Main Lobby', 'Block A Entrance', 'Block A — Row 2', 'Slot'];
-const RETRIEVE_ROUTE = ['Parking Block', 'Block A Row 2', 'Block A Exit', 'Main Lobby', 'Valet Counter'];
+import {computeTrip} from '../../utils/geo';
 
 export function DriverHomeScreen() {
   const {user} = useAuth();
@@ -22,12 +19,15 @@ export function DriverHomeScreen() {
   const activeTask = myTasks[0] ?? null;
   const completedToday = tasks.filter(t => t.driverId === myDriverId && t.status === 'completed');
 
-  // Real trip progress — GPS itself is collected centrally in AppStateContext;
-  // this just animates to whatever fraction the last fix computed to.
-  const liveProgress = computeLiveProgress(
-    activeTask?.driverStartLat, activeTask?.driverStartLng,
-    activeTask?.driverLat, activeTask?.driverLng,
-  ) ?? 0;
+  // Real trip progress/ETA — GPS itself is collected centrally in
+  // AppStateContext; this just animates to whatever the last fix computed.
+  const trip = computeTrip({
+    startLat: activeTask?.driverStartLat, startLng: activeTask?.driverStartLng,
+    lat: activeTask?.driverLat, lng: activeTask?.driverLng,
+    destinationLat: activeTask?.destinationLat, destinationLng: activeTask?.destinationLng,
+    mode: activeTask?.type === 'retrieve' ? 'walk' : 'drive',
+  });
+  const liveProgress = trip?.progress ?? 0;
 
   useEffect(() => {
     Animated.timing(carAnim, {toValue: liveProgress, duration: 400, useNativeDriver: false}).start();
@@ -84,7 +84,6 @@ export function DriverHomeScreen() {
     }
   };
 
-  const routePoints = activeTask?.type === 'retrieve' ? RETRIEVE_ROUTE : PARK_ROUTE;
   const carX = carAnim.interpolate({inputRange: [0, 1], outputRange: ['0%', '88%']});
 
   const statusMeta: Record<string, {label: string; color: string; icon: string}> = {
@@ -153,21 +152,23 @@ export function DriverHomeScreen() {
                 </View>
               )}
 
-              {/* Live tracking route visualizer */}
+              {/* Live tracking — real GPS-driven progress bar */}
               {(activeTask.status === 'key_collected' || activeTask.status === 'in_transit') && (
                 <View style={[s.trackWrap, {borderColor: colors.border}]}>
-                  <Text style={[s.trackTitle, {color: colors.textSecondary}]}>LIVE ROUTE</Text>
+                  <View style={s.trackHeadRow}>
+                    <Text style={[s.trackTitle, {color: colors.textSecondary}]}>LIVE ROUTE</Text>
+                    {trip ? (
+                      <Text style={[s.trackEta, {color: colors.primary}]}>
+                        {trip.etaMinutes} min{trip.distanceRemainingM != null ? ` · ${trip.distanceRemainingM}m` : ''}
+                      </Text>
+                    ) : (
+                      <Text style={[s.trackEta, {color: colors.textMuted}]}>Waiting for GPS…</Text>
+                    )}
+                  </View>
                   <View style={s.routeBar}>
                     <View style={[s.routeTrack, {backgroundColor: colors.border}]} />
                     <Animated.View style={[s.routeProgress, {backgroundColor: colors.primary, width: carX}]} />
                     <Animated.Text style={[s.carMarker, {left: carX}]}>🚗</Animated.Text>
-                  </View>
-                  <View style={s.routeStops}>
-                    {routePoints.map((p, i) => (
-                      <Text key={i} style={[s.routeStop, {color: i === 0 || i === routePoints.length - 1 ? colors.textPrimary : colors.textMuted}]} numberOfLines={1}>
-                        {i === routePoints.length - 1 ? (activeTask.slotId ?? p) : p}
-                      </Text>
-                    ))}
                   </View>
                 </View>
               )}
@@ -175,7 +176,6 @@ export function DriverHomeScreen() {
               {/* Park action: slot input */}
               {activeTask.type === 'park' && (activeTask.status === 'key_collected' || activeTask.status === 'in_transit') && (
                 <View style={s.parkAction}>
-                  <Text style={[s.fieldLabel, {color: colors.textMuted}]}>ENTER SLOT NUMBER</Text>
                   <View style={s.slotInputRow}>
                     <View style={[s.slotInput, {borderColor: colors.border, backgroundColor: colors.background}]}>
                       <TextInput
@@ -194,7 +194,14 @@ export function DriverHomeScreen() {
                       <Text style={s.parkBtnTxt}>✓ Mark Parked</Text>
                     </TouchableOpacity>
                   </View>
-                  {/* Free slots quick-pick */}
+                  {freeSlots.length > 0 && (
+                    <TouchableOpacity
+                      style={[s.autoAssignBtn, {borderColor: colors.primary + '40', backgroundColor: colors.primary + '10'}]}
+                      onPress={() => setSlotInput(freeSlots[0].id)} activeOpacity={0.8}
+                    >
+                      <Text style={[s.autoAssignTxt, {color: colors.primary}]}>⚡ Auto-Assign Nearest Free Slot ({freeSlots[0].id})</Text>
+                    </TouchableOpacity>
+                  )}
                   <Text style={[s.quickPickLabel, {color: colors.textMuted}]}>AVAILABLE SLOTS</Text>
                   <View style={s.quickPicks}>
                     {freeSlots.map(sl => (
@@ -284,16 +291,18 @@ const s = StyleSheet.create({
   statusLabel:{fontSize:13,fontWeight:'700'},
 
   trackWrap:{borderRadius:14,borderWidth:1,padding:14},
-  trackTitle:{fontSize:9,fontWeight:'800',letterSpacing:1.5,marginBottom:10},
+  trackHeadRow:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',marginBottom:10},
+  trackTitle:{fontSize:9,fontWeight:'800',letterSpacing:1.5},
+  trackEta:{fontSize:11,fontWeight:'800'},
   routeBar:{height:24,position:'relative',justifyContent:'center',marginBottom:6},
   routeTrack:{position:'absolute',left:0,right:0,height:3,borderRadius:2},
   routeProgress:{position:'absolute',left:0,height:3,borderRadius:2},
   carMarker:{position:'absolute',fontSize:18,marginTop:-8,marginLeft:-9},
-  routeStops:{flexDirection:'row',justifyContent:'space-between'},
-  routeStop:{fontSize:8,fontWeight:'700',width:'20%',textAlign:'center'},
 
   parkAction:{gap:8},
   fieldLabel:{fontSize:10,fontWeight:'700',letterSpacing:1,marginBottom:4},
+  autoAssignBtn:{borderRadius:10,borderWidth:1,paddingVertical:10,alignItems:'center'},
+  autoAssignTxt:{fontSize:12,fontWeight:'800'},
   slotInputRow:{flexDirection:'row',gap:10},
   slotInput:{flex:1,borderRadius:12,borderWidth:1.5,paddingHorizontal:14,height:48,justifyContent:'center'},
   slotInputText:{fontSize:15,fontWeight:'700'},
