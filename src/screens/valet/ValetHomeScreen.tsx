@@ -1,34 +1,12 @@
 import React, {useState} from 'react';
-import {View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, TextInput, Linking, Alert, Platform, PermissionsAndroid} from 'react-native';
+import {View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, TextInput, Linking, Alert} from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
-import Geolocation from 'react-native-geolocation-service';
 import {useAuth} from '../../context/AuthContext';
 import {useAppState} from '../../context/AppStateContext';
 import {useTheme} from '../../context/ThemeContext';
 import {BRAND_GRADIENT, BRAND_GRADIENT_DARK} from '../../theme/colors';
 import {Icon} from '../../components/Icon';
 import {usersApi} from '../../services/api';
-
-// Best-effort — the valet's current position becomes the retrieve trip's
-// real destination (see handleRetrieve). If permission is denied or the fix
-// times out, the task is still created without one; the driver/doctor just
-// fall back to the nominal-distance progress estimate for that trip.
-async function getCurrentPositionSafe(): Promise<{lat: number; lng: number} | null> {
-  if (Platform.OS === 'android') {
-    const granted = await PermissionsAndroid.request(
-      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-      {title: 'Location Permission', message: 'KIMS Parking needs your location to guide the driver back to you.', buttonPositive: 'Allow'},
-    );
-    if (granted !== PermissionsAndroid.RESULTS.GRANTED) return null;
-  }
-  return new Promise(resolve => {
-    Geolocation.getCurrentPosition(
-      pos => resolve({lat: pos.coords.latitude, lng: pos.coords.longitude}),
-      () => resolve(null),
-      {enableHighAccuracy: true, timeout: 8000, maximumAge: 10000},
-    );
-  });
-}
 
 function sendWhatsApp(mobile: string, name: string, carNumber: string, token: string, slot?: string) {
   const msg = `🏥 *KIMS Hospital Parking*\n\nHello ${name},\n\nYour car *${carNumber}* has been safely received by our valet service.\n\n📍 *Token:* ${token}\n🅿️ *Slot:* ${slot ?? 'Being assigned...'}\n\n_You will be notified once your car is parked._\n\nTo retrieve your car, reply *RETRIEVE* or contact our desk.\n\n_KIMS Smart Parking · Secure · Real-time_`;
@@ -47,7 +25,7 @@ type Screen = 'home' | 'scan' | 'assign' | 'visitor';
 
 export function ValetHomeScreen() {
   const {user} = useAuth();
-  const {drivers, tasks, slots, addTask, assignDriver, markKeyCollected, pushNotification, addVisitor} = useAppState();
+  const {drivers, tasks, addTask, assignDriver, markKeyCollected, pushNotification, addVisitor} = useAppState();
   const {colors, isDark} = useTheme();
 
   const [screen, setScreen] = useState<Screen>('home');
@@ -61,15 +39,15 @@ export function ValetHomeScreen() {
   const [vCar, setVCar] = useState('');
   const [vMobile, setVMobile] = useState('');
 
-  const activeTasks = tasks.filter(t => t.status !== 'completed');
+  // "Active Tasks" = already assigned to a driver — a bare 'requested'
+  // retrieval isn't a task for anyone to act on yet, it's shown separately
+  // below until the valet assigns a driver to it.
+  const activeTasks = tasks.filter(t => t.status !== 'completed' && t.status !== 'requested');
   const availableDrivers = drivers.filter(d => d.status === 'available');
-  // Currently parked cars available for retrieval (occupied slots without an in-progress retrieve task)
-  const retrievingSlotIds = new Set(
-    tasks.filter(t => t.type === 'retrieve' && t.status !== 'completed').map(t => t.slotId),
-  );
-  // `doctorId` is required — some demo slots are seeded "occupied" for
-  // occupancy-stat purposes only and have no real owner/task to retrieve.
-  const parkedSlots = slots.filter(sl => sl.status === 'occupied' && sl.doctorId && !retrievingSlotIds.has(sl.id));
+  // Pending retrieval requests — created only by the doctor/staff who owns
+  // the car (see ParkingScreen "Request Retrieval"). The valet's job here is
+  // strictly to assign a driver to an existing request, never to invent one.
+  const retrievalRequests = tasks.filter(t => t.type === 'retrieve' && t.status === 'requested');
   const pendingTask = pendingTaskId ? tasks.find(t => t.id === pendingTaskId) ?? null : null;
 
   const handleScanCode = async () => {
@@ -133,29 +111,9 @@ export function ValetHomeScreen() {
     }
   };
 
-  const handleRetrieve = async (slot: typeof parkedSlots[number]) => {
-    try {
-      const origTask = tasks.find(t => t.id === slot.taskId);
-      // The valet's own position right now IS the real destination — this is
-      // where the driver needs to bring the car — so distance/ETA on the
-      // tracking map become genuinely accurate instead of a guessed constant.
-      const here = await getCurrentPositionSafe();
-      const id = await addTask({
-        type: 'retrieve',
-        doctorId: slot.doctorId ?? '',
-        doctorName: origTask?.doctorName ?? 'Customer',
-        carNumber: slot.carNumber ?? '',
-        slotId: slot.id,
-        status: 'assigned',
-        assignedAt: Date.now(),
-        destinationLat: here?.lat,
-        destinationLng: here?.lng,
-      });
-      setPendingTaskId(id);
-      setScreen('assign');
-    } catch (err: any) {
-      Alert.alert('Error', err.message || 'Something went wrong');
-    }
+  const handleAssignRetrieval = (taskId: string) => {
+    setPendingTaskId(taskId);
+    setScreen('assign');
   };
 
   const handleAddVisitor = async () => {
@@ -408,32 +366,31 @@ export function ValetHomeScreen() {
           );
         })}
 
-        {/* Parked cars — available for retrieval */}
-        <Text style={[s.sectionTitle, {color: colors.textPrimary, marginTop: 20}]}>Parked Cars ({parkedSlots.length})</Text>
-        {parkedSlots.length === 0 ? (
+        {/* Retrieval requests — raised only by the doctor/staff who owns the
+            car (see ParkingScreen). The valet assigns a driver to each; they
+            cannot start a retrieval on their own. */}
+        <Text style={[s.sectionTitle, {color: colors.textPrimary, marginTop: 20}]}>Retrieval Requests ({retrievalRequests.length})</Text>
+        {retrievalRequests.length === 0 ? (
           <View style={[s.emptyBox, {borderColor: colors.border}]}>
             <Text style={s.emptyIcon}>🅿️</Text>
-            <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No parked cars yet</Text>
+            <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No pending retrieval requests</Text>
           </View>
-        ) : parkedSlots.map(sl => {
-          const origTask = tasks.find(t => t.id === sl.taskId);
-          return (
-            <View key={sl.id} style={[s.taskCard, {backgroundColor: colors.surface, borderColor: colors.border, borderLeftColor: colors.warning}]}>
-              <View style={s.taskTop}>
-                <View style={[s.typePill, {backgroundColor: colors.warning + '15'}]}>
-                  <Text style={[s.typePillTxt, {color: colors.warning}]}>🅿️ SLOT {sl.id}</Text>
-                </View>
-                <Text style={[s.taskStatusTxt, {color: colors.success}]}>Parked</Text>
+        ) : retrievalRequests.map(t => (
+          <View key={t.id} style={[s.taskCard, {backgroundColor: colors.surface, borderColor: colors.border, borderLeftColor: colors.warning}]}>
+            <View style={s.taskTop}>
+              <View style={[s.typePill, {backgroundColor: colors.warning + '15'}]}>
+                <Text style={[s.typePillTxt, {color: colors.warning}]}>🅿️ SLOT {t.slotId}</Text>
               </View>
-              <Text style={[s.taskDoctor, {color: colors.textPrimary}]}>{origTask?.doctorName ?? 'Customer'}</Text>
-              <Text style={[s.taskMeta, {color: colors.textSecondary}]}>🚘 {sl.carNumber}</Text>
-              <TouchableOpacity style={[s.taskActionBtn, {borderColor: colors.warning, backgroundColor: colors.warning + '12'}]}
-                onPress={() => handleRetrieve(sl)}>
-                <Text style={[s.taskActionTxt, {color: colors.warning}]}>↑ Retrieve — Assign Driver</Text>
-              </TouchableOpacity>
+              <Text style={[s.taskStatusTxt, {color: colors.warning}]}>{t.eta ? `Leaving in ${t.eta} min` : 'Requested'}</Text>
             </View>
-          );
-        })}
+            <Text style={[s.taskDoctor, {color: colors.textPrimary}]}>{t.doctorName}</Text>
+            <Text style={[s.taskMeta, {color: colors.textSecondary}]}>🚘 {t.carNumber}</Text>
+            <TouchableOpacity style={[s.taskActionBtn, {borderColor: colors.warning, backgroundColor: colors.warning + '12'}]}
+              onPress={() => handleAssignRetrieval(t.id)}>
+              <Text style={[s.taskActionTxt, {color: colors.warning}]}>↑ Assign Driver</Text>
+            </TouchableOpacity>
+          </View>
+        ))}
         </View>
       </ScrollView>
     </SafeAreaView>

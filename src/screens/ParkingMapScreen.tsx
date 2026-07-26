@@ -7,11 +7,14 @@ import {useAppState} from '../context/AppStateContext';
 export function ParkingMapScreen() {
   const {colors, isDark} = useTheme();
   const {user} = useAuth();
-  const {slots, tasks} = useAppState();
+  const {slots} = useAppState();
 
-  const myTask = tasks.find(t => t.doctorId === user?.id && t.status !== 'completed')
-    ?? [...tasks].reverse().find(t => t.doctorId === user?.id && t.type === 'park' && t.status === 'completed');
-  const mySlot = myTask?.slotId;
+  // The slot's own live `status`/`doctorId` is the single source of truth
+  // for "is this actually my car, right now" — deriving it from task history
+  // instead (as this used to) kept painting the old slot as "Your Car" long
+  // after retrieval, because a doctor's most recent *completed* task is
+  // still their old park task even once the car's been driven away.
+  const mySlot = slots.find(sl => sl.status === 'occupied' && sl.doctorId === user?.id)?.id;
 
   const [picked, setPicked] = useState<string | undefined>(mySlot);
 

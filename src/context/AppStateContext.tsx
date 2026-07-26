@@ -3,11 +3,12 @@ import {Platform, PermissionsAndroid, AppState as RNAppState} from 'react-native
 import Geolocation from 'react-native-geolocation-service';
 import {displayNotification} from '../services/notifications';
 import {tasksApi, driversApi, slotsApi, visitorsApi, notificationsApi} from '../services/api';
+import {getCurrentPositionSafe} from '../utils/location';
 import {useAuth} from './AuthContext';
 
 export type DriverStatus = 'available' | 'busy' | 'off';
 export type TaskType = 'park' | 'retrieve';
-export type TaskStatus = 'assigned' | 'key_collected' | 'in_transit' | 'completed';
+export type TaskStatus = 'requested' | 'assigned' | 'key_collected' | 'in_transit' | 'completed';
 export type SlotStatus = 'free' | 'occupied' | 'reserved';
 
 export interface Driver {
@@ -28,6 +29,7 @@ export interface ParkingTask {
   driverId?: string;
   driverName?: string;
   status: TaskStatus;
+  requestedAt?: number;
   assignedAt?: number;
   keyCollectedAt?: number;
   completedAt?: number;
@@ -85,6 +87,7 @@ interface AppState {
 
   // Actions — all backed by the API now, so all return Promises.
   addTask: (task: Omit<ParkingTask, 'id'>) => Promise<string>;
+  requestRetrieval: (eta: number) => Promise<string>;
   updateTask: (id: string, patch: Partial<ParkingTask>) => Promise<void>;
   assignDriver: (taskId: string, driverId: string) => Promise<void>;
   markKeyCollected: (taskId: string) => Promise<void>;
@@ -115,6 +118,7 @@ function toEpoch(v: unknown): number | undefined {
 function mapTask(t: any): ParkingTask {
   return {
     ...t,
+    requestedAt: toEpoch(t.requestedAt),
     assignedAt: toEpoch(t.assignedAt),
     keyCollectedAt: toEpoch(t.keyCollectedAt),
     completedAt: toEpoch(t.completedAt),
@@ -249,6 +253,22 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     return mapped.id;
   }, []);
 
+  // Doctor/staff only — the real destination is wherever THIS phone is right
+  // now, i.e. the person's own location, since that's who the driver is
+  // actually bringing the car back to (not the valet counter).
+  const requestRetrieval = useCallback(async (eta: number) => {
+    const here = await getCurrentPositionSafe();
+    const created = mapTask(await tasksApi.requestRetrieval({eta, destinationLat: here?.lat, destinationLng: here?.lng}));
+    setTasks(p => [created, ...p]);
+    await pushNotification({
+      targetRole: 'valet',
+      title: `🚗 Retrieval Requested — ${created.doctorName ?? ''}`,
+      body: `Leaving in ${eta} min. Please assign a driver to bring ${created.carNumber} from ${created.slotId ?? 'its slot'}.`,
+      type: 'info',
+    }).catch(() => {});
+    return created.id;
+  }, []);
+
   const updateTask = useCallback(async (id: string, patch: Partial<ParkingTask>) => {
     if (patch.status === 'in_transit') {
       const updated = mapTask(await tasksApi.inTransit(id));
@@ -332,7 +352,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
   return (
     <Ctx.Provider value={{
       drivers, tasks, slots, visitors, notifications,
-      addTask, updateTask, assignDriver, markKeyCollected, markParked, markRetrieved, reportLocation,
+      addTask, requestRetrieval, updateTask, assignDriver, markKeyCollected, markParked, markRetrieved, reportLocation,
       setDriverStatus, addVisitor, updateVisitor,
       pushNotification, markNotificationRead, clearNotifications,
     }}>

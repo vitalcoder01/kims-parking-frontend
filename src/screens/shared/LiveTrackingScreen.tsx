@@ -114,7 +114,7 @@ export function LiveTrackingScreen({task: taskProp, onBack}: Props) {
       startLat: task?.driverStartLat, startLng: task?.driverStartLng,
       lat: realLat, lng: realLng,
       destinationLat: task?.destinationLat, destinationLng: task?.destinationLng,
-      mode: task?.type === 'retrieve' ? 'walk' : 'drive',
+      mode: 'drive',
     });
     if (!result) return;
     setTrip(result);
@@ -197,7 +197,7 @@ export function LiveTrackingScreen({task: taskProp, onBack}: Props) {
                 {task?.type === 'park' ? 'Car Parked Successfully!' : 'Car Retrieved!'}
               </Text>
               <Text style={[s.arrivedSub, {color: colors.textMuted}]}>
-                {task?.type === 'retrieve' ? 'Ready at the gate' : task?.slotId ? `Slot: ${task.slotId}` : 'Delivered to valet counter'}
+                {task?.type === 'retrieve' ? 'Delivered to you' : task?.slotId ? `Slot: ${task.slotId}` : 'Delivered to valet counter'}
               </Text>
             </View>
           </View>
@@ -231,7 +231,7 @@ export function LiveTrackingScreen({task: taskProp, onBack}: Props) {
             )}
 
             <View style={s.stepsRow}>
-              {['Key Collected', 'In Transit', task?.type === 'park' ? 'Parked ✓' : 'At Gate ✓'].map((step, i) => {
+              {['Key Collected', 'In Transit', task?.type === 'park' ? 'Parked ✓' : 'Delivered ✓'].map((step, i) => {
                 const done = progress > i * 0.4;
                 return (
                   <View key={step} style={s.step}>

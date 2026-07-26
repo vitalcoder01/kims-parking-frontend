@@ -1,12 +1,14 @@
 import React, {useState} from 'react';
 import {
   ScrollView, View, Text, StyleSheet, SafeAreaView,
-  TouchableOpacity,
+  TouchableOpacity, Alert,
 } from 'react-native';
 import {useTheme} from '../context/ThemeContext';
 import {useAuth} from '../context/AuthContext';
 import {useAppState} from '../context/AppStateContext';
+import {useRetrievalRequest} from '../hooks/useRetrievalRequest';
 import {Badge} from '../components/Badge';
+import {LiveTrackingScreen} from './shared/LiveTrackingScreen';
 
 const TIME_OPTIONS = [10, 15, 20, 30];
 
@@ -21,12 +23,20 @@ function formatTime(ms: number) {
   return new Date(ms).toLocaleTimeString(undefined, {hour: 'numeric', minute: '2-digit'});
 }
 
+function formatCountdown(totalSeconds: number) {
+  const m = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+  const s = (totalSeconds % 60).toString().padStart(2, '0');
+  return `${m}:${s}`;
+}
+
 export function ParkingScreen() {
   const {colors, isDark} = useTheme();
   const {user} = useAuth();
-  const {tasks, pushNotification} = useAppState();
+  const {tasks} = useAppState();
+  const {activeRetrieve, remainingSeconds, requestRetrieval} = useRetrievalRequest();
   const [selectedTime, setSelectedTime] = useState<number | null>(null);
-  const [requested, setRequested] = useState(false);
+  const [requesting, setRequesting] = useState(false);
+  const [showTracking, setShowTracking] = useState(false);
 
   // tasks come back newest-first (createdAt desc) — index 0 is latest.
   const myTasks = tasks.filter(t => t.doctorId === user?.id);
@@ -36,21 +46,20 @@ export function ParkingScreen() {
   const isParked = task?.status === 'completed' && task.type === 'park';
 
   const handleRequest = async () => {
-    if (!selectedTime || !task) return;
-    const eta = new Date(Date.now() + selectedTime * 60000);
+    if (!selectedTime) return;
+    setRequesting(true);
     try {
-      await pushNotification({
-        targetRole: 'valet',
-        title: `🚗 Departure Scheduled — ${user?.name}`,
-        body: `Leaving in ${selectedTime} min. Please retrieve car ${task.carNumber} from ${task.slotId ?? 'its slot'} and bring it to the entrance.`,
-        type: 'info',
-      });
-      setRequested(true);
-    } catch {
-      // pushNotification already surfaces its own errors via the shared
-      // notification bell; nothing additional to show here.
+      await requestRetrieval(selectedTime);
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not request retrieval');
+    } finally {
+      setRequesting(false);
     }
   };
+
+  if (showTracking && activeRetrieve) {
+    return <LiveTrackingScreen task={activeRetrieve} onBack={() => setShowTracking(false)} />;
+  }
 
   const justRetrieved = task?.type === 'retrieve' && task.status === 'completed';
 
@@ -111,69 +120,101 @@ export function ParkingScreen() {
           </View>
 
           {/* Retrieval */}
-          {isParked && (
+          {isParked && !activeRetrieve && (
             <>
               <Text style={[s.sec, {color: colors.textMuted}]}>REQUEST RETRIEVAL</Text>
               <View style={[s.sheet, {backgroundColor: colors.card, borderColor: colors.border}]}>
-                {requested ? (
-                  <View style={s.requestedBox}>
-                    <Text style={s.requestedIcon}>✅</Text>
-                    <Text style={[s.requestedTxt, {color: colors.success}]}>Valet notified — your car is on its way</Text>
-                  </View>
-                ) : (
-                  <>
-                    <Text style={[s.whenQ, {color: colors.textPrimary}]}>When do you need your car?</Text>
-                    <Text style={[s.whenSub, {color: colors.textSecondary}]}>We'll notify the valet to have it ready at the entrance.</Text>
+                <Text style={[s.whenQ, {color: colors.textPrimary}]}>When do you need your car?</Text>
+                <Text style={[s.whenSub, {color: colors.textSecondary}]}>The valet will assign a driver to bring it to you.</Text>
 
-                    <View style={s.chipRow}>
-                      {TIME_OPTIONS.map(opt => {
-                        const on = selectedTime === opt;
-                        return (
-                          <TouchableOpacity
-                            key={opt}
-                            activeOpacity={0.7}
-                            onPress={() => setSelectedTime(opt)}
-                            style={[
-                              s.chip,
-                              {
-                                backgroundColor: on ? colors.primary + '14' : colors.cardAlt,
-                                borderColor: on ? colors.primary : colors.border,
-                              },
-                            ]}>
-                            <Text style={[s.chipNum, {color: on ? colors.primary : colors.textPrimary}]}>{opt}</Text>
-                            <Text style={[s.chipUnit, {color: on ? colors.primary + 'AA' : colors.textMuted}]}>min</Text>
-                          </TouchableOpacity>
-                        );
-                      })}
+                <View style={s.chipRow}>
+                  {TIME_OPTIONS.map(opt => {
+                    const on = selectedTime === opt;
+                    return (
+                      <TouchableOpacity
+                        key={opt}
+                        activeOpacity={0.7}
+                        onPress={() => setSelectedTime(opt)}
+                        style={[
+                          s.chip,
+                          {
+                            backgroundColor: on ? colors.primary + '14' : colors.cardAlt,
+                            borderColor: on ? colors.primary : colors.border,
+                          },
+                        ]}>
+                        <Text style={[s.chipNum, {color: on ? colors.primary : colors.textPrimary}]}>{opt}</Text>
+                        <Text style={[s.chipUnit, {color: on ? colors.primary + 'AA' : colors.textMuted}]}>min</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                {selectedTime && (
+                  <View style={[s.etaCard, {backgroundColor: colors.success + '10', borderColor: colors.success + '30'}]}>
+                    <View>
+                      <Text style={[s.etaLbl, {color: colors.textMuted}]}>Car ready by</Text>
+                      <Text style={[s.etaVal, {color: colors.success}]}>{formatTime(Date.now() + selectedTime * 60000)}</Text>
                     </View>
+                    <Text style={s.etaIcon}>🚗</Text>
+                  </View>
+                )}
 
-                    {selectedTime && (
-                      <View style={[s.etaCard, {backgroundColor: colors.success + '10', borderColor: colors.success + '30'}]}>
-                        <View>
-                          <Text style={[s.etaLbl, {color: colors.textMuted}]}>Car ready at entrance by</Text>
-                          <Text style={[s.etaVal, {color: colors.success}]}>{formatTime(Date.now() + selectedTime * 60000)}</Text>
-                        </View>
-                        <Text style={s.etaIcon}>🚗</Text>
-                      </View>
-                    )}
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  onPress={handleRequest}
+                  disabled={!selectedTime || requesting}
+                  style={[
+                    s.cta,
+                    {
+                      backgroundColor: selectedTime ? colors.primary : colors.border,
+                      shadowColor: colors.primary,
+                      opacity: requesting ? 0.6 : 1,
+                    },
+                  ]}>
+                  <Text style={[s.ctaTxt, {color: selectedTime ? '#fff' : colors.textMuted}]}>
+                    {requesting ? 'Requesting…' : selectedTime ? `Confirm — Leaving in ${selectedTime} min` : 'Select a time above'}
+                  </Text>
+                  {selectedTime && !requesting ? <Text style={s.ctaArrow}>→</Text> : null}
+                </TouchableOpacity>
+              </View>
+            </>
+          )}
 
+          {/* Live retrieval status — real backend-tracked state, same for
+              this screen and the Home tab, so it never resets or drifts
+              depending on which tab the doctor is looking at. */}
+          {activeRetrieve && (
+            <>
+              <Text style={[s.sec, {color: colors.textMuted}]}>RETRIEVAL STATUS</Text>
+              <View style={[s.sheet, {backgroundColor: colors.card, borderColor: colors.border}]}>
+                <View style={s.retrievalStatusBox}>
+                  {remainingSeconds != null ? (
+                    <>
+                      <Text style={[s.countdownTimer, {color: colors.primary}]}>{formatCountdown(remainingSeconds)}</Text>
+                      <Text style={[s.countdownLabel, {color: colors.textMuted}]}>until requested departure</Text>
+                    </>
+                  ) : (
+                    <Text style={[s.whenQ, {color: colors.textPrimary}]}>Retrieval requested</Text>
+                  )}
+                  <View style={[s.retrievalStageRow, {borderTopColor: colors.divider}]}>
+                    <Text style={s.retrievalStageIcon}>
+                      {activeRetrieve.status === 'requested' ? '⏳' : activeRetrieve.status === 'assigned' ? '🔔' : '🚗'}
+                    </Text>
+                    <Text style={[s.retrievalStageTxt, {color: colors.textSecondary}]}>
+                      {activeRetrieve.status === 'requested' && 'Waiting for valet to assign a driver'}
+                      {activeRetrieve.status === 'assigned' && `${activeRetrieve.driverName ?? 'A driver'} assigned — heading to your car`}
+                      {activeRetrieve.status === 'in_transit' && `${activeRetrieve.driverName ?? 'Driver'} is bringing your car to you`}
+                    </Text>
+                  </View>
+                  {activeRetrieve.status === 'in_transit' && (
                     <TouchableOpacity
                       activeOpacity={0.85}
-                      onPress={handleRequest}
-                      style={[
-                        s.cta,
-                        {
-                          backgroundColor: selectedTime ? colors.primary : colors.border,
-                          shadowColor: colors.primary,
-                        },
-                      ]}>
-                      <Text style={[s.ctaTxt, {color: selectedTime ? '#fff' : colors.textMuted}]}>
-                        {selectedTime ? `Confirm — Leaving in ${selectedTime} min` : 'Select a time above'}
-                      </Text>
-                      {selectedTime ? <Text style={s.ctaArrow}>→</Text> : null}
+                      onPress={() => setShowTracking(true)}
+                      style={[s.cta, {backgroundColor: colors.primary, shadowColor: colors.primary}]}>
+                      <Text style={[s.ctaTxt, {color: '#fff'}]}>🗺️ View Live Tracking Map</Text>
                     </TouchableOpacity>
-                  </>
-                )}
+                  )}
+                </View>
               </View>
             </>
           )}
@@ -216,9 +257,12 @@ const s = StyleSheet.create({
   infoLbl: {fontSize: 12},
   infoVal: {fontSize: 13, fontWeight: '700'},
 
-  requestedBox: {alignItems: 'center', padding: 24, gap: 8},
-  requestedIcon: {fontSize: 32},
-  requestedTxt: {fontSize: 13, fontWeight: '700', textAlign: 'center'},
+  retrievalStatusBox: {alignItems: 'center', padding: 24, gap: 4},
+  countdownTimer: {fontSize: 40, fontWeight: '900', fontVariant: ['tabular-nums']},
+  countdownLabel: {fontSize: 11, fontWeight: '600', marginBottom: 4},
+  retrievalStageRow: {flexDirection: 'row', alignItems: 'center', gap: 10, borderTopWidth: 1, paddingTop: 16, marginTop: 12, alignSelf: 'stretch'},
+  retrievalStageIcon: {fontSize: 20},
+  retrievalStageTxt: {flex: 1, fontSize: 13, fontWeight: '700'},
 
   whenQ: {fontSize: 15, fontWeight: '800', paddingHorizontal: 14, paddingTop: 14, marginBottom: 3},
   whenSub: {fontSize: 12, paddingHorizontal: 14, marginBottom: 14},

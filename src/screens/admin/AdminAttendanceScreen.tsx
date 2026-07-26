@@ -1,47 +1,119 @@
 import React, {useState, useEffect, useCallback} from 'react';
-import {View, Text, StyleSheet, SafeAreaView, ScrollView, ActivityIndicator, RefreshControl} from 'react-native';
+import {View, Text, StyleSheet, SafeAreaView, ScrollView, ActivityIndicator, RefreshControl, TouchableOpacity} from 'react-native';
 import {useTheme} from '../../context/ThemeContext';
 import {Badge} from '../../components/Badge';
 import {adminApi} from '../../services/api';
 
-interface Row {
-  id: string;
-  userId: string;
-  name: string;
-  role: string;
-  employeeId: string;
-  checkIn: string | null;
-  checkOut: string | null;
-  vehiclesHandled: number;
-  gate?: string | null;
+interface TodayRow {
+  id: string; userId: string; name: string; role: string; employeeId: string;
+  checkIn: string | null; checkOut: string | null; vehiclesHandled: number; gate?: string | null;
 }
+interface MonthlyUser {
+  userId: string; name: string; role: string; employeeId: string;
+  days: {date: string; checkIn: string | null; checkOut: string | null; vehiclesHandled: number}[];
+}
+
+const roleLabel: Record<string, string> = {doctor: 'Doctor', staff: 'Staff', valet: 'Valet', driver: 'Driver', admin: 'Admin'};
+const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 
 function formatTime(iso: string | null) {
   if (!iso) return '—';
   return new Date(iso).toLocaleTimeString(undefined, {hour: 'numeric', minute: '2-digit'});
 }
 
-const roleLabel: Record<string, string> = {doctor: 'Doctor', staff: 'Staff', valet: 'Valet', driver: 'Driver', admin: 'Admin'};
+function monthLabel(monthStr: string) {
+  const [y, m] = monthStr.split('-').map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString(undefined, {month: 'long', year: 'numeric'});
+}
+
+function shiftMonth(monthStr: string, delta: number) {
+  const [y, m] = monthStr.split('-').map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function currentMonthStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function UserCalendar({user, monthStr, colors}: {user: MonthlyUser; monthStr: string; colors: any}) {
+  const [y, m] = monthStr.split('-').map(Number);
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const firstWeekday = new Date(y, m - 1, 1).getDay();
+  const presentDates = new Map(user.days.filter(d => d.checkIn).map(d => [d.date, d]));
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const presentCount = presentDates.size;
+
+  const cells: (number | null)[] = [...Array(firstWeekday).fill(null), ...Array.from({length: daysInMonth}, (_, i) => i + 1)];
+
+  return (
+    <View style={[cs.card, {backgroundColor: colors.card, borderColor: colors.border}]}>
+      <View style={cs.headRow}>
+        <View style={{flex: 1}}>
+          <Text style={[cs.name, {color: colors.textPrimary}]}>{user.name}</Text>
+          <Text style={[cs.meta, {color: colors.textMuted}]}>{roleLabel[user.role] ?? user.role} · {user.employeeId}</Text>
+        </View>
+        <View style={[cs.countBox, {backgroundColor: colors.success + '15'}]}>
+          <Text style={[cs.countNum, {color: colors.success}]}>{presentCount}</Text>
+          <Text style={[cs.countLbl, {color: colors.textMuted}]}>days</Text>
+        </View>
+      </View>
+
+      <View style={cs.weekRow}>
+        {WEEKDAYS.map((w, i) => (
+          <Text key={i} style={[cs.weekTxt, {color: colors.textMuted}]}>{w}</Text>
+        ))}
+      </View>
+      <View style={cs.grid}>
+        {cells.map((day, i) => {
+          if (day == null) return <View key={i} style={cs.cell} />;
+          const dateStr = `${y}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+          const rec = presentDates.get(dateStr);
+          const isToday = dateStr === todayStr;
+          const isFuture = dateStr > todayStr;
+          const bg = rec ? colors.success : isFuture ? 'transparent' : colors.cardAlt;
+          const tc = rec ? '#fff' : isFuture ? colors.textMuted : colors.textSecondary;
+          return (
+            <View key={i} style={cs.cell}>
+              <View style={[
+                cs.dayDot,
+                {backgroundColor: bg},
+                isToday && {borderWidth: 1.5, borderColor: colors.primary},
+              ]}>
+                <Text style={[cs.dayTxt, {color: tc}]}>{day}</Text>
+              </View>
+            </View>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
 
 export function AdminAttendanceScreen() {
   const {colors} = useTheme();
-  const [rows, setRows] = useState<Row[]>([]);
+  const [todayRows, setTodayRows] = useState<TodayRow[]>([]);
+  const [monthUsers, setMonthUsers] = useState<MonthlyUser[]>([]);
+  const [monthStr, setMonthStr] = useState(currentMonthStr());
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (month: string) => {
     try {
-      const data = await adminApi.attendanceToday();
-      setRows(data);
+      const [today, monthly] = await Promise.all([adminApi.attendanceToday(), adminApi.attendanceMonthly(month)]);
+      setTodayRows(today);
+      setMonthUsers(monthly.users);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { setLoading(true); load(monthStr); }, [monthStr, load]);
 
-  const present = rows.filter(r => r.checkIn && !r.checkOut).length;
+  const present = todayRows.filter(r => r.checkIn && !r.checkOut).length;
+  const isCurrentMonth = monthStr === currentMonthStr();
 
   if (loading) {
     return (
@@ -55,22 +127,42 @@ export function AdminAttendanceScreen() {
     <SafeAreaView style={[s.safe, {backgroundColor: colors.background}]}>
       <ScrollView
         contentContainerStyle={s.scroll}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={colors.primary} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(monthStr); }} tintColor={colors.primary} />}
       >
         <View style={[s.summaryCard, {backgroundColor: colors.card, borderColor: colors.border}]}>
           <Text style={[s.summaryNum, {color: colors.success}]}>{present}</Text>
           <Text style={[s.summaryLbl, {color: colors.textMuted}]}>Present right now</Text>
         </View>
 
-        <Text style={[s.sec, {color: colors.textMuted}]}>TODAY — MARKED AUTOMATICALLY</Text>
-        {rows.length === 0 ? (
+        <View style={s.monthNav}>
+          <TouchableOpacity style={[s.monthBtn, {backgroundColor: colors.card, borderColor: colors.border}]} onPress={() => setMonthStr(m => shiftMonth(m, -1))}>
+            <Text style={[s.monthBtnTxt, {color: colors.textPrimary}]}>‹</Text>
+          </TouchableOpacity>
+          <Text style={[s.monthLabel, {color: colors.textPrimary}]}>{monthLabel(monthStr)}</Text>
+          <TouchableOpacity
+            style={[s.monthBtn, {backgroundColor: colors.card, borderColor: colors.border, opacity: isCurrentMonth ? 0.35 : 1}]}
+            onPress={() => !isCurrentMonth && setMonthStr(m => shiftMonth(m, 1))}
+            disabled={isCurrentMonth}>
+            <Text style={[s.monthBtnTxt, {color: colors.textPrimary}]}>›</Text>
+          </TouchableOpacity>
+        </View>
+
+        <Text style={[s.sec, {color: colors.textMuted}]}>PER-USER CALENDAR</Text>
+        {monthUsers.length === 0 ? (
+          <View style={[s.emptyBox, {borderColor: colors.border}]}>
+            <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No attendance recorded for {monthLabel(monthStr)}</Text>
+          </View>
+        ) : monthUsers.map(u => <UserCalendar key={u.userId} user={u} monthStr={monthStr} colors={colors} />)}
+
+        <Text style={[s.sec, {color: colors.textMuted, marginTop: 8}]}>TODAY — MARKED AUTOMATICALLY</Text>
+        {todayRows.length === 0 ? (
           <View style={[s.emptyBox, {borderColor: colors.border}]}>
             <Text style={[s.emptyTxt, {color: colors.textMuted}]}>Nobody has been marked present yet today</Text>
           </View>
         ) : (
           <View style={[s.sheet, {backgroundColor: colors.card, borderColor: colors.border}]}>
-            {rows.map((r, i) => (
-              <View key={r.id} style={[s.row, {borderBottomColor: colors.divider}, i === rows.length - 1 && {borderBottomWidth: 0}]}>
+            {todayRows.map((r, i) => (
+              <View key={r.id} style={[s.row, {borderBottomColor: colors.divider}, i === todayRows.length - 1 && {borderBottomWidth: 0}]}>
                 <View style={{flex: 1}}>
                   <Text style={[s.name, {color: colors.textPrimary}]}>{r.name}</Text>
                   <Text style={[s.meta, {color: colors.textMuted}]}>
@@ -95,12 +187,32 @@ const s = StyleSheet.create({
   summaryCard: {borderRadius: 16, borderWidth: 1, alignItems: 'center', paddingVertical: 18, marginBottom: 16},
   summaryNum: {fontSize: 32, fontWeight: '900'},
   summaryLbl: {fontSize: 11, fontWeight: '700', marginTop: 4},
+  monthNav: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 16, marginBottom: 14},
+  monthBtn: {width: 34, height: 34, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center'},
+  monthBtnTxt: {fontSize: 18, fontWeight: '900'},
+  monthLabel: {fontSize: 15, fontWeight: '800', minWidth: 140, textAlign: 'center'},
   sec: {fontSize: 10, fontWeight: '700', letterSpacing: 1.3, textTransform: 'uppercase', marginBottom: 8},
   sheet: {borderRadius: 18, borderWidth: 1, overflow: 'hidden'},
-  emptyBox: {borderRadius: 14, borderWidth: 1, borderStyle: 'dashed', padding: 24, alignItems: 'center'},
+  emptyBox: {borderRadius: 14, borderWidth: 1, borderStyle: 'dashed', padding: 24, alignItems: 'center', marginBottom: 8},
   emptyTxt: {fontSize: 13, fontWeight: '600'},
   row: {flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 1},
   name: {fontSize: 13, fontWeight: '700'},
   meta: {fontSize: 11, marginTop: 2},
   vehicles: {fontSize: 11, fontWeight: '700'},
+});
+
+const cs = StyleSheet.create({
+  card: {borderRadius: 18, borderWidth: 1, padding: 14, marginBottom: 12},
+  headRow: {flexDirection: 'row', alignItems: 'center', marginBottom: 10},
+  name: {fontSize: 14, fontWeight: '800'},
+  meta: {fontSize: 11, marginTop: 2},
+  countBox: {borderRadius: 10, paddingHorizontal: 10, paddingVertical: 5, alignItems: 'center'},
+  countNum: {fontSize: 15, fontWeight: '900'},
+  countLbl: {fontSize: 8, fontWeight: '700', textTransform: 'uppercase'},
+  weekRow: {flexDirection: 'row', marginBottom: 4},
+  weekTxt: {flex: 1, textAlign: 'center', fontSize: 10, fontWeight: '700'},
+  grid: {flexDirection: 'row', flexWrap: 'wrap'},
+  cell: {width: `${100 / 7}%`, aspectRatio: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 2},
+  dayDot: {width: 26, height: 26, borderRadius: 13, alignItems: 'center', justifyContent: 'center'},
+  dayTxt: {fontSize: 10, fontWeight: '700'},
 });

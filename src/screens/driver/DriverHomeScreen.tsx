@@ -21,11 +21,15 @@ export function DriverHomeScreen() {
 
   // Real trip progress/ETA — GPS itself is collected centrally in
   // AppStateContext; this just animates to whatever the last fix computed.
+  // GPS is only ever tracked from 'in_transit' onward for a retrieve trip
+  // (there's no key-handoff leg to walk) — that entire tracked leg is the
+  // driver already behind the wheel bringing the car back, so it's a drive,
+  // not a walk, same as a park trip's tracked leg.
   const trip = computeTrip({
     startLat: activeTask?.driverStartLat, startLng: activeTask?.driverStartLng,
     lat: activeTask?.driverLat, lng: activeTask?.driverLng,
     destinationLat: activeTask?.destinationLat, destinationLng: activeTask?.destinationLng,
-    mode: activeTask?.type === 'retrieve' ? 'walk' : 'drive',
+    mode: 'drive',
   });
   const liveProgress = trip?.progress ?? 0;
 

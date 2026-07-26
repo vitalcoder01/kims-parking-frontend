@@ -102,6 +102,8 @@ export const tasksApi = {
   get: (id: string) => client.get(`/tasks/${id}`).then(r => r.data.task),
   create: (data: {type: 'park' | 'retrieve'; doctorId: string; carNumber: string; slotId?: string; destinationLat?: number; destinationLng?: number}) =>
     client.post('/tasks', data).then(r => r.data.task),
+  requestRetrieval: (data: {eta?: number; destinationLat?: number; destinationLng?: number}) =>
+    client.post('/tasks/request-retrieval', data).then(r => r.data.task),
   assignDriver: (id: string, driverId: string) =>
     client.patch(`/tasks/${id}/assign`, {driverId}).then(r => r.data.task),
   keyCollected: (id: string) =>
@@ -173,6 +175,11 @@ export const adminApi = {
     client.patch(`/admin/users/${id}/password`, {password}).then(r => r.data),
   deleteUser: (id: string) => client.delete(`/admin/users/${id}`).then(() => undefined),
   attendanceToday: () => client.get('/admin/attendance/today').then(r => r.data.attendance),
+  attendanceMonthly: (month: string) =>
+    client.get('/admin/attendance/monthly', {params: {month}}).then(r => r.data as {
+      month: string;
+      users: {userId: string; name: string; role: string; employeeId: string; days: {date: string; checkIn: string | null; checkOut: string | null; vehiclesHandled: number}[]}[];
+    }),
 };
 
 // ── App version / updates ───────────────────────────────────────────────

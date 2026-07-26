@@ -1,11 +1,11 @@
 import React, {useState, useEffect, useRef} from 'react';
-import {View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Animated} from 'react-native';
+import {View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Animated, Alert} from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import {useAuth} from '../../context/AuthContext';
 import {useAppState} from '../../context/AppStateContext';
 import {useTheme} from '../../context/ThemeContext';
 import {LiveTrackingScreen} from '../shared/LiveTrackingScreen';
-import {scheduleNotification} from '../../services/notifications';
+import {useRetrievalRequest} from '../../hooks/useRetrievalRequest';
 import {BRAND_GRADIENT, BRAND_GRADIENT_DARK} from '../../theme/colors';
 import {Icon} from '../../components/Icon';
 
@@ -18,10 +18,10 @@ const ETA_OPTIONS = [
 
 export function DoctorHomeScreen() {
   const {user, logout} = useAuth();
-  const {tasks, pushNotification} = useAppState();
+  const {tasks} = useAppState();
   const {colors, isDark} = useTheme();
-  const [departureSet, setDepartureSet]   = useState(false);
-  const [countdown, setCountdown]         = useState<number | null>(null);
+  const {activeRetrieve, remainingSeconds, requestRetrieval} = useRetrievalRequest();
+  const [requesting, setRequesting]       = useState(false);
   const [showTracking, setShowTracking]   = useState(false);
   const pulse = useRef(new Animated.Value(1)).current;
 
@@ -38,38 +38,21 @@ export function DoctorHomeScreen() {
   const carJustRetrieved = displayTask?.type === 'retrieve' && displayTask.status === 'completed';
 
   useEffect(() => {
-    if (departureSet && countdown !== null && countdown > 0) {
-      const t = setInterval(() => setCountdown(c => (c ?? 1) - 1), 1000);
-      return () => clearInterval(t);
-    }
-  }, [departureSet, countdown]);
-
-  useEffect(() => {
     Animated.loop(Animated.sequence([
       Animated.timing(pulse, {toValue: 1.04, duration: 1000, useNativeDriver: true}),
       Animated.timing(pulse, {toValue: 1, duration: 1000, useNativeDriver: true}),
     ])).start();
   }, []);
 
-  const handleDeparture = (eta: number) => {
-    setDepartureSet(true);
-    setCountdown(eta * 60);
-    const slot = displayTask?.slotId ?? 'parking slot';
-    // Immediate in-app + tray confirmation for the doctor.
-    pushNotification({
-      targetRole: 'valet',
-      title: `🚗 Departure Scheduled — ${user?.name}`,
-      body: `Leaving in ${eta} min. Valet will be alerted to retrieve your car from ${slot}.`,
-      type: 'info',
-    }).catch(() => {});
-    // Schedule the real retrieval alarm to fire when the timer elapses —
-    // this fires in the phone's notification tray even if the app is fully closed.
-    scheduleNotification(
-      `🚨 Retrieve Car Now — ${user?.name}`,
-      `${user?.name} is leaving. Please retrieve car ${user?.carNumber ?? ''} from ${slot} and bring it to the entrance.`,
-      Date.now() + eta * 60 * 1000,
-      'alarm',
-    );
+  const handleDeparture = async (eta: number) => {
+    setRequesting(true);
+    try {
+      await requestRetrieval(eta);
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not request retrieval');
+    } finally {
+      setRequesting(false);
+    }
   };
 
   const fmt = (s: number) => `${Math.floor(s/60).toString().padStart(2,'0')}:${(s%60).toString().padStart(2,'0')}`;
@@ -166,17 +149,18 @@ export function DoctorHomeScreen() {
           </View>
 
           {/* Departure — only offered while the car is actually parked and
-              waiting; once it's been retrieved there's nothing to request. */}
-          {carIsParked && !departureSet && (
+              waiting; once a retrieval is already requested there's nothing
+              more to ask for. */}
+          {carIsParked && !activeRetrieve && (
             <View style={[s.departureCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
               <LinearGradient colors={BRAND_GRADIENT} style={s.departureHeader} start={{x:0,y:0}} end={{x:1,y:0}}>
                 <Text style={s.departureHeaderTxt}>Ready to Leave?</Text>
-                <Text style={s.departureHeaderSub}>Notify valet to retrieve your car</Text>
+                <Text style={s.departureHeaderSub}>Valet will assign a driver to bring your car to you</Text>
               </LinearGradient>
               <View style={s.etaGrid}>
                 {ETA_OPTIONS.map(opt => (
-                  <TouchableOpacity key={opt.value} onPress={() => handleDeparture(opt.value)} activeOpacity={0.8}>
-                    <LinearGradient colors={opt.grad} style={s.etaBtn} start={{x:0,y:0}} end={{x:0,y:1}}>
+                  <TouchableOpacity key={opt.value} onPress={() => handleDeparture(opt.value)} activeOpacity={0.8} disabled={requesting}>
+                    <LinearGradient colors={opt.grad} style={[s.etaBtn, requesting && {opacity: 0.5}]} start={{x:0,y:0}} end={{x:0,y:1}}>
                       <Text style={s.etaBtnNum}>{opt.label}</Text>
                       <Text style={s.etaBtnSub}>{opt.sub}</Text>
                     </LinearGradient>
@@ -186,13 +170,24 @@ export function DoctorHomeScreen() {
             </View>
           )}
 
-          {/* Countdown */}
-          {departureSet && countdown !== null && (
+          {/* Countdown — real backend-tracked retrieval state, shared with
+              the "My Parking" tab via useRetrievalRequest so it's identical
+              no matter which screen the doctor is looking at. */}
+          {activeRetrieve && (
             <Animated.View style={{transform: [{scale: pulse}]}}>
               <LinearGradient colors={BRAND_GRADIENT} style={s.countdownCard} start={{x:0,y:0}} end={{x:1,y:1}}>
-                <Text style={s.countdownLabel}>Valet Notified ✓</Text>
-                <Text style={s.countdownTimer}>{fmt(countdown)}</Text>
+                <Text style={s.countdownLabel}>
+                  {activeRetrieve.status === 'requested' && 'Waiting for Valet ⏳'}
+                  {activeRetrieve.status === 'assigned' && `${activeRetrieve.driverName ?? 'Driver'} Assigned 🔔`}
+                  {activeRetrieve.status === 'in_transit' && `${activeRetrieve.driverName ?? 'Driver'} On The Way 🚗`}
+                </Text>
+                {remainingSeconds != null && <Text style={s.countdownTimer}>{fmt(remainingSeconds)}</Text>}
                 <Text style={s.countdownSub}>Your car is being retrieved</Text>
+                {activeRetrieve.status === 'in_transit' && (
+                  <TouchableOpacity style={s.countdownTrackBtn} onPress={() => setShowTracking(true)} activeOpacity={0.85}>
+                    <Text style={s.countdownTrackBtnTxt}>🗺️ View Live Tracking Map</Text>
+                  </TouchableOpacity>
+                )}
               </LinearGradient>
             </Animated.View>
           )}
@@ -249,5 +244,7 @@ const s = StyleSheet.create({
   countdownLabel:{color:'rgba(255,255,255,0.8)',fontSize:12,fontWeight:'700'},
   countdownTimer:{color:'#fff',fontSize:56,fontWeight:'900',fontVariant:['tabular-nums'],marginVertical:6},
   countdownSub:{color:'rgba(255,255,255,0.7)',fontSize:12},
+  countdownTrackBtn:{marginTop:16,backgroundColor:'rgba(255,255,255,0.2)',borderRadius:12,paddingVertical:12,paddingHorizontal:20,borderWidth:1,borderColor:'rgba(255,255,255,0.3)'},
+  countdownTrackBtnTxt:{color:'#fff',fontSize:13,fontWeight:'800'},
 
 });
