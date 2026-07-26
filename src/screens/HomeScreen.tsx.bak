@@ -1,0 +1,189 @@
+import React from 'react';
+import {
+  ScrollView,
+  View,
+  Text,
+  StyleSheet,
+  SafeAreaView,
+  TouchableOpacity,
+} from 'react-native';
+import {useTheme} from '../context/ThemeContext';
+import {Card} from '../components/Card';
+import {Badge} from '../components/Badge';
+import {Button} from '../components/Button';
+import {typography, spacing, radius} from '../theme';
+
+export function HomeScreen() {
+  const {colors, isDark} = useTheme();
+
+  return (
+    <SafeAreaView style={[styles.safe, {backgroundColor: colors.background}]}>
+      {/* Welcome */}
+      <View style={[styles.topBand, {backgroundColor: colors.surface, borderBottomColor: colors.border}]}>
+        <View>
+          <Text style={[styles.greeting, {color: colors.textSecondary}]}>
+            Good morning 👋
+          </Text>
+          <Text style={[styles.name, {color: colors.textPrimary}]}>
+            Dr. Priya Sharma
+          </Text>
+          <Text style={[styles.role, {color: colors.textMuted}]}>
+            Senior Cardiologist · KIMS-DOC-1042
+          </Text>
+        </View>
+      </View>
+
+      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+
+        {/* Parking Status Card */}
+        <TouchableOpacity activeOpacity={0.85}>
+          <Card variant="primary" style={styles.parkCard}>
+            <Text style={[styles.parkLabel, {color: colors.primary + 'AA'}]}>
+              YOUR VEHICLE
+            </Text>
+            <Text style={[styles.vehicleNo, {color: colors.textPrimary}]}>
+              MH-02-AB-1234
+            </Text>
+            <Text style={[styles.slotText, {color: colors.textPrimary}]}>
+              Block A ·{' '}
+              <Text style={{color: colors.primary}}>A-203</Text>
+            </Text>
+            <Text style={[styles.parkSub, {color: colors.textSecondary}]}>
+              Parked at 9:52 AM · 14 min ago
+            </Text>
+            <View style={styles.parkFooter}>
+              <Badge label="Parked" variant="success" dot />
+              <Text style={[styles.parkArrow, {color: colors.primary}]}>
+                Request Retrieval →
+              </Text>
+            </View>
+          </Card>
+        </TouchableOpacity>
+
+        {/* Quick Actions */}
+        <Text style={[styles.sectionTitle, {color: colors.textMuted}]}>
+          QUICK ACTIONS
+        </Text>
+        <View style={styles.qaRow}>
+          {[
+            {icon: '📅', label: 'Attendance'},
+            {icon: '🏖', label: 'Leave'},
+            {icon: '📋', label: 'History'},
+          ].map(item => (
+            <TouchableOpacity
+              key={item.label}
+              activeOpacity={0.7}
+              style={[styles.qaBtn, {backgroundColor: colors.card, borderColor: colors.border}]}>
+              <Text style={styles.qaIcon}>{item.icon}</Text>
+              <Text style={[styles.qaLabel, {color: colors.textSecondary}]}>
+                {item.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* Recent Notifications */}
+        <Text style={[styles.sectionTitle, {color: colors.textMuted}]}>
+          NOTIFICATIONS
+        </Text>
+        <Card>
+          {[
+            {icon: '✅', bg: colors.successLight, title: 'Vehicle Parked at A-203', sub: 'Block A, Floor P2 · Driver: Suresh', time: '9:52'},
+            {icon: '🚗', bg: colors.successLight, title: 'Parking Driver Assigned', sub: 'Suresh Kumar is collecting your car', time: '9:46'},
+            {icon: '📍', bg: colors.infoLight,    title: 'Checked In',             sub: 'Attendance marked successfully',      time: '8:03'},
+          ].map((n, i, arr) => (
+            <View
+              key={n.title}
+              style={[
+                styles.notifRow,
+                {borderBottomColor: colors.divider},
+                i === arr.length - 1 && {borderBottomWidth: 0},
+              ]}>
+              <View style={[styles.notifIcon, {backgroundColor: n.bg}]}>
+                <Text>{n.icon}</Text>
+              </View>
+              <View style={styles.notifInfo}>
+                <Text style={[styles.notifTitle, {color: colors.textPrimary}]}>
+                  {n.title}
+                </Text>
+                <Text style={[styles.notifSub, {color: colors.textSecondary}]}>
+                  {n.sub}
+                </Text>
+              </View>
+              <Text style={[styles.notifTime, {color: colors.textMuted}]}>
+                {n.time}
+              </Text>
+            </View>
+          ))}
+        </Card>
+
+        {/* Attendance today */}
+        <Text style={[styles.sectionTitle, {color: colors.textMuted}]}>
+          TODAY
+        </Text>
+        <Card>
+          <View style={styles.attRow}>
+            <View>
+              <Text style={[styles.attLabel, {color: colors.textSecondary}]}>Checked In</Text>
+              <Text style={[styles.attTime, {color: colors.textPrimary}]}>8:03 AM</Text>
+            </View>
+            <View style={[styles.attDivider, {backgroundColor: colors.divider}]} />
+            <View>
+              <Text style={[styles.attLabel, {color: colors.textSecondary}]}>Checked Out</Text>
+              <Text style={[styles.attTime, {color: colors.textMuted}]}>—</Text>
+            </View>
+            <Badge label="On Duty" variant="success" dot />
+          </View>
+        </Card>
+
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safe: {flex: 1},
+  topBand: {
+    paddingHorizontal: spacing.base,
+    paddingVertical: spacing.md,
+    borderBottomWidth: 1,
+  },
+  greeting: {fontSize: typography.sizes.sm, fontWeight: typography.weights.medium},
+  name: {fontSize: typography.sizes['2xl'], fontWeight: typography.weights.black, letterSpacing: -0.5, marginTop: 2},
+  role: {fontSize: typography.sizes.sm, marginTop: 3},
+  scroll: {padding: spacing.base, paddingBottom: spacing['3xl']},
+
+  parkCard: {gap: 4},
+  parkLabel: {fontSize: typography.sizes.xs, fontWeight: typography.weights.bold, letterSpacing: 1.5, textTransform: 'uppercase'},
+  vehicleNo: {fontSize: typography.sizes.sm, fontWeight: typography.weights.medium, marginTop: 2},
+  slotText: {fontSize: typography.sizes['3xl'], fontWeight: typography.weights.black, letterSpacing: -0.5},
+  parkSub: {fontSize: typography.sizes.sm, marginTop: 2},
+  parkFooter: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.sm},
+  parkArrow: {fontSize: typography.sizes.sm, fontWeight: typography.weights.bold},
+
+  sectionTitle: {
+    fontSize: typography.sizes.xs,
+    fontWeight: typography.weights.bold,
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    marginBottom: spacing.sm,
+    marginTop: spacing.md,
+  },
+
+  qaRow: {flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md},
+  qaBtn: {flex: 1, borderRadius: radius.lg, borderWidth: 1, padding: spacing.md, alignItems: 'center'},
+  qaIcon: {fontSize: 22, marginBottom: 6},
+  qaLabel: {fontSize: typography.sizes.xs, fontWeight: typography.weights.bold, textTransform: 'uppercase', letterSpacing: 0.4},
+
+  notifRow: {flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm, paddingVertical: spacing.sm, borderBottomWidth: 1},
+  notifIcon: {width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center', flexShrink: 0},
+  notifInfo: {flex: 1},
+  notifTitle: {fontSize: typography.sizes.sm, fontWeight: typography.weights.bold},
+  notifSub: {fontSize: typography.sizes.xs, marginTop: 2, lineHeight: 16},
+  notifTime: {fontSize: typography.sizes.xs, flexShrink: 0, marginTop: 2},
+
+  attRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between'},
+  attLabel: {fontSize: typography.sizes.xs, fontWeight: typography.weights.medium},
+  attTime: {fontSize: typography.sizes.lg, fontWeight: typography.weights.black, marginTop: 3},
+  attDivider: {width: 1, height: 32, marginHorizontal: spacing.sm},
+});

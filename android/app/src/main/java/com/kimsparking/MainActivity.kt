@@ -1,11 +1,20 @@
 package com.kimsparking
 
+import android.os.Bundle
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
 import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.fabricEnabled
 import com.facebook.react.defaults.DefaultReactActivityDelegate
 
 class MainActivity : ReactActivity() {
+
+  // react-native-screens requires savedInstanceState to never be passed
+  // through, or Android restoring this activity after the OS reclaims it in
+  // the background crashes with "Screen fragments should never be restored."
+  // See https://github.com/software-mansion/react-native-screens/issues/17#issuecomment-424704067
+  override fun onCreate(savedInstanceState: Bundle?) {
+    super.onCreate(null)
+  }
 
   /**
    * Returns the name of the main component registered from JavaScript. This is used to schedule
