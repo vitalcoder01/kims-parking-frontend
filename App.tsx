@@ -7,6 +7,7 @@ import {AuthProvider} from './src/context/AuthContext';
 import {AppStateProvider} from './src/context/AppStateContext';
 import {AppNavigator} from './src/navigation/AppNavigator';
 import {NotificationBanner} from './src/components/NotificationBanner';
+import {UpdateModal} from './src/components/UpdateModal';
 import {initNotifications} from './src/services/notifications';
 
 function AppContent() {
@@ -25,6 +26,7 @@ function AppContent() {
       />
       <AppNavigator />
       <NotificationBanner />
+      <UpdateModal />
     </View>
   );
 }

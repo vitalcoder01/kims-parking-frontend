@@ -175,4 +175,10 @@ export const adminApi = {
   attendanceToday: () => client.get('/admin/attendance/today').then(r => r.data.attendance),
 };
 
+// ── App version / updates ───────────────────────────────────────────────
+export const appApi = {
+  checkVersion: (): Promise<{latestVersionCode: number; latestVersionName: string; apkUrl: string; notes?: string}> =>
+    client.get('/app/version').then(r => r.data),
+};
+
 export default client;
