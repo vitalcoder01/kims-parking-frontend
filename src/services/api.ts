@@ -140,6 +140,14 @@ export const visitorsApi = {
     client.post('/visitors', data).then(r => r.data.visitor),
   update: (id: string, patch: Record<string, unknown>) =>
     client.patch(`/visitors/${id}`, patch).then(r => r.data.visitor),
+  assignDriver: (id: string, driverId: string) =>
+    client.patch(`/visitors/${id}/assign`, {driverId}).then(r => r.data.visitor),
+  park: (id: string, slotId: string) =>
+    client.patch(`/visitors/${id}/park`, {slotId}).then(r => r.data.visitor),
+  requestRetrieval: (id: string, driverId?: string) =>
+    client.patch(`/visitors/${id}/request-retrieval`, {driverId}).then(r => r.data.visitor),
+  retrieve: (id: string) =>
+    client.patch(`/visitors/${id}/retrieve`).then(r => r.data.visitor),
 };
 
 // ── Notifications ────────────────────────────────────────────────────────

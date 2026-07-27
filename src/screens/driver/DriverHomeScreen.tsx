@@ -7,10 +7,12 @@ import {computeTrip} from '../../utils/geo';
 
 export function DriverHomeScreen() {
   const {user} = useAuth();
-  const {tasks, drivers, slots, markParked, markRetrieved, updateTask, pushNotification} = useAppState();
+  const {tasks, drivers, slots, visitors, markParked, markRetrieved, updateTask, pushNotification,
+    markVisitorParked, markVisitorRetrieved} = useAppState();
   const {colors} = useTheme();
 
   const [slotInput, setSlotInput] = useState('');
+  const [visitorSlotInputs, setVisitorSlotInputs] = useState<Record<string, string>>({});
   const carAnim = useRef(new Animated.Value(0)).current;
 
   // Find this driver's assigned tasks (login accounts link to AppState driver record via linkedDriverId)
@@ -18,6 +20,9 @@ export function DriverHomeScreen() {
   const myTasks = tasks.filter(t => t.driverId === myDriverId && t.status !== 'completed');
   const activeTask = myTasks[0] ?? null;
   const completedToday = tasks.filter(t => t.driverId === myDriverId && t.status === 'completed');
+  // Visitor/patient pickups assigned to this driver — a separate, lighter
+  // flow from the task system above (see ValetHomeScreen visitor flow).
+  const myVisitors = visitors.filter(v => v.driverId === myDriverId && v.status !== 'retrieved');
 
   // Real trip progress/ETA — GPS itself is collected centrally in
   // AppStateContext; this just animates to whatever the last fix computed.
@@ -85,6 +90,31 @@ export function DriverHomeScreen() {
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Could not mark retrieved');
       return;
+    }
+  };
+
+  const handleMarkVisitorParked = async (visitorId: string) => {
+    const slot = visitorSlotInputs[visitorId]?.trim();
+    if (!slot) return;
+    try {
+      await markVisitorParked(visitorId, slot.toUpperCase());
+      setVisitorSlotInputs(p => ({...p, [visitorId]: ''}));
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not mark parked');
+    }
+  };
+
+  const handleMarkVisitorRetrieved = async (visitorId: string) => {
+    try {
+      await markVisitorRetrieved(visitorId);
+      pushNotification({
+        targetRole: 'valet',
+        title: '🚗 Visitor Car Retrieved',
+        body: `Car retrieved by ${user?.name} — ready at the valet counter.`,
+        type: 'info',
+      });
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not mark retrieved');
     }
   };
 
@@ -246,6 +276,45 @@ export function DriverHomeScreen() {
           </View>
         )}
 
+        {/* Visitor/patient pickups */}
+        {myVisitors.length > 0 && (
+          <>
+            <Text style={[s.sectionTitle, {color: colors.textPrimary}]}>Visitor Pickups ({myVisitors.length})</Text>
+            {myVisitors.map(v => (
+              <View key={v.id} style={[s.visitorCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+                <Text style={[s.completedTitle, {color: colors.textPrimary}]}>{v.name} · {v.carNumber}</Text>
+                {v.status === 'pending' ? (
+                  <View style={s.slotInputRow}>
+                    <View style={[s.slotInput, {borderColor: colors.border, backgroundColor: colors.background}]}>
+                      <TextInput
+                        style={[s.slotInputText, {color: colors.textPrimary}]}
+                        value={visitorSlotInputs[v.id] ?? ''}
+                        onChangeText={t => setVisitorSlotInputs(p => ({...p, [v.id]: t.toUpperCase()}))}
+                        placeholder="e.g. A-203"
+                        placeholderTextColor={colors.textMuted}
+                        autoCapitalize="characters"
+                      />
+                    </View>
+                    <TouchableOpacity
+                      style={[s.parkBtn, {backgroundColor: colors.success, opacity: visitorSlotInputs[v.id]?.trim() ? 1 : 0.4}]}
+                      onPress={() => handleMarkVisitorParked(v.id)} disabled={!visitorSlotInputs[v.id]?.trim()}
+                    >
+                      <Text style={s.parkBtnTxt}>✓ Mark Parked</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : v.retrievalRequested ? (
+                  <TouchableOpacity style={[s.retrieveBtn, {backgroundColor: colors.warning, marginTop: 8}]}
+                    onPress={() => handleMarkVisitorRetrieved(v.id)} activeOpacity={0.85}>
+                    <Text style={s.retrieveBtnTxt}>✓ Car Delivered to Valet Counter</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <Text style={[s.completedMeta, {color: colors.textMuted, marginTop: 4}]}>Parked at {v.slotId} — waiting for retrieval request</Text>
+                )}
+              </View>
+            ))}
+          </>
+        )}
+
         {/* Completed today */}
         {completedToday.length > 0 && (
           <>
@@ -326,6 +395,7 @@ const s = StyleSheet.create({
   idleDesc:{fontSize:13,textAlign:'center',lineHeight:19},
 
   sectionTitle:{fontSize:14,fontWeight:'800',marginBottom:12},
+  visitorCard:{borderRadius:14,borderWidth:1,padding:14,marginBottom:10},
   completedRow:{flexDirection:'row',alignItems:'center',borderRadius:14,borderWidth:1,padding:14,marginBottom:8,gap:12,overflow:'hidden'},
   completedDot:{position:'absolute',left:0,top:0,bottom:0,width:4},
   completedTitle:{fontSize:13,fontWeight:'700'},

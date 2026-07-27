@@ -60,8 +60,10 @@ export interface Visitor {
   carNumber: string;
   mobile: string;
   slotId?: string;
+  driverId?: string;
   driverName?: string;
   status: 'parked' | 'pending' | 'retrieved';
+  retrievalRequested: boolean;
   token: string;
   createdAt: number;
   trackingProgress?: number;
@@ -95,8 +97,12 @@ interface AppState {
   markRetrieved: (taskId: string) => Promise<void>;
   reportLocation: (taskId: string, lat: number, lng: number) => Promise<void>;
   setDriverStatus: (driverId: string, status: DriverStatus) => Promise<void>;
-  addVisitor: (v: Omit<Visitor, 'id' | 'token' | 'createdAt' | 'status'>) => Promise<Visitor>;
+  addVisitor: (v: {name: string; carNumber: string; mobile: string}) => Promise<Visitor>;
   updateVisitor: (id: string, patch: Partial<Visitor>) => Promise<void>;
+  assignVisitorDriver: (visitorId: string, driverId: string) => Promise<void>;
+  markVisitorParked: (visitorId: string, slotId: string) => Promise<void>;
+  requestVisitorRetrieval: (visitorId: string, driverId?: string) => Promise<void>;
+  markVisitorRetrieved: (visitorId: string) => Promise<void>;
   pushNotification: (n: Omit<Notification, 'id' | 'createdAt' | 'read'>) => Promise<void>;
   markNotificationRead: (id: string) => Promise<void>;
   clearNotifications: () => void;
@@ -321,7 +327,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     setDrivers(p => p.map(d => (d.id === driverId ? updated : d)));
   }, []);
 
-  const addVisitor = useCallback(async (v: Omit<Visitor, 'id' | 'token' | 'createdAt' | 'status'>) => {
+  const addVisitor = useCallback(async (v: {name: string; carNumber: string; mobile: string}) => {
     const created = mapVisitor(await visitorsApi.create({name: v.name, carNumber: v.carNumber, mobile: v.mobile}));
     setVisitors(p => [...p, created]);
     return created;
@@ -331,6 +337,37 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     const updated = mapVisitor(await visitorsApi.update(id, patch));
     setVisitors(p => p.map(v => (v.id === id ? updated : v)));
   }, []);
+
+  const assignVisitorDriver = useCallback(async (visitorId: string, driverId: string) => {
+    const updated = mapVisitor(await visitorsApi.assignDriver(visitorId, driverId));
+    setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
+    setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'busy', currentTaskId: visitorId} : d)));
+  }, []);
+
+  const markVisitorParked = useCallback(async (visitorId: string, slotId: string) => {
+    const existing = visitors.find(v => v.id === visitorId);
+    const updated = mapVisitor(await visitorsApi.park(visitorId, slotId));
+    setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
+    setSlots(p => p.map(s => (s.id === slotId ? {...s, status: 'occupied', carNumber: updated.carNumber} : s)));
+    const driverId = updated.driverId ?? existing?.driverId;
+    if (driverId) setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'available', currentTaskId: undefined} : d)));
+  }, [visitors]);
+
+  const requestVisitorRetrieval = useCallback(async (visitorId: string, driverId?: string) => {
+    const updated = mapVisitor(await visitorsApi.requestRetrieval(visitorId, driverId));
+    setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
+    if (driverId) setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'busy', currentTaskId: visitorId} : d)));
+  }, []);
+
+  const markVisitorRetrieved = useCallback(async (visitorId: string) => {
+    const existing = visitors.find(v => v.id === visitorId);
+    const updated = mapVisitor(await visitorsApi.retrieve(visitorId));
+    setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
+    const freedSlotId = existing?.slotId;
+    if (freedSlotId) setSlots(p => p.map(s => (s.id === freedSlotId ? {...s, status: 'free', taskId: undefined, carNumber: undefined, doctorId: undefined} : s)));
+    const driverId = existing?.driverId;
+    if (driverId) setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'available', currentTaskId: undefined} : d)));
+  }, [visitors]);
 
   const pushNotification = useCallback(async (n: Omit<Notification, 'id' | 'createdAt' | 'read'>) => {
     const created = mapNotification(
@@ -362,6 +399,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
       drivers, tasks, slots, visitors, notifications,
       addTask, requestRetrieval, updateTask, assignDriver, markKeyCollected, markParked, markRetrieved, reportLocation,
       setDriverStatus, addVisitor, updateVisitor,
+      assignVisitorDriver, markVisitorParked, requestVisitorRetrieval, markVisitorRetrieved,
       pushNotification, markNotificationRead, clearNotifications,
     }}>
       {children}

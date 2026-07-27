@@ -7,9 +7,11 @@ import {useTheme} from '../../context/ThemeContext';
 import {BRAND_GRADIENT, BRAND_GRADIENT_DARK} from '../../theme/colors';
 import {Icon} from '../../components/Icon';
 import {usersApi} from '../../services/api';
+import {PUBLIC_BASE_URL} from '../../config/api';
 
-function sendWhatsApp(mobile: string, name: string, carNumber: string, token: string, slot?: string) {
-  const msg = `🏥 *KIMS Hospital Parking*\n\nHello ${name},\n\nYour car *${carNumber}* has been safely received by our valet service.\n\n📍 *Token:* ${token}\n🅿️ *Slot:* ${slot ?? 'Being assigned...'}\n\n_You will be notified once your car is parked._\n\nTo retrieve your car, reply *RETRIEVE* or contact our desk.\n\n_KIMS Smart Parking · Secure · Real-time_`;
+function sendWhatsApp(mobile: string, name: string, carNumber: string, token: string, visitorId: string) {
+  const trackingUrl = `${PUBLIC_BASE_URL}/track/${visitorId}`;
+  const msg = `🏥 *KIMS Hospital Parking*\n\nHello ${name},\n\nYour car *${carNumber}* has been safely received by our valet service.\n\n📍 *Token:* ${token}\n\n_Track your car live:_\n${trackingUrl}\n\nWhen you're ready to leave, contact the valet desk to request your car back.\n\n_KIMS Smart Parking · Secure · Real-time_`;
   const url = `whatsapp://send?phone=+91${mobile.replace(/\D/g,'')}&text=${encodeURIComponent(msg)}`;
   Linking.canOpenURL(url).then(supported => {
     if (supported) {
@@ -25,7 +27,8 @@ type Screen = 'home' | 'scan' | 'assign' | 'visitor';
 
 export function ValetHomeScreen() {
   const {user} = useAuth();
-  const {drivers, tasks, addTask, assignDriver, markKeyCollected, pushNotification, addVisitor} = useAppState();
+  const {drivers, tasks, visitors, addTask, assignDriver, markKeyCollected, pushNotification, addVisitor,
+    assignVisitorDriver, requestVisitorRetrieval} = useAppState();
   const {colors, isDark} = useTheme();
 
   const [screen, setScreen] = useState<Screen>('home');
@@ -34,6 +37,11 @@ export function ValetHomeScreen() {
   const [foundUser, setFoundUser] = useState<any | null>(null);
   const [carNumber, setCarNumber] = useState('');
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
+  // Visitor-side counterpart to pendingTaskId — the 'assign' screen is
+  // reused for both doctor tasks and visitor pickups/retrievals, since it's
+  // the same "pick an available driver" interaction either way.
+  const [pendingVisitorId, setPendingVisitorId] = useState<string | null>(null);
+  const [pendingVisitorMode, setPendingVisitorMode] = useState<'park' | 'retrieve' | null>(null);
 
   const [vName, setVName] = useState('');
   const [vCar, setVCar] = useState('');
@@ -48,7 +56,9 @@ export function ValetHomeScreen() {
   // the car (see ParkingScreen "Request Retrieval"). The valet's job here is
   // strictly to assign a driver to an existing request, never to invent one.
   const retrievalRequests = tasks.filter(t => t.type === 'retrieve' && t.status === 'requested');
+  const activeVisitors = visitors.filter(v => v.status !== 'retrieved');
   const pendingTask = pendingTaskId ? tasks.find(t => t.id === pendingTaskId) ?? null : null;
+  const pendingVisitor = pendingVisitorId ? visitors.find(v => v.id === pendingVisitorId) ?? null : null;
 
   const handleScanCode = async () => {
     setCodeError('');
@@ -90,6 +100,35 @@ export function ValetHomeScreen() {
   };
 
   const handleAssignDriver = async (driverId: string) => {
+    if (pendingVisitorId) {
+      const visitor = visitors.find(v => v.id === pendingVisitorId);
+      try {
+        if (pendingVisitorMode === 'retrieve') {
+          await requestVisitorRetrieval(pendingVisitorId, driverId);
+          pushNotification({
+            targetRole: `driver:${driverId}`, targetId: driverId,
+            title: '🔔 Visitor Retrieval!',
+            body: `Bring ${visitor?.carNumber} from slot ${visitor?.slotId} back for ${visitor?.name}.`,
+            type: 'alarm',
+          });
+        } else {
+          await assignVisitorDriver(pendingVisitorId, driverId);
+          pushNotification({
+            targetRole: `driver:${driverId}`, targetId: driverId,
+            title: '🔔 Visitor Car Pickup!',
+            body: `Collect key from valet for ${visitor?.name}'s car (${visitor?.carNumber}).`,
+            type: 'alarm',
+          });
+        }
+      } catch (err: any) {
+        Alert.alert('Error', err.message || 'Something went wrong');
+        return;
+      }
+      setPendingVisitorId(null); setPendingVisitorMode(null);
+      setScreen('home');
+      return;
+    }
+
     if (!pendingTaskId) return;
     try {
       const task = tasks.find(t => t.id === pendingTaskId);
@@ -120,12 +159,22 @@ export function ValetHomeScreen() {
     if (!vName.trim() || !vCar.trim() || !vMobile.trim()) return;
     try {
       const visitor = await addVisitor({name: vName.trim(), carNumber: vCar.trim().toUpperCase(), mobile: vMobile.trim()});
-      sendWhatsApp(vMobile.trim(), vName.trim(), vCar.trim().toUpperCase(), visitor.token);
+      sendWhatsApp(vMobile.trim(), vName.trim(), vCar.trim().toUpperCase(), visitor.token, visitor.id);
       setVName(''); setVCar(''); setVMobile('');
-      setScreen('home');
+      // Straight into driver assignment — a token with nobody assigned to
+      // collect the key is exactly the gap this flow used to leave open.
+      setPendingVisitorId(visitor.id);
+      setPendingVisitorMode('park');
+      setScreen('assign');
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Something went wrong');
     }
+  };
+
+  const handleRequestVisitorRetrieval = (visitorId: string) => {
+    setPendingVisitorId(visitorId);
+    setPendingVisitorMode('retrieve');
+    setScreen('assign');
   };
 
   // ── SCAN / KEY COLLECTION ──────────────────────────────────────────────
@@ -199,7 +248,7 @@ export function ValetHomeScreen() {
     return (
       <SafeAreaView style={[s.safe, {backgroundColor: colors.background}]}>
         <View style={s.header}>
-          <TouchableOpacity onPress={() => setScreen('home')} style={[s.backBtn, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+          <TouchableOpacity onPress={() => { setScreen('home'); setPendingVisitorId(null); setPendingVisitorMode(null); }} style={[s.backBtn, {backgroundColor: colors.surface, borderColor: colors.border}]}>
             <Text style={[s.backTxt, {color: colors.textPrimary}]}>Skip</Text>
           </TouchableOpacity>
           <Text style={[s.headerTitle, {color: colors.textPrimary}]}>Assign Driver</Text>
@@ -208,7 +257,11 @@ export function ValetHomeScreen() {
         <ScrollView contentContainerStyle={s.subContent}>
           <Text style={[s.stepLabel, {color: colors.textMuted}]}>SELECT DRIVER</Text>
           <Text style={[s.stepDesc, {color: colors.textPrimary}]}>
-            {pendingTask?.type === 'retrieve'
+            {pendingVisitor
+              ? (pendingVisitorMode === 'retrieve'
+                ? `Assign a driver to retrieve ${pendingVisitor.carNumber} from slot ${pendingVisitor.slotId} for ${pendingVisitor.name}`
+                : `Tap a driver to collect the key and park ${pendingVisitor.name}'s car (${pendingVisitor.carNumber})`)
+              : pendingTask?.type === 'retrieve'
               ? `Assign a driver to retrieve ${pendingTask.carNumber} from slot ${pendingTask.slotId}`
               : 'Tap a driver to assign this parking task'}
           </Text>
@@ -391,6 +444,40 @@ export function ValetHomeScreen() {
             </TouchableOpacity>
           </View>
         ))}
+
+        {/* Visitors/patients — tokens generated via the Visitor flow. Each
+            one is tracked here until retrieved, so it's always visible who
+            (if anyone) has been assigned to take the keys. */}
+        <Text style={[s.sectionTitle, {color: colors.textPrimary, marginTop: 20}]}>Visitors ({activeVisitors.length})</Text>
+        {activeVisitors.length === 0 ? (
+          <View style={[s.emptyBox, {borderColor: colors.border}]}>
+            <Text style={s.emptyIcon}>🎫</Text>
+            <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No active visitor tokens</Text>
+          </View>
+        ) : activeVisitors.map(v => {
+          const vc = v.status === 'parked' ? colors.success : colors.accent;
+          const label = v.status === 'parked'
+            ? (v.retrievalRequested ? 'Retrieval requested' : `Parked · ${v.slotId ?? ''}`)
+            : (v.driverName ? `${v.driverName} collecting key` : 'Waiting for driver');
+          return (
+            <View key={v.id} style={[s.taskCard, {backgroundColor: colors.surface, borderColor: colors.border, borderLeftColor: vc}]}>
+              <View style={s.taskTop}>
+                <View style={[s.typePill, {backgroundColor: vc + '15'}]}>
+                  <Text style={[s.typePillTxt, {color: vc}]}>🎫 TOKEN {v.token}</Text>
+                </View>
+                <Text style={[s.taskStatusTxt, {color: vc}]}>{label}</Text>
+              </View>
+              <Text style={[s.taskDoctor, {color: colors.textPrimary}]}>{v.name}</Text>
+              <Text style={[s.taskMeta, {color: colors.textSecondary}]}>🚘 {v.carNumber}</Text>
+              {v.status === 'parked' && !v.retrievalRequested && (
+                <TouchableOpacity style={[s.taskActionBtn, {borderColor: colors.warning, backgroundColor: colors.warning + '12'}]}
+                  onPress={() => handleRequestVisitorRetrieval(v.id)}>
+                  <Text style={[s.taskActionTxt, {color: colors.warning}]}>↑ Request Retrieval</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          );
+        })}
         </View>
       </ScrollView>
     </SafeAreaView>
