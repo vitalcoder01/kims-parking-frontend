@@ -5,11 +5,12 @@ import {useAuth} from '../../context/AuthContext';
 import {useTheme} from '../../context/ThemeContext';
 import {BRAND_GRADIENT} from '../../theme/colors';
 import {Icon} from '../../components/Icon';
+import {APP_VERSION_NAME} from '../../config/version';
 
 export function LoginScreen() {
   const {login} = useAuth();
   const {colors, isDark} = useTheme();
-  const [empId, setEmpId]       = useState('');
+  const [loginName, setLoginName] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError]       = useState('');
   const [loading, setLoading]   = useState(false);
@@ -31,9 +32,9 @@ export function LoginScreen() {
     setError('');
     setLoading(true);
     try {
-      await login(empId.trim().toUpperCase(), password);
+      await login(loginName.trim(), password);
     } catch (err: any) {
-      setError(err.message || 'Invalid Employee ID or password');
+      setError(err.message || 'Invalid login name or password');
       triggerShake();
     } finally {
       setLoading(false);
@@ -61,16 +62,16 @@ export function LoginScreen() {
 
             <View style={s.fields}>
               <View style={s.field}>
-                <Text style={[s.label, {color: colors.textSecondary}]}>EMPLOYEE ID</Text>
+                <Text style={[s.label, {color: colors.textSecondary}]}>LOGIN NAME</Text>
                 <View style={[s.inputWrap, {borderColor: error ? colors.error : colors.border, backgroundColor: isDark ? colors.card : '#F8FAFF'}]}>
                   <Icon name="userCard" size={18} color={colors.textMuted} style={{marginRight: 4}} />
                   <TextInput
                     style={[s.input, {color: colors.textPrimary}]}
-                    placeholder="Enter your Employee ID"
+                    placeholder="e.g. Dr. Aditya Sharma"
                     placeholderTextColor={colors.textMuted}
-                    value={empId}
-                    onChangeText={t => { setEmpId(t); setError(''); }}
-                    autoCapitalize="characters"
+                    value={loginName}
+                    onChangeText={t => { setLoginName(t); setError(''); }}
+                    autoCapitalize="words"
                     returnKeyType="next"
                   />
                 </View>
@@ -133,7 +134,7 @@ export function LoginScreen() {
               <Icon name="shield" size={13} color={colors.textMuted} />
               <Text style={[s.footerBadgeTxt, {color: colors.textMuted}]}>Secure Enterprise Login</Text>
             </View>
-            <Text style={[s.version, {color: colors.textMuted}]}>KIMS Parking System v1.1</Text>
+            <Text style={[s.version, {color: colors.textMuted}]}>KIMS Parking System v{APP_VERSION_NAME}</Text>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>

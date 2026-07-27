@@ -11,6 +11,7 @@ type Role = 'doctor' | 'staff' | 'valet' | 'driver' | 'admin';
 interface AdminUser {
   id: string;
   employeeId: string;
+  loginName: string;
   name: string;
   role: Role;
   department?: string;
@@ -102,7 +103,7 @@ export function AdminStaffScreen() {
     if (!name.trim() || !employeeId.trim() || !password.trim()) return;
     setSubmitting(true);
     try {
-      await adminApi.createUser({
+      const created = await adminApi.createUser({
         employeeId: employeeId.trim().toUpperCase(),
         name: name.trim(),
         role,
@@ -113,7 +114,7 @@ export function AdminStaffScreen() {
       });
       Alert.alert(
         'Staff Added',
-        `${name.trim()} can now sign in with:\n\nEmployee ID: ${employeeId.trim().toUpperCase()}\nPassword: ${password.trim()}\n\nShare these credentials securely — they won't be shown again here.`,
+        `${name.trim()} can now sign in with:\n\nLogin Name: ${(created as any).loginName}\nPassword: ${password.trim()}\n\nShare these credentials securely — they won't be shown again here.`,
       );
       closeForm();
       loadUsers();
@@ -171,7 +172,7 @@ export function AdminStaffScreen() {
     if (!editingUser) return;
     Alert.alert(
       'Delete Account?',
-      `This permanently removes ${editingUser.name}'s login (${editingUser.employeeId}). This can't be undone.`,
+      `This permanently removes ${editingUser.name}'s login (${editingUser.loginName}). This can't be undone.`,
       [
         {text: 'Cancel', style: 'cancel'},
         {
@@ -210,6 +211,10 @@ export function AdminStaffScreen() {
   // ── Add/Edit Staff form ──────────────────────────────────────────────────
   if (showAdd) {
     const isEdit = !!editingUser;
+    // Mirrors the backend's LOGIN_PREFIX map — a live preview only; the
+    // server generates and dedupes the real one on submit.
+    const loginPrefix: Record<Role, string> = {doctor: 'Dr. ', staff: '', valet: 'Valet ', driver: 'Driver ', admin: ''};
+    const previewLoginName = `${loginPrefix[role]}${name.trim() || 'Full Name'}`;
     return (
       <SafeAreaView style={[s.safe, {backgroundColor: colors.background}]}>
         <View style={s.formHeader}>
@@ -236,9 +241,21 @@ export function AdminStaffScreen() {
 
           <Text style={[s.fieldLabel, {color: colors.textMuted}]}>FULL NAME</Text>
           <TextInput style={[s.input, {borderColor: colors.border, backgroundColor: colors.surface, color: colors.textPrimary}]}
-            value={name} onChangeText={setName} placeholder="e.g. Dr. Kavita Reddy" placeholderTextColor={colors.textMuted} />
+            value={name} onChangeText={setName} placeholder="e.g. Kavita Reddy" placeholderTextColor={colors.textMuted} />
 
-          <Text style={[s.fieldLabel, {color: colors.textMuted}]}>EMPLOYEE ID{isEdit ? ' (FIXED)' : ''}</Text>
+          {isEdit && editingUser && (
+            <View style={[s.loginNameBanner, {backgroundColor: colors.primary + '10', borderColor: colors.primary + '30'}]}>
+              <Text style={[s.loginNameLbl, {color: colors.textMuted}]}>LOGS IN AS</Text>
+              <Text style={[s.loginNameVal, {color: colors.primary}]}>{editingUser.loginName}</Text>
+            </View>
+          )}
+          {!isEdit && (
+            <Text style={[s.helperNote, {color: colors.textMuted}]}>
+              Their login name is generated automatically — they'll sign in as "{previewLoginName}".
+            </Text>
+          )}
+
+          <Text style={[s.fieldLabel, {color: colors.textMuted}]}>EMPLOYEE ID{isEdit ? ' (FIXED)' : ''} — internal reference only</Text>
           <TextInput
             style={[s.input, {borderColor: colors.border, backgroundColor: isEdit ? colors.background : colors.surface, color: isEdit ? colors.textMuted : colors.textPrimary}]}
             value={employeeId} onChangeText={t => setEmployeeId(t.toUpperCase())} placeholder="e.g. DOC010" autoCapitalize="characters" placeholderTextColor={colors.textMuted}
@@ -354,9 +371,9 @@ export function AdminStaffScreen() {
                   </Text>
                 </View>
                 <View style={{flex: 1}}>
-                  <Text style={[s.staffName, {color: colors.textPrimary}]}>{u.name}</Text>
+                  <Text style={[s.staffName, {color: colors.textPrimary}]}>{u.loginName}</Text>
                   <Text style={[s.staffRole, {color: colors.textSecondary}]}>
-                    {roleLabel(u.role)} · {u.employeeId}
+                    {roleLabel(u.role)} · ID {u.employeeId}
                   </Text>
                   {!!(u.department || u.phone) && (
                     <Text style={[s.staffLoc, {color: colors.textMuted}]}>{u.department || u.phone}</Text>
@@ -405,6 +422,10 @@ const s = StyleSheet.create({
   formTitle: {fontSize: 17, fontWeight: '900'},
   formScroll: {padding: 20, paddingBottom: 40},
   fieldLabel: {fontSize: 10, fontWeight: '700', letterSpacing: 1, marginBottom: 8, marginTop: 16},
+  loginNameBanner: {borderRadius: 12, borderWidth: 1, padding: 12, marginTop: 14},
+  loginNameLbl: {fontSize: 9, fontWeight: '800', letterSpacing: 1},
+  loginNameVal: {fontSize: 15, fontWeight: '900', marginTop: 3},
+  helperNote: {fontSize: 11, marginTop: 10, lineHeight: 16},
   input: {borderWidth: 1.5, borderRadius: 12, paddingHorizontal: 14, height: 50, fontSize: 15, fontWeight: '600'},
   roleRow: {flexDirection: 'row', flexWrap: 'wrap', gap: 8},
   roleChip: {flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1.5, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10},
