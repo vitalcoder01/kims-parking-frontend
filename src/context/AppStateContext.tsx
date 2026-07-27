@@ -337,10 +337,18 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
       await notificationsApi.push({targetRole: n.targetRole, targetId: n.targetId, title: n.title, body: n.body, type: n.type}),
     );
     setNotifs(p => [created, ...p]);
-    // Also fire an OS-level notification so it appears in the system tray
-    // even when the app is in the background.
-    displayNotification(n.title, n.body, n.type);
-  }, []);
+    // Fire the OS-level tray notification only on a device this notification
+    // is actually FOR — same match rules as NotificationBanner. This used to
+    // fire unconditionally, which meant the SENDER's own phone buzzed for
+    // every notification they sent (a doctor requesting retrieval got
+    // buzzed by their own request meant for the valet, etc.).
+    const isForMe =
+      created.targetId === user?.id ||
+      (user?.linkedDriverId != null && created.targetId === user.linkedDriverId) ||
+      created.targetRole === user?.role ||
+      created.targetRole === 'all';
+    if (isForMe) displayNotification(n.title, n.body, n.type);
+  }, [user?.id, user?.linkedDriverId, user?.role]);
 
   const markNotificationRead = useCallback(async (id: string) => {
     const updated = mapNotification(await notificationsApi.markRead(id));

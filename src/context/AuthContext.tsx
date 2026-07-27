@@ -65,9 +65,14 @@ export function AuthProvider({children}: {children: React.ReactNode}) {
           tokenRef.current = saved.token;
           setAuthToken(saved.token);
           setUser(saved.user);
-          // Validate in the background — an expired/revoked token 401s and
-          // the interceptor above logs the user out automatically.
-          authApi.me().catch(() => {});
+          // Refresh from the server in the background — an expired/revoked
+          // token 401s and the interceptor above logs the user out
+          // automatically; a *valid* token still needs this because an
+          // admin may have changed this account's role/name/etc. since the
+          // session was cached, and the stale cached role would otherwise
+          // keep driving which navigator/tabs/endpoints this session uses
+          // until the next full login.
+          authApi.me().then(fresh => updateProfile(fresh)).catch(() => {});
         } else {
           AsyncStorage.removeItem(SESSION_KEY);
         }
