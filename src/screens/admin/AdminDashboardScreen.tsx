@@ -71,23 +71,32 @@ export function AdminDashboardScreen() {
           <Badge label="Live" variant="success" dot />
         </View>
 
-        {/* Metrics 2×2 */}
-        <View style={s.metricsGrid}>
-          {([
-            {n: String(parkedCars),        l: 'Vehicles\nParked',   c: colors.primary,  ic: '🅿️'},
-            {n: String(busyDrivers),       l: 'Drivers\nOn Duty',   c: '#1A72E8',       ic: '👥'},
-            {n: String(liveTasks.length),  l: 'Tasks\nActive',      c: colors.warning,  ic: '⚡'},
-            {n: String(pendingRetrieval),  l: 'Retrieval\nPending', c: colors.success,  ic: '🔄'},
-          ] as const).map(m => (
-            <View
-              key={m.l}
-              style={[
-                s.metricCard,
-                {backgroundColor: colors.card, borderColor: colors.border, borderLeftColor: m.c},
-              ]}>
-              <Text style={s.metricIc}>{m.ic}</Text>
-              <Text style={[s.metricNum, {color: m.c}]}>{m.n}</Text>
-              <Text style={[s.metricLbl, {color: colors.textMuted}]}>{m.l}</Text>
+        {/* Metrics 2×2 — two explicit rows rather than a flex-wrap grid, since
+            wrap + percentage widths + borders was rounding just over 100%
+            per row and silently collapsing every card to one-per-row. */}
+        <View style={s.metricsPad}>
+          {[
+            [
+              {n: String(parkedCars),        l: 'Vehicles Parked',   c: colors.primary,  ic: '🅿️'},
+              {n: String(busyDrivers),       l: 'Drivers On Duty',   c: '#1A72E8',       ic: '👥'},
+            ],
+            [
+              {n: String(liveTasks.length),  l: 'Tasks Active',      c: colors.warning,  ic: '⚡'},
+              {n: String(pendingRetrieval),  l: 'Retrieval Pending', c: colors.success,  ic: '🔄'},
+            ],
+          ].map((row, ri) => (
+            <View key={ri} style={s.metricsRow}>
+              {row.map(m => (
+                <View
+                  key={m.l}
+                  style={[s.metricCard, {backgroundColor: colors.card, borderColor: colors.border, shadowColor: m.c}]}>
+                  <View style={[s.metricIcBadge, {backgroundColor: m.c + '18'}]}>
+                    <Text style={s.metricIc}>{m.ic}</Text>
+                  </View>
+                  <Text style={[s.metricNum, {color: colors.textPrimary}]}>{m.n}</Text>
+                  <Text style={[s.metricLbl, {color: colors.textMuted}]}>{m.l}</Text>
+                </View>
+              ))}
             </View>
           ))}
         </View>
@@ -209,15 +218,20 @@ const s = StyleSheet.create({
   hName: {fontSize: 20, fontWeight: '900', letterSpacing: -0.4, marginTop: 2},
   hDate: {fontSize: 11, marginTop: 3},
 
-  metricsGrid: {flexDirection: 'row', flexWrap: 'wrap', gap: 1, backgroundColor: 'transparent'},
+  metricsPad: {paddingHorizontal: 16, paddingTop: 16, gap: 12},
+  metricsRow: {flexDirection: 'row', gap: 12},
   metricCard: {
-    width: '50%', flexGrow: 1,
-    borderWidth: 0.5, borderLeftWidth: 4,
+    flex: 1, borderRadius: 20, borderWidth: 1,
     paddingHorizontal: 16, paddingVertical: 18,
+    shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.12, shadowRadius: 10, elevation: 3,
   },
-  metricIc: {fontSize: 20, marginBottom: 8},
-  metricNum: {fontSize: 32, fontWeight: '900', letterSpacing: -1},
-  metricLbl: {fontSize: 10, fontWeight: '600', marginTop: 3},
+  metricIcBadge: {
+    width: 40, height: 40, borderRadius: 12,
+    alignItems: 'center', justifyContent: 'center', marginBottom: 12,
+  },
+  metricIc: {fontSize: 19},
+  metricNum: {fontSize: 30, fontWeight: '900', letterSpacing: -1},
+  metricLbl: {fontSize: 11, fontWeight: '600', marginTop: 4},
 
   pad: {padding: 16},
   sec: {

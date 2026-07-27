@@ -15,6 +15,7 @@ import {ThemeToggleRow, AppSwitch} from '../../components/AppSwitch';
 import {Card} from '../../components/Card';
 import {typography, spacing, radius} from '../../theme';
 import {usersApi} from '../../services/api';
+import {APP_VERSION_NAME, APP_VERSION_CODE} from '../../config/version';
 
 type ThemeMode = 'light' | 'dark' | 'system';
 
@@ -179,7 +180,7 @@ export function SharedSettingsScreen() {
         <Text style={[styles.sectionTitle, {color: colors.textMuted}]}>ABOUT</Text>
         <Card>
           {[
-            ['App Version', '1.1'],
+            ['App Version', `${APP_VERSION_NAME} (${APP_VERSION_CODE})`],
             ['Build', 'Release'],
             ['Hospital', 'KIMS Hospitals'],
           ].map(([label, value]) => (

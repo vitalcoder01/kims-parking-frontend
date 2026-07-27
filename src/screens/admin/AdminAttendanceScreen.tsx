@@ -15,6 +15,14 @@ interface MonthlyUser {
 
 const roleLabel: Record<string, string> = {doctor: 'Doctor', staff: 'Staff', valet: 'Valet', driver: 'Driver', admin: 'Admin'};
 const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+const CATEGORIES: {key: string; label: string; icon: string}[] = [
+  {key: 'all', label: 'All', icon: '👥'},
+  {key: 'doctor', label: 'Doctors', icon: '🩺'},
+  {key: 'staff', label: 'Staff', icon: '🧑‍💼'},
+  {key: 'valet', label: 'Valets', icon: '🔑'},
+  {key: 'driver', label: 'Drivers', icon: '🚗'},
+  {key: 'admin', label: 'Admins', icon: '🛡️'},
+];
 
 function formatTime(iso: string | null) {
   if (!iso) return '—';
@@ -96,14 +104,23 @@ export function AdminAttendanceScreen() {
   const [todayRows, setTodayRows] = useState<TodayRow[]>([]);
   const [monthUsers, setMonthUsers] = useState<MonthlyUser[]>([]);
   const [monthStr, setMonthStr] = useState(currentMonthStr());
+  const [category, setCategory] = useState('all');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async (month: string) => {
     try {
-      const [today, monthly] = await Promise.all([adminApi.attendanceToday(), adminApi.attendanceMonthly(month)]);
+      const [today, allUsers, monthly] = await Promise.all([
+        adminApi.attendanceToday(), adminApi.listUsers(), adminApi.attendanceMonthly(month),
+      ]);
       setTodayRows(today);
-      setMonthUsers(monthly.users);
+      // Every staff account gets a calendar row — even with zero attendance
+      // this month — so picking a category shows the whole roster, not just
+      // whoever happened to already have a recorded day.
+      const byUserId = new Map(monthly.users.map(u => [u.userId, u]));
+      setMonthUsers(allUsers.map((u: any) => byUserId.get(u.id) ?? {
+        userId: u.id, name: u.name, role: u.role, employeeId: u.employeeId, days: [],
+      }));
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -114,6 +131,10 @@ export function AdminAttendanceScreen() {
 
   const present = todayRows.filter(r => r.checkIn && !r.checkOut).length;
   const isCurrentMonth = monthStr === currentMonthStr();
+  const categoryCounts: Record<string, number> = {all: monthUsers.length};
+  for (const u of monthUsers) categoryCounts[u.role] = (categoryCounts[u.role] ?? 0) + 1;
+  const filteredUsers = category === 'all' ? monthUsers : monthUsers.filter(u => u.role === category);
+  const visibleCategories = CATEGORIES.filter(c => c.key === 'all' || categoryCounts[c.key] > 0);
 
   if (loading) {
     return (
@@ -147,12 +168,35 @@ export function AdminAttendanceScreen() {
           </TouchableOpacity>
         </View>
 
-        <Text style={[s.sec, {color: colors.textMuted}]}>PER-USER CALENDAR</Text>
-        {monthUsers.length === 0 ? (
+        <Text style={[s.sec, {color: colors.textMuted}]}>CATEGORY</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.catScroll} contentContainerStyle={s.catRow}>
+          {visibleCategories.map(c => {
+            const on = category === c.key;
+            return (
+              <TouchableOpacity
+                key={c.key}
+                activeOpacity={0.8}
+                onPress={() => setCategory(c.key)}
+                style={[
+                  s.catChip,
+                  {backgroundColor: on ? colors.primary : colors.card, borderColor: on ? colors.primary : colors.border},
+                ]}>
+                <Text style={s.catIcon}>{c.icon}</Text>
+                <Text style={[s.catLabel, {color: on ? '#fff' : colors.textPrimary}]}>{c.label}</Text>
+                <View style={[s.catCount, {backgroundColor: on ? 'rgba(255,255,255,0.25)' : colors.cardAlt}]}>
+                  <Text style={[s.catCountTxt, {color: on ? '#fff' : colors.textMuted}]}>{categoryCounts[c.key] ?? 0}</Text>
+                </View>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+
+        <Text style={[s.sec, {color: colors.textMuted, marginTop: 4}]}>PER-USER CALENDAR</Text>
+        {filteredUsers.length === 0 ? (
           <View style={[s.emptyBox, {borderColor: colors.border}]}>
-            <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No attendance recorded for {monthLabel(monthStr)}</Text>
+            <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No one in this category yet</Text>
           </View>
-        ) : monthUsers.map(u => <UserCalendar key={u.userId} user={u} monthStr={monthStr} colors={colors} />)}
+        ) : filteredUsers.map(u => <UserCalendar key={u.userId} user={u} monthStr={monthStr} colors={colors} />)}
 
         <Text style={[s.sec, {color: colors.textMuted, marginTop: 8}]}>TODAY — MARKED AUTOMATICALLY</Text>
         {todayRows.length === 0 ? (
@@ -192,6 +236,16 @@ const s = StyleSheet.create({
   monthBtnTxt: {fontSize: 18, fontWeight: '900'},
   monthLabel: {fontSize: 15, fontWeight: '800', minWidth: 140, textAlign: 'center'},
   sec: {fontSize: 10, fontWeight: '700', letterSpacing: 1.3, textTransform: 'uppercase', marginBottom: 8},
+  catScroll: {marginHorizontal: -16, marginBottom: 14},
+  catRow: {paddingHorizontal: 16, gap: 8},
+  catChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    borderRadius: 20, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 9,
+  },
+  catIcon: {fontSize: 14},
+  catLabel: {fontSize: 12, fontWeight: '800'},
+  catCount: {borderRadius: 10, paddingHorizontal: 6, paddingVertical: 1, minWidth: 18, alignItems: 'center'},
+  catCountTxt: {fontSize: 10, fontWeight: '800'},
   sheet: {borderRadius: 18, borderWidth: 1, overflow: 'hidden'},
   emptyBox: {borderRadius: 14, borderWidth: 1, borderStyle: 'dashed', padding: 24, alignItems: 'center', marginBottom: 8},
   emptyTxt: {fontSize: 13, fontWeight: '600'},
