@@ -2,7 +2,7 @@ import React, {useState} from 'react';
 import {View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, TextInput, Linking, Alert} from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import {useAuth} from '../../context/AuthContext';
-import {useAppState} from '../../context/AppStateContext';
+import {useAppState, Visitor} from '../../context/AppStateContext';
 import {useTheme} from '../../context/ThemeContext';
 import {BRAND_GRADIENT, BRAND_GRADIENT_DARK} from '../../theme/colors';
 import {Icon} from '../../components/Icon';
@@ -28,7 +28,7 @@ type Screen = 'home' | 'scan' | 'assign' | 'visitor';
 export function ValetHomeScreen() {
   const {user} = useAuth();
   const {drivers, tasks, visitors, addTask, assignDriver, markKeyCollected, pushNotification, addVisitor,
-    assignVisitorDriver, requestVisitorRetrieval} = useAppState();
+    assignVisitorDriver, assignRetrievalDriver} = useAppState();
   const {colors, isDark} = useTheme();
 
   const [screen, setScreen] = useState<Screen>('home');
@@ -57,6 +57,12 @@ export function ValetHomeScreen() {
   // strictly to assign a driver to an existing request, never to invent one.
   const retrievalRequests = tasks.filter(t => t.type === 'retrieve' && t.status === 'requested');
   const activeVisitors = visitors.filter(v => v.status !== 'retrieved');
+  // A visitor's driverId is reused from the park leg and isn't cleared until
+  // retrieval completes, so it alone can't tell us whether a driver is
+  // *actively* out on the retrieval right now — checking that driver's own
+  // currentTaskId against this visitor is what disambiguates it. Mirrors the
+  // same check the backend does in visitor.service.js assignRetrievalDriver.
+  const hasActiveRetrievalDriver = (v: Visitor) => drivers.some(d => d.currentTaskId === v.id && d.status === 'busy');
   const pendingTask = pendingTaskId ? tasks.find(t => t.id === pendingTaskId) ?? null : null;
   const pendingVisitor = pendingVisitorId ? visitors.find(v => v.id === pendingVisitorId) ?? null : null;
 
@@ -104,7 +110,7 @@ export function ValetHomeScreen() {
       const visitor = visitors.find(v => v.id === pendingVisitorId);
       try {
         if (pendingVisitorMode === 'retrieve') {
-          await requestVisitorRetrieval(pendingVisitorId, driverId);
+          await assignRetrievalDriver(pendingVisitorId, driverId);
           pushNotification({
             targetRole: `driver:${driverId}`, targetId: driverId,
             title: '🔔 Visitor Retrieval!',
@@ -455,9 +461,14 @@ export function ValetHomeScreen() {
             <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No active visitor tokens</Text>
           </View>
         ) : activeVisitors.map(v => {
-          const vc = v.status === 'parked' ? colors.success : colors.accent;
+          const needsDriver = v.status === 'parked' && v.retrievalRequested && !hasActiveRetrievalDriver(v);
+          const vc = v.status === 'parked'
+            ? (v.retrievalRequested ? (needsDriver ? colors.warning : colors.success) : colors.success)
+            : colors.accent;
           const label = v.status === 'parked'
-            ? (v.retrievalRequested ? 'Retrieval requested' : `Parked · ${v.slotId ?? ''}`)
+            ? (v.retrievalRequested
+              ? (needsDriver ? 'Requested — needs driver' : `${v.driverName ?? 'Driver'} en route`)
+              : `Parked · ${v.slotId ?? ''}`)
             : (v.driverName ? `${v.driverName} collecting key` : 'Waiting for driver');
           return (
             <View key={v.id} style={[s.taskCard, {backgroundColor: colors.surface, borderColor: colors.border, borderLeftColor: vc}]}>
@@ -473,6 +484,12 @@ export function ValetHomeScreen() {
                 <TouchableOpacity style={[s.taskActionBtn, {borderColor: colors.warning, backgroundColor: colors.warning + '12'}]}
                   onPress={() => handleRequestVisitorRetrieval(v.id)}>
                   <Text style={[s.taskActionTxt, {color: colors.warning}]}>↑ Request Retrieval</Text>
+                </TouchableOpacity>
+              )}
+              {needsDriver && (
+                <TouchableOpacity style={[s.taskActionBtn, {borderColor: colors.warning, backgroundColor: colors.warning + '12'}]}
+                  onPress={() => handleRequestVisitorRetrieval(v.id)}>
+                  <Text style={[s.taskActionTxt, {color: colors.warning}]}>↑ Assign Driver — visitor is ready to leave</Text>
                 </TouchableOpacity>
               )}
             </View>

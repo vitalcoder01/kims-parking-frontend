@@ -144,8 +144,8 @@ export const visitorsApi = {
     client.patch(`/visitors/${id}/assign`, {driverId}).then(r => r.data.visitor),
   park: (id: string, slotId: string) =>
     client.patch(`/visitors/${id}/park`, {slotId}).then(r => r.data.visitor),
-  requestRetrieval: (id: string, driverId?: string) =>
-    client.patch(`/visitors/${id}/request-retrieval`, {driverId}).then(r => r.data.visitor),
+  assignRetrievalDriver: (id: string, driverId: string) =>
+    client.patch(`/visitors/${id}/assign-retrieval`, {driverId}).then(r => r.data.visitor),
   retrieve: (id: string) =>
     client.patch(`/visitors/${id}/retrieve`).then(r => r.data.visitor),
 };

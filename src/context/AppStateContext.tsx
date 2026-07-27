@@ -101,7 +101,7 @@ interface AppState {
   updateVisitor: (id: string, patch: Partial<Visitor>) => Promise<void>;
   assignVisitorDriver: (visitorId: string, driverId: string) => Promise<void>;
   markVisitorParked: (visitorId: string, slotId: string) => Promise<void>;
-  requestVisitorRetrieval: (visitorId: string, driverId?: string) => Promise<void>;
+  assignRetrievalDriver: (visitorId: string, driverId: string) => Promise<void>;
   markVisitorRetrieved: (visitorId: string) => Promise<void>;
   pushNotification: (n: Omit<Notification, 'id' | 'createdAt' | 'read'>) => Promise<void>;
   markNotificationRead: (id: string) => Promise<void>;
@@ -358,10 +358,10 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     if (driverId) setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'available', currentTaskId: undefined} : d)));
   }, [visitors]);
 
-  const requestVisitorRetrieval = useCallback(async (visitorId: string, driverId?: string) => {
-    const updated = mapVisitor(await visitorsApi.requestRetrieval(visitorId, driverId));
+  const assignRetrievalDriver = useCallback(async (visitorId: string, driverId: string) => {
+    const updated = mapVisitor(await visitorsApi.assignRetrievalDriver(visitorId, driverId));
     setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
-    if (driverId) setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'busy', currentTaskId: visitorId} : d)));
+    setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'busy', currentTaskId: visitorId} : d)));
   }, []);
 
   const markVisitorRetrieved = useCallback(async (visitorId: string) => {
@@ -404,7 +404,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
       drivers, tasks, slots, visitors, notifications,
       addTask, requestRetrieval, updateTask, assignDriver, markKeyCollected, markParked, markRetrieved, reportLocation,
       setDriverStatus, addVisitor, updateVisitor,
-      assignVisitorDriver, markVisitorParked, requestVisitorRetrieval, markVisitorRetrieved,
+      assignVisitorDriver, markVisitorParked, assignRetrievalDriver, markVisitorRetrieved,
       pushNotification, markNotificationRead, clearNotifications,
     }}>
       {children}
