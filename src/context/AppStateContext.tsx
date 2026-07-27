@@ -149,11 +149,16 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
   const [notifications, setNotifs]    = useState<Notification[]>([]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Only valet/admin screens ever read `drivers`/`visitors` (assign-driver
-  // picker, driver status pills, visitor management, admin dashboard) — for
-  // every other role (doctor/staff/driver, the majority of connected
-  // clients) skip those two queries entirely on every ~4s poll.
+  // Only valet/admin screens ever read the full `drivers` roster
+  // (assign-driver picker, driver status pills, admin dashboard) — for
+  // every other role skip that query entirely on every ~4s poll.
   const needsOpsData = user?.role === 'valet' || user?.role === 'admin';
+  // `visitors` is also needed by drivers themselves — DriverHomeScreen's
+  // "Visitor Pickups" section filters this list down to the ones assigned
+  // to them (v.driverId === myDriverId). Without this, a driver's own app
+  // never even fetches visitor data, so an assignment never shows up there
+  // no matter how correctly the backend/valet side wired it up.
+  const needsVisitors = needsOpsData || user?.role === 'driver';
 
   const fetchAll = useCallback(async () => {
     const [t, s, n, d, v] = await Promise.all([
@@ -161,14 +166,14 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
       slotsApi.list(),
       notificationsApi.list(),
       needsOpsData ? driversApi.list() : Promise.resolve(null),
-      needsOpsData ? visitorsApi.list() : Promise.resolve(null),
+      needsVisitors ? visitorsApi.list() : Promise.resolve(null),
     ]);
     setTasks(t.map(mapTask));
     setSlots(s);
     setNotifs(n.map(mapNotification));
     if (d) setDrivers(d);
     if (v) setVisitors(v.map(mapVisitor));
-  }, [needsOpsData]);
+  }, [needsOpsData, needsVisitors]);
 
   // Fetch on login, poll while logged in, clear everything on logout.
   // Polling fully stops while the app is backgrounded — every logged-in
