@@ -2,4 +2,4 @@
 // on every release — this is what the app compares against the backend's
 // /api/app/version response to decide whether to show the update prompt.
 export const APP_VERSION_CODE = 6;
-export const APP_VERSION_NAME = '1.5';
+export const APP_VERSION_NAME = '1.5.0';
