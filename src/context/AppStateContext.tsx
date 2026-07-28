@@ -119,7 +119,6 @@ interface AppState {
   reportLocation: (taskId: number, lat: number, lng: number) => Promise<void>;
   setDriverStatus: (driverId: number, status: DriverStatus) => Promise<void>;
   addVisitor: (v: {name: string; carNumber?: string; mobile: string; vehicleType?: 'car' | 'bike'; purpose?: string}) => Promise<Visitor>;
-  updateVisitor: (id: number, patch: Partial<Visitor>) => Promise<void>;
   assignVisitorDriver: (visitorId: number, driverId: number) => Promise<void>;
   acceptVisitorTask: (visitorId: number) => Promise<void>;
   rejectVisitorTask: (visitorId: number) => Promise<void>;
@@ -363,11 +362,6 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     return created;
   }, []);
 
-  const updateVisitor = useCallback(async (id: number, patch: Partial<Visitor>) => {
-    const updated = mapVisitor(await visitorsApi.update(id, patch));
-    setVisitors(p => p.map(v => (v.id === id ? updated : v)));
-  }, []);
-
   const assignVisitorDriver = useCallback(async (visitorId: number, driverId: number) => {
     const updated = mapVisitor(await visitorsApi.assignDriver(visitorId, driverId));
     setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
@@ -458,7 +452,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     <Ctx.Provider value={{
       drivers, tasks, slots, visitors, notifications,
       addTask, requestRetrieval, updateTask, assignDriver, markKeyCollected, markParked, markRetrieved, reportLocation,
-      setDriverStatus, addVisitor, updateVisitor,
+      setDriverStatus, addVisitor,
       assignVisitorDriver, acceptVisitorTask, rejectVisitorTask, cancelVisitor,
       markVisitorPickedUp, markVisitorParked, assignRetrievalDriver, markVisitorRetrieved,
       pushNotification, markNotificationRead, clearNotifications,

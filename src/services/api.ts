@@ -138,8 +138,6 @@ export const visitorsApi = {
   list: () => client.get('/visitors').then(r => r.data.visitors),
   create: (data: {name: string; carNumber?: string; mobile: string; vehicleType?: 'car' | 'bike'; purpose?: string}) =>
     client.post('/visitors', data).then(r => r.data.visitor),
-  update: (id: number, patch: Record<string, unknown>) =>
-    client.patch(`/visitors/${id}`, patch).then(r => r.data.visitor),
   assignDriver: (id: number, driverId: number) =>
     client.patch(`/visitors/${id}/assign`, {driverId}).then(r => r.data.visitor),
   acceptTask: (id: number) =>
