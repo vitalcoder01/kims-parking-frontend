@@ -30,6 +30,11 @@ export function LoginScreen() {
 
   const handleLogin = async () => {
     setError('');
+    if (!username.trim() || !password) {
+      setError('Username and password are required');
+      triggerShake();
+      return;
+    }
     setLoading(true);
     try {
       await login(username.trim(), password);

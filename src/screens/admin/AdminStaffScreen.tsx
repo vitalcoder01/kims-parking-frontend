@@ -101,6 +101,10 @@ export function AdminStaffScreen() {
 
   const handleCreate = async () => {
     if (!name.trim() || !employeeId.trim() || !password.trim()) return;
+    if (password.length < 8 || password.length > 64) {
+      Alert.alert('Invalid password', 'Password must be 8–64 characters.');
+      return;
+    }
     setSubmitting(true);
     try {
       const created = await adminApi.createUser({
@@ -213,8 +217,9 @@ export function AdminStaffScreen() {
     const isEdit = !!editingUser;
     // Mirrors the backend's LOGIN_PREFIX map — a live preview only; the
     // server generates and dedupes the real one on submit.
-    const loginPrefix: Record<Role, string> = {doctor: 'Dr. ', staff: '', valet: 'Valet ', driver: 'Driver ', admin: ''};
-    const previewUsername = `${loginPrefix[role]}${name.trim() || 'Full Name'}`;
+    const usernamePrefix: Record<Role, string> = {doctor: 'dr_', staff: '', valet: 'valet_', driver: 'driver_', admin: ''};
+    const slug = (name.trim() || 'full name').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    const previewUsername = `${usernamePrefix[role]}${slug || 'full_name'}`;
     return (
       <SafeAreaView style={[s.safe, {backgroundColor: colors.background}]}>
         <View style={s.formHeader}>
@@ -291,7 +296,11 @@ export function AdminStaffScreen() {
                   <Text style={[s.regenTxt, {color: colors.primary}]}>Regenerate</Text>
                 </TouchableOpacity>
               </View>
-              <Text style={[s.passwordHint, {color: colors.textMuted}]}>Share this with the new hire directly — it won't be shown again after creating the account.</Text>
+              <Text style={[s.passwordHint, {color: colors.textMuted}]}>
+                {password.length > 0 && password.length < 8
+                  ? '⚠ Password must be at least 8 characters.'
+                  : "Share this with the new hire directly — it won't be shown again after creating the account."}
+              </Text>
             </>
           )}
 
