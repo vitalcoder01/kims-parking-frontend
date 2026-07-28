@@ -9,7 +9,7 @@ type Filter = 'all' | 'doctor' | 'staff' | 'valet' | 'driver' | 'admin';
 type Role = 'doctor' | 'staff' | 'valet' | 'driver' | 'admin';
 
 interface AdminUser {
-  id: string;
+  id: number;
   employeeId: string;
   username: string;
   name: string;

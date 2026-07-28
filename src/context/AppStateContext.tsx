@@ -12,21 +12,21 @@ export type TaskStatus = 'requested' | 'assigned' | 'key_collected' | 'in_transi
 export type SlotStatus = 'free' | 'occupied' | 'reserved';
 
 export interface Driver {
-  id: string;
+  id: number;
   name: string;
   phone: string;
   status: DriverStatus;
-  currentTaskId?: string;
+  currentTaskId?: number;
 }
 
 export interface ParkingTask {
-  id: string;
+  id: number;
   type: TaskType;
-  doctorId: string;
+  doctorId: number;
   doctorName: string;
   carNumber: string;
-  slotId?: string;
-  driverId?: string;
+  slotId?: string; // ParkingSlot's id stays a human-readable code, e.g. "A-001"
+  driverId?: number;
   driverName?: string;
   status: TaskStatus;
   requestedAt?: number;
@@ -45,34 +45,38 @@ export interface ParkingTask {
 }
 
 export interface ParkingSlot {
-  id: string;
+  id: string; // human-readable code, e.g. "A-001" — not a surrogate key
   block: string;
   number: number;
   status: SlotStatus;
-  taskId?: string;
+  taskId?: number;
   carNumber?: string;
-  doctorId?: string;
+  doctorId?: number;
 }
 
 export interface Visitor {
-  id: string;
+  id: number;
   name: string;
   carNumber: string;
   mobile: string;
-  slotId?: string;
-  driverId?: string;
+  slotId?: string; // ParkingSlot's id stays a human-readable code
+  driverId?: number;
   driverName?: string;
   status: 'parked' | 'pending' | 'retrieved';
   retrievalRequested: boolean;
   token: string;
+  // Opaque, unguessable — this is what the public WhatsApp tracking link
+  // uses (/track/<publicToken>), never the numeric `id` (sequential ids
+  // would make every other patient's tracking page enumerable).
+  publicToken: string;
   createdAt: number;
   trackingProgress?: number;
 }
 
 export interface Notification {
-  id: string;
+  id: number;
   targetRole: string;
-  targetId?: string;
+  targetId?: number;
   title: string;
   body: string;
   type: 'alarm' | 'info' | 'warning';
@@ -88,23 +92,23 @@ interface AppState {
   notifications: Notification[];
 
   // Actions — all backed by the API now, so all return Promises.
-  addTask: (task: Omit<ParkingTask, 'id'>) => Promise<string>;
-  requestRetrieval: (eta: number) => Promise<string>;
-  updateTask: (id: string, patch: Partial<ParkingTask>) => Promise<void>;
-  assignDriver: (taskId: string, driverId: string) => Promise<void>;
-  markKeyCollected: (taskId: string) => Promise<void>;
-  markParked: (taskId: string, slotId: string) => Promise<void>;
-  markRetrieved: (taskId: string) => Promise<void>;
-  reportLocation: (taskId: string, lat: number, lng: number) => Promise<void>;
-  setDriverStatus: (driverId: string, status: DriverStatus) => Promise<void>;
+  addTask: (task: Omit<ParkingTask, 'id'>) => Promise<number>;
+  requestRetrieval: (eta: number) => Promise<number>;
+  updateTask: (id: number, patch: Partial<ParkingTask>) => Promise<void>;
+  assignDriver: (taskId: number, driverId: number) => Promise<void>;
+  markKeyCollected: (taskId: number) => Promise<void>;
+  markParked: (taskId: number, slotId: string) => Promise<void>;
+  markRetrieved: (taskId: number) => Promise<void>;
+  reportLocation: (taskId: number, lat: number, lng: number) => Promise<void>;
+  setDriverStatus: (driverId: number, status: DriverStatus) => Promise<void>;
   addVisitor: (v: {name: string; carNumber: string; mobile: string}) => Promise<Visitor>;
-  updateVisitor: (id: string, patch: Partial<Visitor>) => Promise<void>;
-  assignVisitorDriver: (visitorId: string, driverId: string) => Promise<void>;
-  markVisitorParked: (visitorId: string, slotId: string) => Promise<void>;
-  assignRetrievalDriver: (visitorId: string, driverId: string) => Promise<void>;
-  markVisitorRetrieved: (visitorId: string) => Promise<void>;
+  updateVisitor: (id: number, patch: Partial<Visitor>) => Promise<void>;
+  assignVisitorDriver: (visitorId: number, driverId: number) => Promise<void>;
+  markVisitorParked: (visitorId: number, slotId: string) => Promise<void>;
+  assignRetrievalDriver: (visitorId: number, driverId: number) => Promise<void>;
+  markVisitorRetrieved: (visitorId: number) => Promise<void>;
   pushNotification: (n: Omit<Notification, 'id' | 'createdAt' | 'read'>) => Promise<void>;
-  markNotificationRead: (id: string) => Promise<void>;
+  markNotificationRead: (id: number) => Promise<void>;
   clearNotifications: () => void;
 }
 
@@ -212,7 +216,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     return () => { stopPolling(); sub.remove(); };
   }, [user, fetchAll]);
 
-  const reportLocation = useCallback(async (taskId: string, lat: number, lng: number) => {
+  const reportLocation = useCallback(async (taskId: number, lat: number, lng: number) => {
     const updated = mapTask(await tasksApi.updateLocation(taskId, lat, lng));
     setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
   }, []);
@@ -280,7 +284,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     return created.id;
   }, []);
 
-  const updateTask = useCallback(async (id: string, patch: Partial<ParkingTask>) => {
+  const updateTask = useCallback(async (id: number, patch: Partial<ParkingTask>) => {
     if (patch.status === 'in_transit') {
       const updated = mapTask(await tasksApi.inTransit(id));
       setTasks(p => p.map(t => (t.id === id ? updated : t)));
@@ -290,18 +294,18 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     // own dedicated endpoint (assign/key-collected/park/retrieve) below.
   }, []);
 
-  const assignDriver = useCallback(async (taskId: string, driverId: string) => {
+  const assignDriver = useCallback(async (taskId: number, driverId: number) => {
     const updated = mapTask(await tasksApi.assignDriver(taskId, driverId));
     setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
     setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'busy', currentTaskId: taskId} : d)));
   }, []);
 
-  const markKeyCollected = useCallback(async (taskId: string) => {
+  const markKeyCollected = useCallback(async (taskId: number) => {
     const updated = mapTask(await tasksApi.keyCollected(taskId));
     setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
   }, []);
 
-  const markParked = useCallback(async (taskId: string, slotId: string) => {
+  const markParked = useCallback(async (taskId: number, slotId: string) => {
     const updated = mapTask(await tasksApi.park(taskId, slotId));
     setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
     setSlots(p => p.map(s => (s.id === slotId
@@ -312,7 +316,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     }
   }, []);
 
-  const markRetrieved = useCallback(async (taskId: string) => {
+  const markRetrieved = useCallback(async (taskId: number) => {
     const existing = tasks.find(t => t.id === taskId);
     const updated = mapTask(await tasksApi.retrieve(taskId));
     setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
@@ -327,7 +331,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     }
   }, [tasks]);
 
-  const setDriverStatus = useCallback(async (driverId: string, status: DriverStatus) => {
+  const setDriverStatus = useCallback(async (driverId: number, status: DriverStatus) => {
     const updated = await driversApi.setStatus(driverId, status);
     setDrivers(p => p.map(d => (d.id === driverId ? updated : d)));
   }, []);
@@ -338,18 +342,18 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     return created;
   }, []);
 
-  const updateVisitor = useCallback(async (id: string, patch: Partial<Visitor>) => {
+  const updateVisitor = useCallback(async (id: number, patch: Partial<Visitor>) => {
     const updated = mapVisitor(await visitorsApi.update(id, patch));
     setVisitors(p => p.map(v => (v.id === id ? updated : v)));
   }, []);
 
-  const assignVisitorDriver = useCallback(async (visitorId: string, driverId: string) => {
+  const assignVisitorDriver = useCallback(async (visitorId: number, driverId: number) => {
     const updated = mapVisitor(await visitorsApi.assignDriver(visitorId, driverId));
     setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
     setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'busy', currentTaskId: visitorId} : d)));
   }, []);
 
-  const markVisitorParked = useCallback(async (visitorId: string, slotId: string) => {
+  const markVisitorParked = useCallback(async (visitorId: number, slotId: string) => {
     const existing = visitors.find(v => v.id === visitorId);
     const updated = mapVisitor(await visitorsApi.park(visitorId, slotId));
     setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
@@ -358,13 +362,13 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     if (driverId) setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'available', currentTaskId: undefined} : d)));
   }, [visitors]);
 
-  const assignRetrievalDriver = useCallback(async (visitorId: string, driverId: string) => {
+  const assignRetrievalDriver = useCallback(async (visitorId: number, driverId: number) => {
     const updated = mapVisitor(await visitorsApi.assignRetrievalDriver(visitorId, driverId));
     setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
     setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'busy', currentTaskId: visitorId} : d)));
   }, []);
 
-  const markVisitorRetrieved = useCallback(async (visitorId: string) => {
+  const markVisitorRetrieved = useCallback(async (visitorId: number) => {
     const existing = visitors.find(v => v.id === visitorId);
     const updated = mapVisitor(await visitorsApi.retrieve(visitorId));
     setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
@@ -392,7 +396,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     if (isForMe) displayNotification(n.title, n.body, n.type);
   }, [user?.id, user?.linkedDriverId, user?.role]);
 
-  const markNotificationRead = useCallback(async (id: string) => {
+  const markNotificationRead = useCallback(async (id: number) => {
     const updated = mapNotification(await notificationsApi.markRead(id));
     setNotifs(p => p.map(n => (n.id === id ? updated : n)));
   }, []);

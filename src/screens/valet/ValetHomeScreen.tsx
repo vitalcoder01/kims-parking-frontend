@@ -9,8 +9,8 @@ import {Icon} from '../../components/Icon';
 import {usersApi} from '../../services/api';
 import {PUBLIC_BASE_URL} from '../../config/api';
 
-function sendWhatsApp(mobile: string, name: string, carNumber: string, token: string, visitorId: string) {
-  const trackingUrl = `${PUBLIC_BASE_URL}/track/${visitorId}`;
+function sendWhatsApp(mobile: string, name: string, carNumber: string, token: string, publicToken: string) {
+  const trackingUrl = `${PUBLIC_BASE_URL}/track/${publicToken}`;
   const msg = `🏥 *KIMS Hospital Parking*\n\nHello ${name},\n\nYour car *${carNumber}* has been safely received by our valet service.\n\n📍 *Token:* ${token}\n\n_Track your car live:_\n${trackingUrl}\n\nWhen you're ready to leave, contact the valet desk to request your car back.\n\n_KIMS Smart Parking · Secure · Real-time_`;
   const url = `whatsapp://send?phone=+91${mobile.replace(/\D/g,'')}&text=${encodeURIComponent(msg)}`;
   Linking.canOpenURL(url).then(supported => {
@@ -36,11 +36,11 @@ export function ValetHomeScreen() {
   const [codeError, setCodeError] = useState('');
   const [foundUser, setFoundUser] = useState<any | null>(null);
   const [carNumber, setCarNumber] = useState('');
-  const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
+  const [pendingTaskId, setPendingTaskId] = useState<number | null>(null);
   // Visitor-side counterpart to pendingTaskId — the 'assign' screen is
   // reused for both doctor tasks and visitor pickups/retrievals, since it's
   // the same "pick an available driver" interaction either way.
-  const [pendingVisitorId, setPendingVisitorId] = useState<string | null>(null);
+  const [pendingVisitorId, setPendingVisitorId] = useState<number | null>(null);
   const [pendingVisitorMode, setPendingVisitorMode] = useState<'park' | 'retrieve' | null>(null);
 
   const [vName, setVName] = useState('');
@@ -105,7 +105,7 @@ export function ValetHomeScreen() {
     }
   };
 
-  const handleAssignDriver = async (driverId: string) => {
+  const handleAssignDriver = async (driverId: number) => {
     if (pendingVisitorId) {
       const visitor = visitors.find(v => v.id === pendingVisitorId);
       try {
@@ -156,7 +156,7 @@ export function ValetHomeScreen() {
     }
   };
 
-  const handleAssignRetrieval = (taskId: string) => {
+  const handleAssignRetrieval = (taskId: number) => {
     setPendingTaskId(taskId);
     setScreen('assign');
   };
@@ -165,7 +165,7 @@ export function ValetHomeScreen() {
     if (!vName.trim() || !vCar.trim() || !vMobile.trim()) return;
     try {
       const visitor = await addVisitor({name: vName.trim(), carNumber: vCar.trim().toUpperCase(), mobile: vMobile.trim()});
-      sendWhatsApp(vMobile.trim(), vName.trim(), vCar.trim().toUpperCase(), visitor.token, visitor.id);
+      sendWhatsApp(vMobile.trim(), vName.trim(), vCar.trim().toUpperCase(), visitor.token, visitor.publicToken);
       setVName(''); setVCar(''); setVMobile('');
       // Straight into driver assignment — a token with nobody assigned to
       // collect the key is exactly the gap this flow used to leave open.
@@ -177,7 +177,7 @@ export function ValetHomeScreen() {
     }
   };
 
-  const handleRequestVisitorRetrieval = (visitorId: string) => {
+  const handleRequestVisitorRetrieval = (visitorId: number) => {
     setPendingVisitorId(visitorId);
     setPendingVisitorMode('retrieve');
     setScreen('assign');

@@ -12,7 +12,7 @@ export function DriverHomeScreen() {
   const {colors} = useTheme();
 
   const [slotInput, setSlotInput] = useState('');
-  const [visitorSlotInputs, setVisitorSlotInputs] = useState<Record<string, string>>({});
+  const [visitorSlotInputs, setVisitorSlotInputs] = useState<Record<number, string>>({});
   const carAnim = useRef(new Animated.Value(0)).current;
 
   // Find this driver's assigned tasks (login accounts link to AppState driver record via linkedDriverId)
@@ -93,7 +93,7 @@ export function DriverHomeScreen() {
     }
   };
 
-  const handleMarkVisitorParked = async (visitorId: string) => {
+  const handleMarkVisitorParked = async (visitorId: number) => {
     const slot = visitorSlotInputs[visitorId]?.trim();
     if (!slot) return;
     try {
@@ -104,7 +104,7 @@ export function DriverHomeScreen() {
     }
   };
 
-  const handleMarkVisitorRetrieved = async (visitorId: string) => {
+  const handleMarkVisitorRetrieved = async (visitorId: number) => {
     try {
       await markVisitorRetrieved(visitorId);
       pushNotification({

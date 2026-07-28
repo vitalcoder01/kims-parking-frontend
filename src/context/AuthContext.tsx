@@ -5,7 +5,7 @@ import {authApi, setAuthToken, setUnauthorizedHandler} from '../services/api';
 export type UserRole = 'doctor' | 'staff' | 'valet' | 'driver' | 'admin';
 
 export interface CurrentUser {
-  id: string;
+  id: number;
   name: string;
   role: UserRole;
   employeeId: string;
@@ -15,7 +15,7 @@ export interface CurrentUser {
   carNumber?: string;
   profileComplete?: boolean;
   loginTime?: number;
-  linkedDriverId?: string; // links a driver login to its backend Driver record
+  linkedDriverId?: number; // links a driver login to its backend Driver record
 }
 
 interface AuthContextValue {

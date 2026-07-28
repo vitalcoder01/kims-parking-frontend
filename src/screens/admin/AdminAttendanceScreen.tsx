@@ -5,11 +5,11 @@ import {Badge} from '../../components/Badge';
 import {adminApi} from '../../services/api';
 
 interface TodayRow {
-  id: string; userId: string; name: string; role: string; employeeId: string;
+  id: number; userId: number; name: string; role: string; employeeId: string;
   checkIn: string | null; checkOut: string | null; vehiclesHandled: number; gate?: string | null;
 }
 interface MonthlyUser {
-  userId: string; name: string; role: string; employeeId: string;
+  userId: number; name: string; role: string; employeeId: string;
   days: {date: string; checkIn: string | null; checkOut: string | null; vehiclesHandled: number}[];
 }
 
