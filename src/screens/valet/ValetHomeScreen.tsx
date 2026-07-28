@@ -9,9 +9,10 @@ import {Icon} from '../../components/Icon';
 import {usersApi} from '../../services/api';
 import {PUBLIC_BASE_URL} from '../../config/api';
 
-function sendWhatsApp(mobile: string, name: string, carNumber: string, token: string, publicToken: string) {
+function sendWhatsApp(mobile: string, name: string, carNumber: string | undefined, token: string, publicToken: string) {
   const trackingUrl = `${PUBLIC_BASE_URL}/track/${publicToken}`;
-  const msg = `🏥 *KIMS Hospital Parking*\n\nHello ${name},\n\nYour car *${carNumber}* has been safely received by our valet service.\n\n📍 *Token:* ${token}\n\n_Track your car live:_\n${trackingUrl}\n\nWhen you're ready to leave, contact the valet desk to request your car back.\n\n_KIMS Smart Parking · Secure · Real-time_`;
+  const vehicleLine = carNumber ? `Your car *${carNumber}*` : 'Your vehicle';
+  const msg = `🏥 *KIMS Hospital Parking*\n\nHello ${name},\n\n${vehicleLine} has been safely received by our valet service.\n\n📍 *Token:* ${token}\n_Please don't lose this token._\n\n_Track your car live:_\n${trackingUrl}\n\nWhen you're ready to leave, contact the valet desk to request your car back.\n\n_KIMS Smart Parking · Secure · Real-time_`;
   const url = `whatsapp://send?phone=+91${mobile.replace(/\D/g,'')}&text=${encodeURIComponent(msg)}`;
   Linking.canOpenURL(url).then(supported => {
     if (supported) {
@@ -28,7 +29,7 @@ type Screen = 'home' | 'scan' | 'assign' | 'visitor';
 export function ValetHomeScreen() {
   const {user} = useAuth();
   const {drivers, tasks, visitors, addTask, assignDriver, markKeyCollected, pushNotification, addVisitor,
-    assignVisitorDriver, assignRetrievalDriver} = useAppState();
+    assignVisitorDriver, assignRetrievalDriver, cancelVisitor} = useAppState();
   const {colors, isDark} = useTheme();
 
   const [screen, setScreen] = useState<Screen>('home');
@@ -46,17 +47,24 @@ export function ValetHomeScreen() {
   const [vName, setVName] = useState('');
   const [vCar, setVCar] = useState('');
   const [vMobile, setVMobile] = useState('');
+  const [vVehicleType, setVVehicleType] = useState<'car' | 'bike'>('car');
+  const [vPurpose, setVPurpose] = useState('');
 
   // "Active Tasks" = already assigned to a driver — a bare 'requested'
   // retrieval isn't a task for anyone to act on yet, it's shown separately
   // below until the valet assigns a driver to it.
   const activeTasks = tasks.filter(t => t.status !== 'completed' && t.status !== 'requested');
-  const availableDrivers = drivers.filter(d => d.status === 'available');
+  // Least-busy first — every job fully occupies a driver, so among the
+  // available pool "fewest jobs completed today" is the fairest tiebreaker
+  // for who gets suggested. The valet can still tap any driver in the list.
+  const availableDrivers = drivers
+    .filter(d => d.status === 'available')
+    .sort((a, b) => (a.completedToday ?? 0) - (b.completedToday ?? 0));
   // Pending retrieval requests — created only by the doctor/staff who owns
   // the car (see ParkingScreen "Request Retrieval"). The valet's job here is
   // strictly to assign a driver to an existing request, never to invent one.
   const retrievalRequests = tasks.filter(t => t.type === 'retrieve' && t.status === 'requested');
-  const activeVisitors = visitors.filter(v => v.status !== 'retrieved');
+  const activeVisitors = visitors.filter(v => v.status !== 'retrieved' && v.status !== 'cancelled');
   // A visitor's driverId is reused from the park leg and isn't cleared until
   // retrieval completes, so it alone can't tell us whether a driver is
   // *actively* out on the retrieval right now — checking that driver's own
@@ -162,11 +170,17 @@ export function ValetHomeScreen() {
   };
 
   const handleAddVisitor = async () => {
-    if (!vName.trim() || !vCar.trim() || !vMobile.trim()) return;
+    if (!vName.trim() || !vMobile.trim()) return;
     try {
-      const visitor = await addVisitor({name: vName.trim(), carNumber: vCar.trim().toUpperCase(), mobile: vMobile.trim()});
-      sendWhatsApp(vMobile.trim(), vName.trim(), vCar.trim().toUpperCase(), visitor.token, visitor.publicToken);
-      setVName(''); setVCar(''); setVMobile('');
+      const visitor = await addVisitor({
+        name: vName.trim(),
+        carNumber: vCar.trim() ? vCar.trim().toUpperCase() : undefined,
+        mobile: vMobile.trim(),
+        vehicleType: vVehicleType,
+        purpose: vPurpose.trim() || undefined,
+      });
+      sendWhatsApp(vMobile.trim(), vName.trim(), visitor.carNumber, visitor.token, visitor.publicToken);
+      setVName(''); setVCar(''); setVMobile(''); setVVehicleType('car'); setVPurpose('');
       // Straight into driver assignment — a token with nobody assigned to
       // collect the key is exactly the gap this flow used to leave open.
       setPendingVisitorId(visitor.id);
@@ -181,6 +195,14 @@ export function ValetHomeScreen() {
     setPendingVisitorId(visitorId);
     setPendingVisitorMode('retrieve');
     setScreen('assign');
+  };
+
+  const handleCancelVisitor = (visitorId: number) => {
+    Alert.alert('Cancel Visitor Token', 'Why is this being cancelled?', [
+      {text: 'Never mind', style: 'cancel'},
+      {text: 'No-Show', onPress: () => cancelVisitor(visitorId, 'no_show').catch(err => Alert.alert('Error', err.message || 'Something went wrong'))},
+      {text: 'Cancel Visit', style: 'destructive', onPress: () => cancelVisitor(visitorId, 'valet_cancelled').catch(err => Alert.alert('Error', err.message || 'Something went wrong'))},
+    ]);
   };
 
   // ── SCAN / KEY COLLECTION ──────────────────────────────────────────────
@@ -277,16 +299,18 @@ export function ValetHomeScreen() {
               <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No drivers available right now</Text>
             </View>
           )}
-          {availableDrivers.map(d => (
-            <TouchableOpacity key={d.id} style={[s.driverCard, {backgroundColor: colors.surface, borderColor: colors.success + '44'}]}
+          {availableDrivers.map((d, i) => (
+            <TouchableOpacity key={d.id} style={[s.driverCard, {backgroundColor: colors.surface, borderColor: i === 0 ? colors.primary + '80' : colors.success + '44'}]}
               onPress={() => handleAssignDriver(d.id)} activeOpacity={0.75}>
-              <View style={[s.driverStripe, {backgroundColor: colors.success}]} />
+              <View style={[s.driverStripe, {backgroundColor: i === 0 ? colors.primary : colors.success}]} />
               <View style={[s.avatar, {backgroundColor: colors.primary + '18'}]}>
                 <Text style={[s.avatarTxt, {color: colors.primary}]}>{d.name[0]}</Text>
               </View>
               <View style={{flex: 1}}>
                 <Text style={[s.driverName, {color: colors.textPrimary}]}>{d.name}</Text>
-                <Text style={[s.driverStatusTxt, {color: colors.success}]}>Available</Text>
+                <Text style={[s.driverStatusTxt, {color: colors.success}]}>
+                  {i === 0 ? '⭐ Suggested · ' : ''}{d.completedToday ?? 0} done today
+                </Text>
               </View>
               <Text style={[s.assignArrow, {color: colors.primary}]}>Assign →</Text>
             </TouchableOpacity>
@@ -312,8 +336,9 @@ export function ValetHomeScreen() {
           <Text style={[s.stepDesc, {color: colors.textPrimary}]}>WhatsApp tracking link will be sent automatically</Text>
           {[
             {label: 'Full Name', icon: '👤', val: vName, set: setVName, ph: 'Patient / Visitor name', kb: 'default' as const},
-            {label: 'Car Number', icon: '🚘', val: vCar, set: setVCar, ph: 'e.g. TN09 AB 1234', kb: 'default' as const},
             {label: 'Mobile Number', icon: '📱', val: vMobile, set: setVMobile, ph: '10-digit number', kb: 'numeric' as const},
+            {label: 'Car Number (optional)', icon: '🚘', val: vCar, set: setVCar, ph: 'e.g. TN09 AB 1234', kb: 'default' as const},
+            {label: 'Purpose of Visit (optional)', icon: '📋', val: vPurpose, set: setVPurpose, ph: 'e.g. OPD, Cardiology', kb: 'default' as const},
           ].map(f => (
             <View key={f.label} style={{marginBottom: 4}}>
               <Text style={[s.fieldLabel, {color: colors.textMuted}]}>{f.label.toUpperCase()}</Text>
@@ -325,6 +350,16 @@ export function ValetHomeScreen() {
               </View>
             </View>
           ))}
+          <Text style={[s.fieldLabel, {color: colors.textMuted}]}>VEHICLE TYPE</Text>
+          <View style={{flexDirection: 'row', gap: 10, marginBottom: 16}}>
+            {(['car', 'bike'] as const).map(t => (
+              <TouchableOpacity key={t} onPress={() => setVVehicleType(t)} activeOpacity={0.8}
+                style={[s.roleChip, {borderColor: vVehicleType === t ? colors.primary : colors.border, backgroundColor: vVehicleType === t ? colors.primary + '15' : colors.surface, flex: 1, justifyContent: 'center'}]}>
+                <Text style={{fontSize: 16}}>{t === 'car' ? '🚗' : '🏍️'}</Text>
+                <Text style={[s.roleChipTxt, {color: vVehicleType === t ? colors.primary : colors.textSecondary}]}>{t === 'car' ? 'Car' : 'Bike'}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
           <View style={[s.whatsappNote, {backgroundColor: '#25D36614', borderColor: '#25D36638'}]}>
             <Text style={{fontSize: 18}}>💬</Text>
             <Text style={[s.whatsappTxt, {color: colors.textSecondary}]}>
@@ -332,8 +367,8 @@ export function ValetHomeScreen() {
             </Text>
           </View>
           <TouchableOpacity
-            style={[s.actionBtn, {backgroundColor: '#25D366', opacity: (vName && vCar && vMobile.length >= 10) ? 1 : 0.4, marginTop: 8}]}
-            onPress={handleAddVisitor} disabled={!(vName && vCar && vMobile.length >= 10)}
+            style={[s.actionBtn, {backgroundColor: '#25D366', opacity: (vName && vMobile.length >= 10) ? 1 : 0.4, marginTop: 8}]}
+            onPress={handleAddVisitor} disabled={!(vName && vMobile.length >= 10)}
           >
             <Text style={s.actionBtnTxt}>Generate Token & Send WhatsApp</Text>
           </TouchableOpacity>
@@ -469,7 +504,10 @@ export function ValetHomeScreen() {
             ? (v.retrievalRequested
               ? (needsDriver ? 'Requested — needs driver' : `${v.driverName ?? 'Driver'} en route`)
               : `Parked · ${v.slotId ?? ''}`)
-            : (v.driverName ? `${v.driverName} collecting key` : 'Waiting for driver');
+            : v.pickedUpAt ? `${v.driverName ?? 'Driver'} parking now`
+            : v.acceptedAt ? `${v.driverName ?? 'Driver'} collecting key`
+            : v.driverId ? `Waiting for ${v.driverName ?? 'driver'} to accept`
+            : 'Waiting for driver';
           return (
             <View key={v.id} style={[s.taskCard, {backgroundColor: colors.surface, borderColor: colors.border, borderLeftColor: vc}]}>
               <View style={s.taskTop}>
@@ -479,7 +517,9 @@ export function ValetHomeScreen() {
                 <Text style={[s.taskStatusTxt, {color: vc}]}>{label}</Text>
               </View>
               <Text style={[s.taskDoctor, {color: colors.textPrimary}]}>{v.name}</Text>
-              <Text style={[s.taskMeta, {color: colors.textSecondary}]}>🚘 {v.carNumber}</Text>
+              <Text style={[s.taskMeta, {color: colors.textSecondary}]}>
+                {v.vehicleType === 'bike' ? '🏍️' : '🚘'} {v.carNumber ?? 'no plate'}{v.purpose ? ` · ${v.purpose}` : ''}
+              </Text>
               {v.status === 'parked' && !v.retrievalRequested && (
                 <TouchableOpacity style={[s.taskActionBtn, {borderColor: colors.warning, backgroundColor: colors.warning + '12'}]}
                   onPress={() => handleRequestVisitorRetrieval(v.id)}>
@@ -490,6 +530,12 @@ export function ValetHomeScreen() {
                 <TouchableOpacity style={[s.taskActionBtn, {borderColor: colors.warning, backgroundColor: colors.warning + '12'}]}
                   onPress={() => handleRequestVisitorRetrieval(v.id)}>
                   <Text style={[s.taskActionTxt, {color: colors.warning}]}>↑ Assign Driver — visitor is ready to leave</Text>
+                </TouchableOpacity>
+              )}
+              {v.status === 'pending' && (
+                <TouchableOpacity style={[s.taskActionBtn, {borderColor: colors.error, backgroundColor: colors.error + '12', marginTop: 8}]}
+                  onPress={() => handleCancelVisitor(v.id)}>
+                  <Text style={[s.taskActionTxt, {color: colors.error}]}>✕ Cancel / No-Show</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -554,6 +600,8 @@ const s = StyleSheet.create({
   foundDept:{fontSize:13,marginTop:2},
   foundId:{fontSize:11,marginTop:4},
   fieldLabel:{fontSize:10,fontWeight:'700',letterSpacing:1,marginBottom:8,marginTop:4},
+  roleChip:{flexDirection:'row',alignItems:'center',gap:6,borderWidth:1.5,borderRadius:12,paddingVertical:12,paddingHorizontal:14},
+  roleChipTxt:{fontSize:13,fontWeight:'700'},
   inputRow:{flexDirection:'row',alignItems:'center',borderWidth:1.5,borderRadius:12,paddingHorizontal:14,height:52,marginBottom:16},
   inputIcon:{fontSize:16,marginRight:10},
   textInput:{flex:1,fontSize:15,fontWeight:'600'},

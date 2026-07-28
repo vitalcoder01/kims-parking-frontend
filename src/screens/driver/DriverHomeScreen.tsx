@@ -8,11 +8,10 @@ import {computeTrip} from '../../utils/geo';
 export function DriverHomeScreen() {
   const {user} = useAuth();
   const {tasks, drivers, slots, visitors, markParked, markRetrieved, updateTask, pushNotification,
-    markVisitorParked, markVisitorRetrieved} = useAppState();
+    acceptVisitorTask, rejectVisitorTask, markVisitorPickedUp, markVisitorParked, markVisitorRetrieved} = useAppState();
   const {colors} = useTheme();
 
   const [slotInput, setSlotInput] = useState('');
-  const [visitorSlotInputs, setVisitorSlotInputs] = useState<Record<number, string>>({});
   const carAnim = useRef(new Animated.Value(0)).current;
 
   // Find this driver's assigned tasks (login accounts link to AppState driver record via linkedDriverId)
@@ -22,7 +21,8 @@ export function DriverHomeScreen() {
   const completedToday = tasks.filter(t => t.driverId === myDriverId && t.status === 'completed');
   // Visitor/patient pickups assigned to this driver — a separate, lighter
   // flow from the task system above (see ValetHomeScreen visitor flow).
-  const myVisitors = visitors.filter(v => v.driverId === myDriverId && v.status !== 'retrieved');
+  const myVisitors = visitors.filter(v => v.driverId === myDriverId
+    && (v.status === 'pending' || (v.status === 'parked' && v.retrievalRequested)));
 
   // Real trip progress/ETA — GPS itself is collected centrally in
   // AppStateContext; this just animates to whatever the last fix computed.
@@ -93,12 +93,34 @@ export function DriverHomeScreen() {
     }
   };
 
-  const handleMarkVisitorParked = async (visitorId: number) => {
-    const slot = visitorSlotInputs[visitorId]?.trim();
-    if (!slot) return;
+  const handleAcceptVisitorTask = async (visitorId: number) => {
     try {
-      await markVisitorParked(visitorId, slot.toUpperCase());
-      setVisitorSlotInputs(p => ({...p, [visitorId]: ''}));
+      await acceptVisitorTask(visitorId);
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not accept task');
+    }
+  };
+
+  const handleRejectVisitorTask = async (visitorId: number) => {
+    try {
+      await rejectVisitorTask(visitorId);
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not reject task');
+    }
+  };
+
+  const handleMarkVisitorPickedUp = async (visitorId: number) => {
+    try {
+      await markVisitorPickedUp(visitorId);
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not mark picked up');
+    }
+  };
+
+  // No slot input — the backend auto-assigns the next free slot.
+  const handleMarkVisitorParked = async (visitorId: number) => {
+    try {
+      await markVisitorParked(visitorId);
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Could not mark parked');
     }
@@ -282,26 +304,38 @@ export function DriverHomeScreen() {
             <Text style={[s.sectionTitle, {color: colors.textPrimary}]}>Visitor Pickups ({myVisitors.length})</Text>
             {myVisitors.map(v => (
               <View key={v.id} style={[s.visitorCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
-                <Text style={[s.completedTitle, {color: colors.textPrimary}]}>{v.name} · {v.carNumber}</Text>
-                {v.status === 'pending' ? (
-                  <View style={s.slotInputRow}>
-                    <View style={[s.slotInput, {borderColor: colors.border, backgroundColor: colors.background}]}>
-                      <TextInput
-                        style={[s.slotInputText, {color: colors.textPrimary}]}
-                        value={visitorSlotInputs[v.id] ?? ''}
-                        onChangeText={t => setVisitorSlotInputs(p => ({...p, [v.id]: t.toUpperCase()}))}
-                        placeholder="e.g. A-203"
-                        placeholderTextColor={colors.textMuted}
-                        autoCapitalize="characters"
-                      />
-                    </View>
+                <Text style={[s.completedTitle, {color: colors.textPrimary}]}>
+                  {v.name} · {v.vehicleType === 'bike' ? '🏍️' : '🚘'} {v.carNumber ?? 'no plate'}
+                </Text>
+                {v.status === 'pending' && !v.acceptedAt ? (
+                  <View style={{flexDirection: 'row', gap: 8, marginTop: 8}}>
                     <TouchableOpacity
-                      style={[s.parkBtn, {backgroundColor: colors.success, opacity: visitorSlotInputs[v.id]?.trim() ? 1 : 0.4}]}
-                      onPress={() => handleMarkVisitorParked(v.id)} disabled={!visitorSlotInputs[v.id]?.trim()}
+                      style={[s.parkBtn, {backgroundColor: colors.error, flex: 1}]}
+                      onPress={() => handleRejectVisitorTask(v.id)}
                     >
-                      <Text style={s.parkBtnTxt}>✓ Mark Parked</Text>
+                      <Text style={s.parkBtnTxt}>✕ Reject</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[s.parkBtn, {backgroundColor: colors.primary, flex: 1}]}
+                      onPress={() => handleAcceptVisitorTask(v.id)}
+                    >
+                      <Text style={s.parkBtnTxt}>✓ Accept</Text>
                     </TouchableOpacity>
                   </View>
+                ) : v.status === 'pending' && !v.pickedUpAt ? (
+                  <TouchableOpacity
+                    style={[s.parkBtn, {backgroundColor: colors.primary, alignSelf: 'stretch', marginTop: 8}]}
+                    onPress={() => handleMarkVisitorPickedUp(v.id)}
+                  >
+                    <Text style={s.parkBtnTxt}>🔑 Picked Up Vehicle</Text>
+                  </TouchableOpacity>
+                ) : v.status === 'pending' ? (
+                  <TouchableOpacity
+                    style={[s.parkBtn, {backgroundColor: colors.success, alignSelf: 'stretch', marginTop: 8}]}
+                    onPress={() => handleMarkVisitorParked(v.id)}
+                  >
+                    <Text style={s.parkBtnTxt}>✓ Mark Parked</Text>
+                  </TouchableOpacity>
                 ) : v.retrievalRequested ? (
                   <TouchableOpacity style={[s.retrieveBtn, {backgroundColor: colors.warning, marginTop: 8}]}
                     onPress={() => handleMarkVisitorRetrieved(v.id)} activeOpacity={0.85}>
