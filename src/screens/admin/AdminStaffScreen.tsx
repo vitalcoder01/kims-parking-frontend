@@ -11,7 +11,7 @@ type Role = 'doctor' | 'staff' | 'valet' | 'driver' | 'admin';
 interface AdminUser {
   id: string;
   employeeId: string;
-  loginName: string;
+  username: string;
   name: string;
   role: Role;
   department?: string;
@@ -114,7 +114,7 @@ export function AdminStaffScreen() {
       });
       Alert.alert(
         'Staff Added',
-        `${name.trim()} can now sign in with:\n\nLogin Name: ${(created as any).loginName}\nPassword: ${password.trim()}\n\nShare these credentials securely — they won't be shown again here.`,
+        `${name.trim()} can now sign in with:\n\nUsername: ${(created as any).username}\nPassword: ${password.trim()}\n\nShare these credentials securely — they won't be shown again here.`,
       );
       closeForm();
       loadUsers();
@@ -172,7 +172,7 @@ export function AdminStaffScreen() {
     if (!editingUser) return;
     Alert.alert(
       'Delete Account?',
-      `This permanently removes ${editingUser.name}'s login (${editingUser.loginName}). This can't be undone.`,
+      `This permanently removes ${editingUser.name}'s login (${editingUser.username}). This can't be undone.`,
       [
         {text: 'Cancel', style: 'cancel'},
         {
@@ -214,7 +214,7 @@ export function AdminStaffScreen() {
     // Mirrors the backend's LOGIN_PREFIX map — a live preview only; the
     // server generates and dedupes the real one on submit.
     const loginPrefix: Record<Role, string> = {doctor: 'Dr. ', staff: '', valet: 'Valet ', driver: 'Driver ', admin: ''};
-    const previewLoginName = `${loginPrefix[role]}${name.trim() || 'Full Name'}`;
+    const previewUsername = `${loginPrefix[role]}${name.trim() || 'Full Name'}`;
     return (
       <SafeAreaView style={[s.safe, {backgroundColor: colors.background}]}>
         <View style={s.formHeader}>
@@ -244,14 +244,14 @@ export function AdminStaffScreen() {
             value={name} onChangeText={setName} placeholder="e.g. Kavita Reddy" placeholderTextColor={colors.textMuted} />
 
           {isEdit && editingUser && (
-            <View style={[s.loginNameBanner, {backgroundColor: colors.primary + '10', borderColor: colors.primary + '30'}]}>
-              <Text style={[s.loginNameLbl, {color: colors.textMuted}]}>LOGS IN AS</Text>
-              <Text style={[s.loginNameVal, {color: colors.primary}]}>{editingUser.loginName}</Text>
+            <View style={[s.usernameBanner, {backgroundColor: colors.primary + '10', borderColor: colors.primary + '30'}]}>
+              <Text style={[s.usernameLbl, {color: colors.textMuted}]}>LOGS IN AS</Text>
+              <Text style={[s.usernameVal, {color: colors.primary}]}>{editingUser.username}</Text>
             </View>
           )}
           {!isEdit && (
             <Text style={[s.helperNote, {color: colors.textMuted}]}>
-              Their login name is generated automatically — they'll sign in as "{previewLoginName}".
+              Their username is generated automatically — they'll sign in as "{previewUsername}".
             </Text>
           )}
 
@@ -371,7 +371,7 @@ export function AdminStaffScreen() {
                   </Text>
                 </View>
                 <View style={{flex: 1}}>
-                  <Text style={[s.staffName, {color: colors.textPrimary}]}>{u.loginName}</Text>
+                  <Text style={[s.staffName, {color: colors.textPrimary}]}>{u.username}</Text>
                   <Text style={[s.staffRole, {color: colors.textSecondary}]}>
                     {roleLabel(u.role)} · ID {u.employeeId}
                   </Text>
@@ -422,9 +422,9 @@ const s = StyleSheet.create({
   formTitle: {fontSize: 17, fontWeight: '900'},
   formScroll: {padding: 20, paddingBottom: 40},
   fieldLabel: {fontSize: 10, fontWeight: '700', letterSpacing: 1, marginBottom: 8, marginTop: 16},
-  loginNameBanner: {borderRadius: 12, borderWidth: 1, padding: 12, marginTop: 14},
-  loginNameLbl: {fontSize: 9, fontWeight: '800', letterSpacing: 1},
-  loginNameVal: {fontSize: 15, fontWeight: '900', marginTop: 3},
+  usernameBanner: {borderRadius: 12, borderWidth: 1, padding: 12, marginTop: 14},
+  usernameLbl: {fontSize: 9, fontWeight: '800', letterSpacing: 1},
+  usernameVal: {fontSize: 15, fontWeight: '900', marginTop: 3},
   helperNote: {fontSize: 11, marginTop: 10, lineHeight: 16},
   input: {borderWidth: 1.5, borderRadius: 12, paddingHorizontal: 14, height: 50, fontSize: 15, fontWeight: '600'},
   roleRow: {flexDirection: 'row', flexWrap: 'wrap', gap: 8},

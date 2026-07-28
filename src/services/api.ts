@@ -82,8 +82,8 @@ client.interceptors.response.use(
 
 // ── Auth ─────────────────────────────────────────────────────────────────
 export const authApi = {
-  login: (loginName: string, password: string) =>
-    client.post('/auth/login', {loginName, password}).then(r => r.data as {token: string; user: any}),
+  login: (username: string, password: string) =>
+    client.post('/auth/login', {username, password}).then(r => r.data as {token: string; user: any}),
   me: () => client.get('/auth/me').then(r => r.data.user),
 };
 

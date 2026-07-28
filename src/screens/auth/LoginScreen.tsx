@@ -10,7 +10,7 @@ import {APP_VERSION_NAME} from '../../config/version';
 export function LoginScreen() {
   const {login} = useAuth();
   const {colors, isDark} = useTheme();
-  const [loginName, setLoginName] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError]       = useState('');
   const [loading, setLoading]   = useState(false);
@@ -32,9 +32,9 @@ export function LoginScreen() {
     setError('');
     setLoading(true);
     try {
-      await login(loginName.trim(), password);
+      await login(username.trim(), password);
     } catch (err: any) {
-      setError(err.message || 'Invalid login name or password');
+      setError(err.message || 'Invalid username or password');
       triggerShake();
     } finally {
       setLoading(false);
@@ -62,15 +62,15 @@ export function LoginScreen() {
 
             <View style={s.fields}>
               <View style={s.field}>
-                <Text style={[s.label, {color: colors.textSecondary}]}>LOGIN NAME</Text>
+                <Text style={[s.label, {color: colors.textSecondary}]}>USERNAME</Text>
                 <View style={[s.inputWrap, {borderColor: error ? colors.error : colors.border, backgroundColor: isDark ? colors.card : '#F8FAFF'}]}>
                   <Icon name="userCard" size={18} color={colors.textMuted} style={{marginRight: 4}} />
                   <TextInput
                     style={[s.input, {color: colors.textPrimary}]}
                     placeholder="e.g. Dr. Aditya Sharma"
                     placeholderTextColor={colors.textMuted}
-                    value={loginName}
-                    onChangeText={t => { setLoginName(t); setError(''); }}
+                    value={username}
+                    onChangeText={t => { setUsername(t); setError(''); }}
                     autoCapitalize="words"
                     returnKeyType="next"
                   />

@@ -9,7 +9,7 @@ export interface CurrentUser {
   name: string;
   role: UserRole;
   employeeId: string;
-  loginName: string;
+  username: string;
   department?: string;
   cardCode?: string;       // 3-digit virtual card code
   carNumber?: string;
@@ -21,7 +21,7 @@ export interface CurrentUser {
 interface AuthContextValue {
   user: CurrentUser | null;
   isLoading: boolean;
-  login: (loginName: string, password: string) => Promise<void>;
+  login: (username: string, password: string) => Promise<void>;
   logout: () => void;
   updateProfile: (patch: Partial<CurrentUser>) => void;
 }
@@ -82,8 +82,8 @@ export function AuthProvider({children}: {children: React.ReactNode}) {
     }).finally(() => setLoading(false));
   }, []);
 
-  const login = useCallback(async (loginName: string, password: string) => {
-    const {token, user: loggedInUser} = await authApi.login(loginName, password);
+  const login = useCallback(async (username: string, password: string) => {
+    const {token, user: loggedInUser} = await authApi.login(username, password);
     const withTime: CurrentUser = {...loggedInUser, loginTime: Date.now()};
     tokenRef.current = token;
     setAuthToken(token);
