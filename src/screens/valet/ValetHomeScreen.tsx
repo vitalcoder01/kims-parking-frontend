@@ -314,6 +314,33 @@ export function ValetHomeScreen() {
           <View style={{width: 70}} />
         </View>
         <ScrollView contentContainerStyle={s.subContent}>
+          {/* Who this actually is — shown before picking a driver so a
+              mis-scanned/mis-typed code gets caught here, not after a driver's
+              already been notified. */}
+          {(pendingVisitor || pendingTask) && (
+            <View style={[s.confirmCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+              <View style={[s.confirmAvatar, {backgroundColor: colors.primaryLight}]}>
+                <Text style={[s.confirmAvatarTxt, {color: colors.primary}]}>
+                  {(pendingVisitor?.name ?? pendingTask?.doctorName ?? '?')[0]?.toUpperCase()}
+                </Text>
+              </View>
+              <View style={{flex: 1}}>
+                <Text style={[s.confirmName, {color: colors.textPrimary}]}>{pendingVisitor?.name ?? pendingTask?.doctorName}</Text>
+                <View style={s.confirmMetaRow}>
+                  <Icon name="car" size={12} color={colors.textSecondary} />
+                  <Text style={[s.confirmMeta, {color: colors.textSecondary}]}>
+                    {pendingVisitor?.carNumber ?? pendingTask?.carNumber ?? 'No plate'}
+                    {pendingTask?.slotId ? ` · Slot ${pendingTask.slotId}` : ''}
+                  </Text>
+                </View>
+              </View>
+              <View style={[s.confirmTypePill, {backgroundColor: colors.cardAlt}]}>
+                <Text style={[s.confirmTypeTxt, {color: colors.textMuted}]}>
+                  {pendingTask?.type === 'retrieve' ? 'RETRIEVE' : 'PARK'}
+                </Text>
+              </View>
+            </View>
+          )}
           <Text style={[s.stepLabel, {color: colors.textMuted}]}>SELECT DRIVER</Text>
           <Text style={[s.stepDesc, {color: colors.textPrimary}]}>
             {pendingVisitor
@@ -666,6 +693,14 @@ const s = StyleSheet.create({
   emptyBox:{borderRadius:14,borderWidth:1,borderStyle:'dashed',padding:24,alignItems:'center',marginBottom:16},
   emptyTxt:{fontSize:13,fontWeight:'600'},
   subContent:{padding:20,paddingBottom:40},
+  confirmCard:{flexDirection:'row',alignItems:'center',gap:12,borderRadius:16,borderWidth:1,padding:14,marginBottom:18},
+  confirmAvatar:{width:44,height:44,borderRadius:14,alignItems:'center',justifyContent:'center'},
+  confirmAvatarTxt:{fontSize:18,fontWeight:'900'},
+  confirmName:{fontSize:15,fontWeight:'800'},
+  confirmMetaRow:{flexDirection:'row',alignItems:'center',gap:5,marginTop:3},
+  confirmMeta:{fontSize:12,fontWeight:'600'},
+  confirmTypePill:{borderRadius:8,paddingHorizontal:8,paddingVertical:4},
+  confirmTypeTxt:{fontSize:9,fontWeight:'800',letterSpacing:0.5},
   stepLabel:{fontSize:10,fontWeight:'800',letterSpacing:1.5,marginBottom:8},
   stepDesc:{fontSize:16,fontWeight:'700',marginBottom:24},
   codeBox:{borderRadius:20,borderWidth:1,padding:32,alignItems:'center',gap:20},
