@@ -1,6 +1,8 @@
 import React, {createContext, useCallback, useContext, useState, useEffect, useRef} from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {authApi, setAuthToken, setUnauthorizedHandler} from '../services/api';
+import {unregisterCurrentDevice} from '../services/pushMessaging';
+import {stopAssignmentAlarm} from '../services/notifications';
 
 export type UserRole = 'doctor' | 'staff' | 'valet' | 'driver' | 'admin';
 
@@ -23,7 +25,7 @@ interface AuthContextValue {
   user: CurrentUser | null;
   isLoading: boolean;
   login: (username: string, password: string) => Promise<CurrentUser>;
-  logout: () => void;
+  logout: () => Promise<void>;
   updateProfile: (patch: Partial<CurrentUser>) => void;
 }
 
@@ -34,7 +36,7 @@ const Ctx = createContext<AuthContextValue>({
   user: null,
   isLoading: true,
   login: async () => ({} as CurrentUser),
-  logout: () => {},
+  logout: async () => {},
   updateProfile: () => {},
 });
 
@@ -43,7 +45,20 @@ export function AuthProvider({children}: {children: React.ReactNode}) {
   const [isLoading, setLoading] = useState(true);
   const tokenRef = useRef<string | null>(null);
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    // A still-ringing assignment alarm (vibration + ongoing tray
+    // notification) otherwise keeps going after logout — nothing else
+    // dismisses it, so it looks like logout itself is "triggering" a push.
+    await stopAssignmentAlarm().catch(() => {});
+    // Must run before the token is cleared below — it needs a valid
+    // Authorization header to tell the backend to drop this device's
+    // registration, otherwise this phone keeps receiving the signed-out
+    // account's pushes until someone else logs in here. Capped so a slow/
+    // unreachable network never delays the logout button itself.
+    await Promise.race([
+      unregisterCurrentDevice().catch(() => {}),
+      new Promise<void>(resolve => setTimeout(() => resolve(), 3000)),
+    ]);
     setUser(null);
     tokenRef.current = null;
     setAuthToken(null);

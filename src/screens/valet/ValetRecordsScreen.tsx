@@ -1,4 +1,4 @@
-import React, {useState} from 'react';
+import React, {useState, useEffect} from 'react';
 import {View, Text, StyleSheet, ScrollView, TextInput, StatusBar, Alert} from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useTheme} from '../../context/ThemeContext';
@@ -38,15 +38,24 @@ type StatusFilter = 'all' | 'active' | 'completed';
 
 export function ValetRecordsScreen() {
   const {colors, isDark} = useTheme();
-  const {tasks, activeVisitors, availableDrivers, hasActiveRetrievalDriver,
+  const {activeVisitors, availableDrivers, hasActiveRetrievalDriver,
     assignVisitorPickupDriver, assignVisitorRetrievalDriver, cancelVisitor, confirmVisitorDelivered,
-    confirmTaskDelivered} = useValetActions();
+    confirmTaskDelivered, fetchTaskHistory} = useValetActions();
 
   const [tab, setTab] = useState<RecordsTab>('visitors');
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('active');
   const [pendingVisitorId, setPendingVisitorId] = useState<number | null>(null);
   const [pendingMode, setPendingMode] = useState<'park' | 'retrieve' | null>(null);
+  // Every staff/doctor session ever, not just each doctor's single current
+  // one — the live `tasks` array is deliberately bounded to "at most one row
+  // per doctor" now, so this tab's actual record view needs its own fetch.
+  const [staffHistory, setStaffHistory] = useState<ParkingTask[]>([]);
+
+  useEffect(() => {
+    if (tab !== 'staff') return;
+    fetchTaskHistory().then(setStaffHistory).catch(() => {});
+  }, [tab, fetchTaskHistory]);
 
   const q = query.trim().toLowerCase();
 
@@ -57,8 +66,8 @@ export function ValetRecordsScreen() {
   // Staff/doctor tab is the actual "how many doctors" record — every park +
   // retrieve task, not just the ones still in progress (that live view is
   // the Home tab's Job Queue; this one's a searchable log).
-  const staffFiltered = tasks
-    .filter(t => statusFilter === 'all' || (statusFilter === 'completed' ? t.status === 'completed' : t.status !== 'completed'))
+  const staffFiltered = staffHistory
+    .filter(t => statusFilter === 'all' || (statusFilter === 'completed' ? t.status === 'completed' : t.status !== 'completed' && t.status !== 'cancelled'))
     .filter(t => !q || t.doctorName?.toLowerCase().includes(q) || t.carNumber?.toLowerCase().includes(q));
 
   const pendingVisitor = pendingVisitorId ? activeVisitors.find(v => v.id === pendingVisitorId) ?? null : null;
@@ -222,9 +231,11 @@ export function ValetRecordsScreen() {
   const renderStaffTicket = (t: ParkingTask) => {
     const needsDriver = t.status === 'assigned' && !t.driverId;
     const delivered = t.status === 'delivered';
-    const chipTone = t.status === 'completed' ? colors.success : delivered ? colors.warning : colors.warning;
-    const chipBg = t.status === 'completed' ? colors.successLight : colors.warningLight;
+    const cancelled = t.status === 'cancelled';
+    const chipTone = t.status === 'completed' ? colors.success : cancelled ? colors.textMuted : colors.warning;
+    const chipBg = t.status === 'completed' ? colors.successLight : cancelled ? colors.cardAlt : colors.warningLight;
     const chipLabel = t.status === 'completed' ? (t.type === 'park' ? `Parked · ${t.slotId ?? ''}` : 'Retrieved')
+      : cancelled ? 'Cancelled'
       : delivered ? 'Awaiting pickup confirmation'
       : needsDriver ? 'Awaiting driver'
       : t.status === 'in_transit' ? 'In transit'
@@ -278,7 +289,7 @@ export function ValetRecordsScreen() {
   };
 
   const filtered = tab === 'visitors' ? visitorsFiltered : staffFiltered;
-  const totalCount = tab === 'visitors' ? activeVisitors.length : tasks.length;
+  const totalCount = tab === 'visitors' ? activeVisitors.length : staffHistory.length;
 
   return (
     <SafeAreaView edges={['top','bottom','left','right']} style={[s.safe, {backgroundColor: colors.background}]}>

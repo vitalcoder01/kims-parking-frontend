@@ -12,7 +12,7 @@ export function useRetrievalRequest() {
   const {tasks, requestRetrieval} = useAppState();
 
   const myTasks = tasks.filter(t => t.doctorId === user?.id);
-  const activeRetrieve = myTasks.find(t => t.type === 'retrieve' && t.status !== 'completed');
+  const activeRetrieve = myTasks.find(t => t.type === 'retrieve' && t.status !== 'completed' && t.status !== 'cancelled');
 
   const [now, setNow] = useState(Date.now());
   useEffect(() => {

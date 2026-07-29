@@ -25,20 +25,24 @@ export function DoctorHomeScreen() {
   const [showTracking, setShowTracking]   = useState(false);
   const pulse = useRef(new Animated.Value(1)).current;
 
-  // `tasks` comes back from the backend newest-first (createdAt desc) — the
-  // most recent task for this doctor is index 0, not the last index. Using
-  // the wrong end of the array was the real cause of stale slot/driver info
-  // showing up: once there was more than one task in history, "latest"
-  // silently meant "oldest".
-  const myTasks   = tasks.filter(t => t.doctorId === user?.id);
-  const activeTask = myTasks.find(t => t.status !== 'completed');
-  const latestTask = myTasks[0];
-  const displayTask = activeTask ?? latestTask;
+  // `tasks` only ever contains each doctor's single current session (the
+  // backend enforces at most one isCurrent row per doctor) — no more
+  // "most recent non-completed" search needed, and no more risk of an old
+  // stuck task outranking a real, later one.
+  const displayTask = tasks.find(t => t.doctorId === user?.id);
+  const activeTask = displayTask && displayTask.status !== 'completed' && displayTask.status !== 'cancelled' ? displayTask : undefined;
   const carIsParked = displayTask?.type === 'park' && displayTask.status === 'completed';
   // 'delivered' — driver's brought the car back to the valet counter, but
   // the valet hasn't confirmed handover yet. That's still "come get it",
   // not "already done" — the task only becomes 'completed' once confirmed.
   const carJustRetrieved = displayTask?.type === 'retrieve' && displayTask.status === 'delivered';
+  // A cancelled session (e.g. staff retired a stuck "no driver ever showed
+  // up" job) is over, same as completed — nothing to show for it.
+  const showEmptyState = !displayTask || displayTask.status === 'cancelled';
+  // Nothing to actually track without a driver on the move yet — showing
+  // this button for e.g. "Awaiting Driver" just opens a map with nothing on it.
+  const canTrack = !!displayTask?.driverId && !carJustRetrieved
+    && displayTask.status !== 'completed' && displayTask.status !== 'cancelled';
 
   useEffect(() => {
     Animated.loop(Animated.sequence([
@@ -120,7 +124,7 @@ export function DoctorHomeScreen() {
               )}
             </View>
 
-            {displayTask ? (
+            {!showEmptyState && displayTask ? (
               <>
                 {carIsParked && displayTask.slotId && (
                   <LinearGradient colors={isDark ? ['#162040','#1C2A50'] : ['#EEF2FF','#DBEAFE']} style={s.slotBanner} start={{x:0,y:0}} end={{x:1,y:0}}>
@@ -148,7 +152,7 @@ export function DoctorHomeScreen() {
                     </View>
                   ))}
                 </View>
-                {!carJustRetrieved && (
+                {canTrack && (
                   <PressableScale style={[s.trackBtn, {backgroundColor: colors.primary + '10', borderColor: colors.primary + '30'}]}
                     onPress={() => setShowTracking(true)}>
                     <Icon name="map" size={18} color={colors.primary} />
@@ -164,6 +168,15 @@ export function DoctorHomeScreen() {
               </View>
             )}
           </View>
+
+          {/* Past sessions */}
+          <PressableScale
+            style={[s.historyLink, {backgroundColor: colors.surface, borderColor: colors.border}]}
+            onPress={() => navigation.navigate('History')}>
+            <Icon name="history" size={18} color={colors.textPrimary} />
+            <Text style={[s.historyLinkTxt, {color: colors.textPrimary}]}>View Parking History</Text>
+            <Icon name="arrowRight" size={16} color={colors.textMuted} />
+          </PressableScale>
 
           {/* Departure — only offered while the car is actually parked and
               waiting; once a retrieval is already requested there's nothing
@@ -294,6 +307,8 @@ const s = StyleSheet.create({
   emptySlot:{margin:16,borderRadius:14,borderWidth:1,borderStyle:'dashed',padding:28,alignItems:'center',gap:8},
   emptyIcon:{fontSize:36},
   emptyTxt:{fontSize:13,textAlign:'center',lineHeight:19},
+  historyLink:{flexDirection:'row',alignItems:'center',gap:10,borderRadius:16,borderWidth:1,padding:14},
+  historyLinkTxt:{flex:1,fontSize:13,fontWeight:'700'},
 
   departureCard:{borderRadius:20,borderWidth:1,overflow:'hidden'},
   departureHeader:{padding:18},

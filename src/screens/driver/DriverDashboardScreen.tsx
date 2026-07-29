@@ -41,7 +41,7 @@ export function DriverDashboardScreen() {
   const myTasks = tasks.filter(t => t.driverId === myDriverId);
   // 'delivered' is already off this driver's plate — awaiting valet
   // confirmation only, not something to keep showing as their active job.
-  const activeTask = myTasks.find(t => t.status !== 'completed' && t.status !== 'delivered') ?? null;
+  const activeTask = myTasks.find(t => t.status !== 'completed' && t.status !== 'delivered' && t.status !== 'cancelled') ?? null;
   const completedToday = myTasks.filter(t => t.status === 'completed');
   const pendingVisitors = visitors.filter(v => v.driverId === myDriverId
     && (v.status === 'pending' || (v.status === 'parked' && v.retrievalRequested)));

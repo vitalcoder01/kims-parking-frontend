@@ -82,3 +82,19 @@ export async function initPushMessaging(): Promise<() => void> {
     unsubMessage();
   };
 }
+
+/**
+ * Called on logout, while the session token is still valid — drops this
+ * device's registration so it stops receiving the signed-out account's
+ * pushes instead of staying bound to it until someone else logs in here.
+ */
+export async function unregisterCurrentDevice(): Promise<void> {
+  const messaging = getMessaging();
+  if (!messaging) return;
+  try {
+    const token = await messaging().getToken();
+    if (token) await notificationsApi.unregisterDevice(token);
+  } catch {
+    // Best-effort — never block logout over this.
+  }
+}

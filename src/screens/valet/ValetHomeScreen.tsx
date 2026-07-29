@@ -32,9 +32,9 @@ type Screen = 'home' | 'scan' | 'assign' | 'visitor' | 'retrievals';
 
 export function ValetHomeScreen() {
   const {user} = useAuth();
-  const {drivers, tasks, visitors, addTask, addVisitor, markKeyCollected, pushNotification,
+  const {drivers, tasks, visitors, addTask, addVisitor, markKeyCollected,
     activeTasks, availableDrivers, retrievalRequests, assignTaskDriver, assignVisitorPickupDriver,
-    confirmTaskDelivered} = useValetActions();
+    confirmTaskDelivered, cancelTask} = useValetActions();
   const {colors, isDark} = useTheme();
 
   const [screen, setScreen] = useState<Screen>('home');
@@ -43,6 +43,7 @@ export function ValetHomeScreen() {
   const [foundUser, setFoundUser] = useState<any | null>(null);
   const [carNumber, setCarNumber] = useState('');
   const [pendingTaskId, setPendingTaskId] = useState<number | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   // Visitor-side counterpart to pendingTaskId — a freshly-created visitor
   // token also needs a driver assigned right away to collect the key.
   const [pendingVisitorId, setPendingVisitorId] = useState<number | null>(null);
@@ -94,8 +95,10 @@ export function ValetHomeScreen() {
   }, [reassignPrompt, clearReassignPrompt]);
 
   const handleScanCode = async () => {
+    if (submitting) return;
     setCodeError('');
     const trimmed = code.trim();
+    setSubmitting(true);
     try {
       const found = await usersApi.lookupByCardCode(trimmed);
       setCode('');
@@ -110,6 +113,8 @@ export function ValetHomeScreen() {
       }
     } catch (err) {
       setCodeError('No user found with this code');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -124,12 +129,8 @@ export function ValetHomeScreen() {
         assignedAt: Date.now(),
       });
       setPendingTaskId(id);
-      pushNotification({
-        targetRole: 'driver',
-        title: '🚗 New Parking Task',
-        body: `Car ${plate.toUpperCase()} — ${user.name}. Report to valet counter.`,
-        type: 'info',
-      });
+      // No driver notification here — the task has no driver yet. The real
+      // per-driver alarm fires from handleAssignDriver once the valet picks one.
       setFoundUser(null); setCarNumber('');
       setScreen('assign');
     } catch (err: any) {
@@ -138,8 +139,13 @@ export function ValetHomeScreen() {
   };
 
   const handleKeyReceived = async () => {
-    if (!foundUser || !carNumber.trim()) return;
-    await createKeyTask(foundUser, carNumber.trim());
+    if (submitting || !foundUser || !carNumber.trim()) return;
+    setSubmitting(true);
+    try {
+      await createKeyTask(foundUser, carNumber.trim());
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleAssignDriver = async (driverId: number) => {
@@ -192,6 +198,15 @@ export function ValetHomeScreen() {
     }
   };
 
+  const handleCancelTask = (taskId: number) => {
+    Alert.alert('Cancel This Job?', 'Use this if it’s stuck (e.g. never got a driver) and needs to be cleared.', [
+      {text: 'Never mind', style: 'cancel'},
+      {text: 'Cancel Job', style: 'destructive', onPress: () => {
+        cancelTask(taskId).catch(err => Alert.alert('Error', err.message || 'Could not cancel'));
+      }},
+    ]);
+  };
+
   // ── SCAN / KEY COLLECTION ──────────────────────────────────────────────
   if (screen === 'scan') {
     return (
@@ -241,11 +256,11 @@ export function ValetHomeScreen() {
                 </View>
                 {!!codeError && <Text style={[s.codeError, {color: colors.error}]}>{codeError}</Text>}
                 <PressableScale
-                  style={[s.actionBtn, {backgroundColor: code.length === 3 ? colors.primary : colors.cardAlt}]}
-                  onPress={handleScanCode} disabled={code.length !== 3}
+                  style={[s.actionBtn, {backgroundColor: code.length === 3 && !submitting ? colors.primary : colors.cardAlt}]}
+                  onPress={handleScanCode} disabled={code.length !== 3 || submitting}
                 >
-                  <Text style={[s.actionBtnTxt, {color: code.length === 3 ? colors.textOnPrimary : colors.textMuted}]}>Find Customer</Text>
-                  <Icon name="arrowRight" size={15} color={code.length === 3 ? colors.textOnPrimary : colors.textMuted} />
+                  <Text style={[s.actionBtnTxt, {color: code.length === 3 && !submitting ? colors.textOnPrimary : colors.textMuted}]}>{submitting ? 'Please wait…' : 'Find Customer'}</Text>
+                  <Icon name="arrowRight" size={15} color={code.length === 3 && !submitting ? colors.textOnPrimary : colors.textMuted} />
                 </PressableScale>
               </View>
             </>
@@ -273,11 +288,11 @@ export function ValetHomeScreen() {
                   placeholderTextColor={colors.textMuted} autoCapitalize="characters" />
               </View>
               <PressableScale
-                style={[s.actionBtn, {backgroundColor: carNumber.trim() ? colors.primary : colors.cardAlt}]}
-                onPress={handleKeyReceived} disabled={!carNumber.trim()}
+                style={[s.actionBtn, {backgroundColor: carNumber.trim() && !submitting ? colors.primary : colors.cardAlt}]}
+                onPress={handleKeyReceived} disabled={!carNumber.trim() || submitting}
               >
-                <Icon name="check" size={15} color={carNumber.trim() ? colors.textOnPrimary : colors.textMuted} />
-                <Text style={[s.actionBtnTxt, {color: carNumber.trim() ? colors.textOnPrimary : colors.textMuted}]}>Key Received — Assign Driver</Text>
+                <Icon name="check" size={15} color={carNumber.trim() && !submitting ? colors.textOnPrimary : colors.textMuted} />
+                <Text style={[s.actionBtnTxt, {color: carNumber.trim() && !submitting ? colors.textOnPrimary : colors.textMuted}]}>{submitting ? 'Please wait…' : 'Key Received — Assign Driver'}</Text>
               </PressableScale>
             </>
           )}
@@ -566,11 +581,17 @@ export function ValetHomeScreen() {
               </View>
               {!!t.driverName && <Text style={[s.taskDriverTxt, {color: colors.textMuted}]}>Driver: {t.driverName}</Text>}
               {needsDriver && (
-                <PressableScale style={[s.taskActionBtn, {borderColor: colors.warning, backgroundColor: colors.warning + '12'}]}
-                  onPress={() => handleAssignRetrieval(t.id)}>
-                  <Icon name="arrowUp" size={13} color={colors.warning} />
-                  <Text style={[s.taskActionTxt, {color: colors.warning}]}>Assign Driver</Text>
-                </PressableScale>
+                <View style={{flexDirection: 'row', gap: 8}}>
+                  <PressableScale style={[s.taskActionBtn, {flex: 1, borderColor: colors.warning, backgroundColor: colors.warning + '12'}]}
+                    onPress={() => handleAssignRetrieval(t.id)}>
+                    <Icon name="arrowUp" size={13} color={colors.warning} />
+                    <Text style={[s.taskActionTxt, {color: colors.warning}]}>Assign Driver</Text>
+                  </PressableScale>
+                  <PressableScale style={[s.taskActionBtn, {borderColor: colors.border, backgroundColor: 'transparent', paddingHorizontal: 12}]}
+                    onPress={() => handleCancelTask(t.id)}>
+                    <Icon name="close" size={13} color={colors.textMuted} />
+                  </PressableScale>
+                </View>
               )}
               {t.status === 'assigned' && !needsDriver && t.type === 'park' && (
                 <PressableScale style={[s.taskActionBtn, {borderColor: colors.success, backgroundColor: colors.success + '10'}]}

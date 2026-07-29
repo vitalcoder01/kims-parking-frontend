@@ -104,6 +104,12 @@ export const usersApi = {
 export const tasksApi = {
   list: (params?: {doctorId?: number; driverId?: number; status?: string; type?: string}) =>
     client.get('/tasks', {params}).then(r => r.data.tasks),
+  // Full past-sessions log — bypasses the isCurrent filter the live-board
+  // `list()` call uses, so this returns everything ever, not just whatever's
+  // currently active. Pass doctorId for one doctor's history, or omit it
+  // for the valet/admin "every staff record" log (capped server-side).
+  history: (doctorId?: number) =>
+    client.get('/tasks', {params: {doctorId, history: true}}).then(r => r.data.tasks),
   get: (id: number) => client.get(`/tasks/${id}`).then(r => r.data.task),
   create: (data: {type: 'park' | 'retrieve'; doctorId: number; carNumber: string; slotId?: string; destinationLat?: number; destinationLng?: number}) =>
     client.post('/tasks', data).then(r => r.data.task),
@@ -125,6 +131,8 @@ export const tasksApi = {
     client.patch(`/tasks/${id}/retrieve`).then(r => r.data.task),
   confirmDelivered: (id: number) =>
     client.patch(`/tasks/${id}/confirm-delivered`).then(r => r.data.task),
+  cancel: (id: number) =>
+    client.patch(`/tasks/${id}/cancel`).then(r => r.data.task),
   updateLocation: (id: number, lat: number, lng: number) =>
     client.patch(`/tasks/${id}/location`, {lat, lng}).then(r => r.data.task),
 };
@@ -181,6 +189,10 @@ export const notificationsApi = {
   // is killed or the phone was rebooted.
   registerDevice: (token: string, platform = 'android') =>
     client.post('/notifications/register-device', {token, platform}).then(() => undefined),
+  // Called on logout so this phone stops receiving the signed-out account's
+  // pushes instead of staying bound to it until someone else logs in here.
+  unregisterDevice: (token: string) =>
+    client.post('/notifications/unregister-device', {token}).then(() => undefined),
 };
 
 // ── Attendance ───────────────────────────────────────────────────────────

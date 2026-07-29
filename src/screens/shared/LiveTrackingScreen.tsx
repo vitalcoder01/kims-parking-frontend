@@ -100,7 +100,7 @@ export function LiveTrackingScreen({task: taskProp, onBack}: Props) {
   const myDriverId = user?.linkedDriverId ?? user?.id;
   // Used bare (no `task` prop) from the driver's "Track" tab — resolve their
   // own active task instead of rendering an empty/unrelated screen.
-  const task = taskProp ?? (isDriver ? tasks.find(t => t.driverId === myDriverId && t.status !== 'completed' && t.status !== 'delivered') : undefined);
+  const task = taskProp ?? (isDriver ? tasks.find(t => t.driverId === myDriverId && t.status !== 'completed' && t.status !== 'delivered' && t.status !== 'cancelled') : undefined);
   // 'delivered' (retrieve trips only) already means the car physically
   // arrived at the valet counter — the trip visually "arrives" there even
   // though the record itself isn't closed out until the valet confirms.

@@ -6,13 +6,13 @@ import {useAppState, Visitor} from '../../context/AppStateContext';
 export function useValetActions() {
   const {drivers, tasks, visitors, addTask, assignDriver, markKeyCollected, pushNotification, addVisitor,
     assignVisitorDriver, assignRetrievalDriver, cancelVisitor,
-    confirmTaskDelivered, confirmVisitorDelivered} = useAppState();
+    confirmTaskDelivered, confirmVisitorDelivered, cancelTask, fetchTaskHistory} = useAppState();
 
   // "Active Tasks" = already assigned to a driver — a bare 'requested'
   // retrieval isn't a task for anyone to act on yet. Includes 'delivered'
   // (awaiting the valet's pickup confirmation) — same job, same card, the
   // action button just changes rather than living in a separate list.
-  const activeTasks = tasks.filter(t => t.status !== 'completed' && t.status !== 'requested');
+  const activeTasks = tasks.filter(t => t.status !== 'completed' && t.status !== 'requested' && t.status !== 'cancelled');
   // Least-busy first — every job fully occupies a driver, so among the
   // available pool "fewest jobs completed today" is the fairest tiebreaker.
   const availableDrivers = drivers
@@ -73,6 +73,6 @@ export function useValetActions() {
     drivers, tasks, visitors, addTask, addVisitor, pushNotification, markKeyCollected, cancelVisitor,
     activeTasks, availableDrivers, retrievalRequests, activeVisitors, hasActiveRetrievalDriver,
     assignTaskDriver, assignVisitorPickupDriver, assignVisitorRetrievalDriver,
-    confirmTaskDelivered, confirmVisitorDelivered,
+    confirmTaskDelivered, confirmVisitorDelivered, cancelTask, fetchTaskHistory,
   };
 }

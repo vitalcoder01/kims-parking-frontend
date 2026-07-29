@@ -11,6 +11,7 @@ import {LoginScreen}             from '../screens/auth/LoginScreen';
 import {DoctorHomeScreen}        from '../screens/doctor/DoctorHomeScreen';
 import {VirtualCardScreen}       from '../screens/doctor/VirtualCardScreen';
 import {VehicleSetupScreen}      from '../screens/doctor/VehicleSetupScreen';
+import {DoctorHistoryScreen}     from '../screens/doctor/DoctorHistoryScreen';
 import {ParkingScreen}           from '../screens/ParkingScreen';
 import {ParkingMapScreen}        from '../screens/ParkingMapScreen';
 import {ValetHomeScreen}         from '../screens/valet/ValetHomeScreen';
@@ -54,6 +55,8 @@ function DoctorNavigator() {
       <Tab.Screen name="Home"     component={DoctorHomeScreen}  options={{title:'KIMS Doctor',   tabBarLabel:'Home',    tabBarIcon:({size,color})=>ic('home',size,color)}} />
       {/* Reachable only from the valet-code card on Home — not a bottom tab. */}
       <Tab.Screen name="Card"     component={VirtualCardScreen} options={{headerShown:false, tabBarButton: () => null}} />
+      {/* Reachable only from the "View Parking History" link on Home. */}
+      <Tab.Screen name="History" component={DoctorHistoryScreen} options={{headerShown:false, tabBarButton: () => null}} />
       <Tab.Screen name="Parking"  component={ParkingScreen}     options={{title:'My Parking',    tabBarLabel:'Parking', tabBarIcon:({size,color})=>ic('parking',size,color)}} />
       <Tab.Screen name="Setup"    component={VehicleSetupScreen} options={{headerShown:false,     tabBarLabel:'Setup',   tabBarIcon:({size,color})=>ic('car',size,color)}} />
       <Tab.Screen name="Settings" component={SharedSettingsScreen} options={{title:'Settings',   tabBarLabel:'Settings',tabBarIcon:({size,color})=>ic('settings',size,color)}} />
@@ -68,6 +71,8 @@ function StaffNavigator() {
       <Tab.Screen name="Home"     component={DoctorHomeScreen}  options={{title:'KIMS Staff',    tabBarLabel:'Home',    tabBarIcon:({size,color})=>ic('home',size,color)}} />
       {/* Reachable only from the valet-code card on Home — not a bottom tab. */}
       <Tab.Screen name="Card"     component={VirtualCardScreen} options={{headerShown:false, tabBarButton: () => null}} />
+      {/* Reachable only from the "View Parking History" link on Home. */}
+      <Tab.Screen name="History" component={DoctorHistoryScreen} options={{headerShown:false, tabBarButton: () => null}} />
       <Tab.Screen name="Setup"    component={VehicleSetupScreen} options={{headerShown:false,     tabBarLabel:'Setup',   tabBarIcon:({size,color})=>ic('car',size,color)}} />
       <Tab.Screen name="Settings" component={SharedSettingsScreen} options={{title:'Settings',   tabBarLabel:'Settings',tabBarIcon:({size,color})=>ic('settings',size,color)}} />
     </Tab.Navigator>

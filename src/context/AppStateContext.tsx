@@ -10,7 +10,7 @@ import {useAuth} from './AuthContext';
 
 export type DriverStatus = 'available' | 'busy' | 'off';
 export type TaskType = 'park' | 'retrieve';
-export type TaskStatus = 'requested' | 'assigned' | 'key_collected' | 'in_transit' | 'delivered' | 'completed';
+export type TaskStatus = 'requested' | 'assigned' | 'key_collected' | 'in_transit' | 'delivered' | 'completed' | 'cancelled';
 export type SlotStatus = 'free' | 'occupied' | 'reserved';
 
 export interface Driver {
@@ -146,6 +146,8 @@ interface AppState {
   markParked: (taskId: number, slotId: string) => Promise<void>;
   markRetrieved: (taskId: number) => Promise<void>;
   confirmTaskDelivered: (taskId: number) => Promise<void>;
+  cancelTask: (taskId: number) => Promise<void>;
+  fetchTaskHistory: (doctorId?: number) => Promise<ParkingTask[]>;
   reportLocation: (taskId: number, lat: number, lng: number) => Promise<void>;
   setDriverStatus: (driverId: number, status: DriverStatus) => Promise<void>;
   addVisitor: (v: {name: string; carNumber?: string; mobile: string; vehicleType?: 'car' | 'bike'}) => Promise<Visitor>;
@@ -357,10 +359,21 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
 
     // FCM device registration + foreground push handling (no-op until
     // google-services.json is in place — sockets already cover foreground).
+    // Guarded by `pushCancelled`: if the user logs out (or Quick-Login swaps
+    // accounts) while this promise is still resolving, the effect cleanup
+    // below can run before `cleanupPush` is ever assigned — without this
+    // flag the FCM onTokenRefresh/onMessage listeners it sets up would stay
+    // registered against a session that's already gone, later firing an
+    // authenticated call with no token attached.
+    let pushCancelled = false;
     let cleanupPush: (() => void) | undefined;
-    initPushMessaging().then(fn => { cleanupPush = fn; }).catch(() => {});
+    initPushMessaging().then(fn => {
+      if (pushCancelled) { fn(); return; }
+      cleanupPush = fn;
+    }).catch(() => {});
 
     return () => {
+      pushCancelled = true;
       cleanupPush?.();
       disconnectSocket();
     };
@@ -436,7 +449,10 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
       destinationLng: task.destinationLng,
     });
     const mapped = mapTask(created);
-    setTasks(p => [...p, mapped]);
+    // The backend returns the existing task instead of a duplicate on a
+    // repeat call — dedupe locally too rather than trusting this call site
+    // never races another.
+    setTasks(p => (p.some(t => t.id === mapped.id) ? p : [...p, mapped]));
     return mapped.id;
   }, []);
 
@@ -451,7 +467,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
       targetRole: 'valet',
       title: `🚗 Retrieval Requested — ${created.doctorName ?? ''}`,
       body: `Leaving in ${eta} min. Please assign a driver to bring ${created.carNumber} from ${created.slotId ?? 'its slot'}.`,
-      type: 'info',
+      type: 'alarm',
     }).catch(() => {});
     return created.id;
   }, []);
@@ -529,6 +545,24 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     await stopAssignmentAlarm().catch(() => {});
     const updated = mapTask(await tasksApi.confirmDelivered(taskId));
     setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
+  }, []);
+
+  // Staff/admin: retire a stuck task (never got a driver, or genuinely
+  // abandoned) instead of it silently blocking every later session for that
+  // doctor's Vehicle Status card forever.
+  const cancelTask = useCallback(async (taskId: number) => {
+    await stopAssignmentAlarm().catch(() => {});
+    const updated = mapTask(await tasksApi.cancel(taskId));
+    setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
+  }, []);
+
+  // On-demand only — a full past-sessions log (one doctor's, or every
+  // staff record if doctorId is omitted), not part of the constantly-
+  // polled/socket-fed live `tasks` array (that stays bounded to "at most one
+  // row per doctor" by design; history can be years of rows).
+  const fetchTaskHistory = useCallback(async (doctorId?: number) => {
+    const rows = await tasksApi.history(doctorId);
+    return rows.map(mapTask);
   }, []);
 
   const setDriverStatus = useCallback(async (driverId: number, status: DriverStatus) => {
@@ -640,7 +674,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     <Ctx.Provider value={{
       drivers, tasks, slots, visitors, notifications,
       driverLocations, onlineDriverIds, reassignPrompt, clearReassignPrompt,
-      addTask, requestRetrieval, updateTask, assignDriver, acceptTask, rejectTask, markKeyCollected, markParked, markRetrieved, confirmTaskDelivered, reportLocation,
+      addTask, requestRetrieval, updateTask, assignDriver, acceptTask, rejectTask, markKeyCollected, markParked, markRetrieved, confirmTaskDelivered, cancelTask, fetchTaskHistory, reportLocation,
       setDriverStatus, addVisitor,
       assignVisitorDriver, acceptVisitorTask, rejectVisitorTask, cancelVisitor,
       markVisitorPickedUp, markVisitorParked, assignRetrievalDriver, markVisitorRetrieved, confirmVisitorDelivered,

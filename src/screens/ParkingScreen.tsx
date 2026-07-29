@@ -34,11 +34,10 @@ export function ParkingScreen() {
   const {activeRetrieve, remainingSeconds} = useRetrievalRequest();
   const [showTracking, setShowTracking] = useState(false);
 
-  // tasks come back newest-first (createdAt desc) — index 0 is latest.
-  const myTasks = tasks.filter(t => t.doctorId === user?.id);
-  const activeTask = myTasks.find(t => t.status !== 'completed');
-  const latestTask = myTasks[0];
-  const task = activeTask ?? latestTask;
+  // `tasks` only ever contains this doctor's single current session — no
+  // more "active vs latest" search needed.
+  const rawTask = tasks.find(t => t.doctorId === user?.id);
+  const task = rawTask?.status === 'cancelled' ? undefined : rawTask;
   const isParked = task?.status === 'completed' && task.type === 'park';
 
   if (showTracking && activeRetrieve) {

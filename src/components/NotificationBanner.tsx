@@ -21,7 +21,16 @@ export function NotificationBanner() {
      n.targetRole === 'all')
   );
 
+  // A banner already captured into `current` keeps playing its scheduled
+  // animation even after logout clears the `notifications` array — that
+  // array being empty doesn't un-show something already showing. Force it
+  // closed the moment there's no logged-in user to show it for.
   useEffect(() => {
+    if (!user) { anim.setValue(-120); setCurrent(null); }
+  }, [user, anim]);
+
+  useEffect(() => {
+    if (!user) return;
     if (unread.length > 0 && !current) {
       const next = unread[0];
       setCurrent(next);

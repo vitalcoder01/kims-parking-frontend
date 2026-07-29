@@ -22,7 +22,7 @@ export function DriverJobsScreen() {
   // 'delivered' means the driver's own part is already done (car dropped at
   // the valet counter) — it's just awaiting the valet's confirmation now,
   // so it shouldn't keep sitting here as this driver's "current job".
-  const myTasks = tasks.filter(t => t.driverId === myDriverId && t.status !== 'completed' && t.status !== 'delivered');
+  const myTasks = tasks.filter(t => t.driverId === myDriverId && t.status !== 'completed' && t.status !== 'delivered' && t.status !== 'cancelled');
   const activeTask = myTasks[0] ?? null;
   const completedToday = tasks.filter(t => t.driverId === myDriverId && t.status === 'completed');
   const myVisitors = visitors.filter(v => v.driverId === myDriverId
