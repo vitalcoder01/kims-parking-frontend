@@ -135,3 +135,13 @@ dependencies {
         implementation jscFlavor
     }
 }
+
+// Apply Firebase's Google Services plugin only when the config file is
+// present — the app builds and runs fine without it (FCM just stays off,
+// guarded in JS), so a fresh checkout isn't blocked on Firebase setup.
+def googleServicesJson = file('google-services.json')
+if (googleServicesJson.exists()) {
+    apply plugin: 'com.google.gms.google-services'
+} else {
+    logger.warn('google-services.json not found - building WITHOUT Firebase push (FCM disabled)')
+}

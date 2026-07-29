@@ -1,8 +1,11 @@
 import React, {useState, useEffect, useCallback} from 'react';
-import {View, Text, StyleSheet, SafeAreaView, ScrollView, ActivityIndicator, RefreshControl, TouchableOpacity} from 'react-native';
+import {View, Text, StyleSheet, ScrollView, ActivityIndicator, RefreshControl} from 'react-native';
+import {PressableScale} from '../../components/PressableScale';
+import {SafeAreaView} from 'react-native-safe-area-context';
 import {useTheme} from '../../context/ThemeContext';
 import {Badge} from '../../components/Badge';
 import {adminApi} from '../../services/api';
+import {Icon, IconName} from '../../components/Icon';
 
 interface TodayRow {
   id: number; userId: number; name: string; role: string; employeeId: string;
@@ -15,13 +18,13 @@ interface MonthlyUser {
 
 const roleLabel: Record<string, string> = {doctor: 'Doctor', staff: 'Staff', valet: 'Valet', driver: 'Driver', admin: 'Admin'};
 const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
-const CATEGORIES: {key: string; label: string; icon: string}[] = [
-  {key: 'all', label: 'All', icon: '👥'},
-  {key: 'doctor', label: 'Doctors', icon: '🩺'},
-  {key: 'staff', label: 'Staff', icon: '🧑‍💼'},
-  {key: 'valet', label: 'Valets', icon: '🔑'},
-  {key: 'driver', label: 'Drivers', icon: '🚗'},
-  {key: 'admin', label: 'Admins', icon: '🛡️'},
+const CATEGORIES: {key: string; label: string; icon: IconName}[] = [
+  {key: 'all', label: 'All', icon: 'people'},
+  {key: 'doctor', label: 'Doctors', icon: 'stethoscope'},
+  {key: 'staff', label: 'Staff', icon: 'briefcase'},
+  {key: 'valet', label: 'Valets', icon: 'key'},
+  {key: 'driver', label: 'Drivers', icon: 'car'},
+  {key: 'admin', label: 'Admins', icon: 'shield'},
 ];
 
 function formatTime(iso: string | null) {
@@ -138,14 +141,14 @@ export function AdminAttendanceScreen() {
 
   if (loading) {
     return (
-      <SafeAreaView style={[s.safe, s.centered, {backgroundColor: colors.background}]}>
+      <SafeAreaView edges={['bottom','left','right']} style={[s.safe, s.centered, {backgroundColor: colors.background}]}>
         <ActivityIndicator color={colors.primary} />
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={[s.safe, {backgroundColor: colors.background}]}>
+    <SafeAreaView edges={['bottom','left','right']} style={[s.safe, {backgroundColor: colors.background}]}>
       <ScrollView
         contentContainerStyle={s.scroll}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(monthStr); }} tintColor={colors.primary} />}
@@ -156,16 +159,16 @@ export function AdminAttendanceScreen() {
         </View>
 
         <View style={s.monthNav}>
-          <TouchableOpacity style={[s.monthBtn, {backgroundColor: colors.card, borderColor: colors.border}]} onPress={() => setMonthStr(m => shiftMonth(m, -1))}>
+          <PressableScale style={[s.monthBtn, {backgroundColor: colors.card, borderColor: colors.border}]} onPress={() => setMonthStr(m => shiftMonth(m, -1))}>
             <Text style={[s.monthBtnTxt, {color: colors.textPrimary}]}>‹</Text>
-          </TouchableOpacity>
+          </PressableScale>
           <Text style={[s.monthLabel, {color: colors.textPrimary}]}>{monthLabel(monthStr)}</Text>
-          <TouchableOpacity
+          <PressableScale
             style={[s.monthBtn, {backgroundColor: colors.card, borderColor: colors.border, opacity: isCurrentMonth ? 0.35 : 1}]}
             onPress={() => !isCurrentMonth && setMonthStr(m => shiftMonth(m, 1))}
             disabled={isCurrentMonth}>
             <Text style={[s.monthBtnTxt, {color: colors.textPrimary}]}>›</Text>
-          </TouchableOpacity>
+          </PressableScale>
         </View>
 
         <Text style={[s.sec, {color: colors.textMuted}]}>CATEGORY</Text>
@@ -173,20 +176,19 @@ export function AdminAttendanceScreen() {
           {visibleCategories.map(c => {
             const on = category === c.key;
             return (
-              <TouchableOpacity
+              <PressableScale
                 key={c.key}
-                activeOpacity={0.8}
                 onPress={() => setCategory(c.key)}
                 style={[
                   s.catChip,
                   {backgroundColor: on ? colors.primary : colors.card, borderColor: on ? colors.primary : colors.border},
                 ]}>
-                <Text style={s.catIcon}>{c.icon}</Text>
+                <Icon name={c.icon} size={14} color={on ? '#fff' : colors.textPrimary} />
                 <Text style={[s.catLabel, {color: on ? '#fff' : colors.textPrimary}]}>{c.label}</Text>
                 <View style={[s.catCount, {backgroundColor: on ? 'rgba(255,255,255,0.25)' : colors.cardAlt}]}>
                   <Text style={[s.catCountTxt, {color: on ? '#fff' : colors.textMuted}]}>{categoryCounts[c.key] ?? 0}</Text>
                 </View>
-              </TouchableOpacity>
+              </PressableScale>
             );
           })}
         </ScrollView>
@@ -242,7 +244,6 @@ const s = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 6,
     borderRadius: 20, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 9,
   },
-  catIcon: {fontSize: 14},
   catLabel: {fontSize: 12, fontWeight: '800'},
   catCount: {borderRadius: 10, paddingHorizontal: 6, paddingVertical: 1, minWidth: 18, alignItems: 'center'},
   catCountTxt: {fontSize: 10, fontWeight: '800'},

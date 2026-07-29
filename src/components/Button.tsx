@@ -1,15 +1,11 @@
 import React from 'react';
-import {
-  TouchableOpacity,
-  Text,
-  StyleSheet,
-  ActivityIndicator,
-  TouchableOpacityProps,
-} from 'react-native';
+import {Text, StyleSheet, ActivityIndicator, PressableProps, StyleProp, ViewStyle} from 'react-native';
+import {PressableScale} from './PressableScale';
 import {useTheme} from '../context/ThemeContext';
 import {typography, spacing, radius} from '../theme';
 
-interface ButtonProps extends TouchableOpacityProps {
+interface ButtonProps extends Omit<PressableProps, 'style'> {
+  style?: StyleProp<ViewStyle>;
   label: string;
   variant?: 'primary' | 'ghost' | 'success' | 'danger';
   size?: 'sm' | 'md' | 'lg';
@@ -51,8 +47,7 @@ export function Button({
   }[size];
 
   return (
-    <TouchableOpacity
-      activeOpacity={0.8}
+    <PressableScale
       disabled={disabled || loading}
       style={[
         styles.btn,
@@ -76,7 +71,7 @@ export function Button({
           {label}
         </Text>
       )}
-    </TouchableOpacity>
+    </PressableScale>
   );
 }
 

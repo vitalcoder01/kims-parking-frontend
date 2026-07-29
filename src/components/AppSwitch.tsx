@@ -1,14 +1,9 @@
 import React from 'react';
-import {
-  Switch,
-  SwitchProps,
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-} from 'react-native';
+import {Switch, SwitchProps, View, Text, StyleSheet} from 'react-native';
+import {PressableScale} from './PressableScale';
 import {useTheme} from '../context/ThemeContext';
 import {typography, spacing, radius} from '../theme';
+import {Icon} from './Icon';
 
 // ── Simple wrapped Switch ──────────────────────────────────────────
 interface AppSwitchProps extends Omit<SwitchProps, 'trackColor' | 'thumbColor'> {
@@ -53,8 +48,7 @@ export function ThemeToggleRow() {
   const {isDark, toggle, colors} = useTheme();
 
   return (
-    <TouchableOpacity
-      activeOpacity={0.7}
+    <PressableScale
       onPress={toggle}
       style={[
         styles.toggleCard,
@@ -64,7 +58,9 @@ export function ThemeToggleRow() {
         },
       ]}>
       <View style={styles.toggleLeft}>
-        <Text style={styles.toggleIcon}>{isDark ? '🌙' : '☀️'}</Text>
+        <View style={[styles.toggleIconWrap, {backgroundColor: colors.cardAlt}]}>
+          <Icon name={isDark ? 'moon' : 'sun'} size={18} color={colors.textPrimary} />
+        </View>
         <View>
           <Text style={[styles.toggleLabel, {color: colors.textPrimary}]}>
             {isDark ? 'Dark Mode' : 'Light Mode'}
@@ -81,7 +77,7 @@ export function ThemeToggleRow() {
         thumbColor={colors.switchThumb}
         ios_backgroundColor={colors.switchTrackOff}
       />
-    </TouchableOpacity>
+    </PressableScale>
   );
 }
 
@@ -119,8 +115,12 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     flex: 1,
   },
-  toggleIcon: {
-    fontSize: 24,
+  toggleIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   toggleLabel: {
     fontSize: typography.sizes.base,

@@ -1,11 +1,11 @@
 import React from 'react';
-import {
-  View, Text, StyleSheet, SafeAreaView, ScrollView,
-} from 'react-native';
+import {View, Text, StyleSheet, ScrollView} from 'react-native';
+import {SafeAreaView} from 'react-native-safe-area-context';
 import {useTheme} from '../../context/ThemeContext';
 import {useAuth} from '../../context/AuthContext';
 import {useAppState} from '../../context/AppStateContext';
 import {Badge} from '../../components/Badge';
+import {Icon, IconName} from '../../components/Icon';
 
 type ActivityType = 'success' | 'info' | 'primary' | 'warning';
 
@@ -43,13 +43,13 @@ export function AdminDashboardScreen() {
 
   const actColor: Record<ActivityType, string> = {
     success: colors.success,
-    info:    '#1A72E8',
+    info:    colors.info,
     primary: colors.primary,
     warning: colors.warning,
   };
 
   const liveActivity = tasks.slice(0, 5).map(t => ({
-    icon: t.status === 'completed' ? '✅' : t.type === 'park' ? '🚗' : '🔄',
+    icon: (t.status === 'completed' ? 'check' : t.type === 'park' ? 'car' : 'refresh') as IconName,
     text: `${t.carNumber} — ${t.type === 'park' ? 'parked' : 'retrieved'}${t.slotId ? ` at ${t.slotId}` : ''}`,
     sub: `${t.doctorName} · ${t.driverName ?? 'Unassigned'}`,
     type: t.status === 'completed' ? 'success' as const : t.type === 'park' ? 'primary' as const : 'info' as const,
@@ -58,7 +58,7 @@ export function AdminDashboardScreen() {
   const today = new Date().toLocaleDateString(undefined, {weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'});
 
   return (
-    <SafeAreaView style={[s.safe, {backgroundColor: colors.background}]}>
+    <SafeAreaView edges={['bottom','left','right']} style={[s.safe, {backgroundColor: colors.background}]}>
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
 
         {/* Header */}
@@ -77,12 +77,12 @@ export function AdminDashboardScreen() {
         <View style={s.metricsPad}>
           {[
             [
-              {n: String(parkedCars),        l: 'Vehicles Parked',   c: colors.primary,  ic: '🅿️'},
-              {n: String(busyDrivers),       l: 'Drivers On Duty',   c: '#1A72E8',       ic: '👥'},
+              {n: String(parkedCars),        l: 'Vehicles Parked',   c: colors.primary,  ic: 'parking' as IconName},
+              {n: String(busyDrivers),       l: 'Drivers On Duty',   c: colors.info,      ic: 'people' as IconName},
             ],
             [
-              {n: String(liveTasks.length),  l: 'Tasks Active',      c: colors.warning,  ic: '⚡'},
-              {n: String(pendingRetrieval),  l: 'Retrieval Pending', c: colors.success,  ic: '🔄'},
+              {n: String(liveTasks.length),  l: 'Tasks Active',      c: colors.warning,  ic: 'bolt' as IconName},
+              {n: String(pendingRetrieval),  l: 'Retrieval Pending', c: colors.success,  ic: 'refresh' as IconName},
             ],
           ].map((row, ri) => (
             <View key={ri} style={s.metricsRow}>
@@ -91,7 +91,7 @@ export function AdminDashboardScreen() {
                   key={m.l}
                   style={[s.metricCard, {backgroundColor: colors.card, borderColor: colors.border, shadowColor: m.c}]}>
                   <View style={[s.metricIcBadge, {backgroundColor: m.c + '18'}]}>
-                    <Text style={s.metricIc}>{m.ic}</Text>
+                    <Icon name={m.ic} size={19} color={m.c} />
                   </View>
                   <Text style={[s.metricNum, {color: colors.textPrimary}]}>{m.n}</Text>
                   <Text style={[s.metricLbl, {color: colors.textMuted}]}>{m.l}</Text>
@@ -191,7 +191,7 @@ export function AdminDashboardScreen() {
                   i === liveActivity.length - 1 && {borderBottomWidth: 0},
                 ]}>
                 <View style={[s.actStripe, {backgroundColor: actColor[a.type]}]} />
-                <Text style={s.actIcon}>{a.icon}</Text>
+                <Icon name={a.icon} size={16} color={actColor[a.type]} />
                 <View style={{flex: 1}}>
                   <Text style={[s.actText, {color: colors.textPrimary}]}>{a.text}</Text>
                   <Text style={[s.actSub, {color: colors.textMuted}]}>{a.sub}</Text>
@@ -229,7 +229,6 @@ const s = StyleSheet.create({
     width: 40, height: 40, borderRadius: 12,
     alignItems: 'center', justifyContent: 'center', marginBottom: 12,
   },
-  metricIc: {fontSize: 19},
   metricNum: {fontSize: 30, fontWeight: '900', letterSpacing: -1},
   metricLbl: {fontSize: 11, fontWeight: '600', marginTop: 4},
 
@@ -276,7 +275,6 @@ const s = StyleSheet.create({
     paddingVertical: 10, borderBottomWidth: 1, gap: 10,
   },
   actStripe: {width: 3, alignSelf: 'stretch', borderRadius: 2, flexShrink: 0},
-  actIcon: {fontSize: 18, lineHeight: 22, flexShrink: 0},
   actText: {fontSize: 13, fontWeight: '600'},
   actSub: {fontSize: 11, marginTop: 2},
 });

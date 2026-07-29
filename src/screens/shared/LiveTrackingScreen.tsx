@@ -1,10 +1,12 @@
 import React, {useEffect, useRef, useState} from 'react';
-import {View, Text, StyleSheet, TouchableOpacity, Animated, Dimensions} from 'react-native';
+import {View, Text, StyleSheet, Animated, Dimensions} from 'react-native';
+import {PressableScale} from '../../components/PressableScale';
 import {WebView} from 'react-native-webview';
 import {useTheme} from '../../context/ThemeContext';
 import {useAppState, ParkingTask} from '../../context/AppStateContext';
 import {useAuth} from '../../context/AuthContext';
 import {computeTrip} from '../../utils/geo';
+import {Icon} from '../../components/Icon';
 
 const {height} = Dimensions.get('window');
 
@@ -98,8 +100,11 @@ export function LiveTrackingScreen({task: taskProp, onBack}: Props) {
   const myDriverId = user?.linkedDriverId ?? user?.id;
   // Used bare (no `task` prop) from the driver's "Track" tab — resolve their
   // own active task instead of rendering an empty/unrelated screen.
-  const task = taskProp ?? (isDriver ? tasks.find(t => t.driverId === myDriverId && t.status !== 'completed') : undefined);
-  const arrived = task?.status === 'completed';
+  const task = taskProp ?? (isDriver ? tasks.find(t => t.driverId === myDriverId && t.status !== 'completed' && t.status !== 'delivered') : undefined);
+  // 'delivered' (retrieve trips only) already means the car physically
+  // arrived at the valet counter — the trip visually "arrives" there even
+  // though the record itself isn't closed out until the valet confirms.
+  const arrived = task?.status === 'completed' || task?.status === 'delivered';
   const realLat = task?.driverLat ?? null;
   const realLng = task?.driverLng ?? null;
 
@@ -132,7 +137,7 @@ export function LiveTrackingScreen({task: taskProp, onBack}: Props) {
   if (!task) {
     return (
       <View style={[s.root, s.emptyRoot, {backgroundColor: colors.background}]}>
-        <Text style={s.emptyIcon}>🅿️</Text>
+        <Icon name="parking" size={40} color={colors.textMuted} style={{marginBottom: 8}} />
         <Text style={[s.emptyTitle, {color: colors.textPrimary}]}>No Active Task</Text>
         <Text style={[s.emptyDesc, {color: colors.textMuted}]}>Live tracking will appear here once you have an assigned task.</Text>
       </View>
@@ -150,21 +155,25 @@ export function LiveTrackingScreen({task: taskProp, onBack}: Props) {
     <View style={[s.root, {backgroundColor: colors.background}]}>
       {/* Back button overlay */}
       {onBack && (
-        <TouchableOpacity style={[s.backBtn, {backgroundColor: colors.surface}]} onPress={onBack} activeOpacity={0.85}>
-          <Text style={[s.backTxt, {color: colors.textPrimary}]}>←</Text>
-        </TouchableOpacity>
+        <PressableScale style={[s.backBtn, {backgroundColor: colors.surface}]} onPress={onBack}>
+          <Icon name="back" size={20} color={colors.textPrimary} />
+        </PressableScale>
       )}
 
-      {/* Live badge overlay */}
-      <View style={[s.liveBadge, {backgroundColor: colors.error}]}>
-        <View style={s.liveDot} />
-        <Text style={s.liveTxt}>LIVE</Text>
-      </View>
+      {/* Live badge overlay — nothing's actually "live" once the trip has
+          arrived, whether or not the valet has confirmed the handover yet. */}
+      {!arrived && (
+        <View style={[s.liveBadge, {backgroundColor: colors.error}]}>
+          <View style={s.liveDot} />
+          <Text style={s.liveTxt}>LIVE</Text>
+        </View>
+      )}
 
       {/* Real GPS badge — shown once an actual fix is in hand, driver or viewer */}
       {realLat != null && (
         <View style={[s.gpsBadge, {backgroundColor: colors.success}]}>
-          <Text style={s.gpsTxt}>📡 {isDriver ? 'GPS Active' : 'Live GPS'}</Text>
+          <Icon name="live" size={12} color="#fff" />
+          <Text style={s.gpsTxt}>{isDriver ? 'GPS Active' : 'Live GPS'}</Text>
         </View>
       )}
 
@@ -191,13 +200,24 @@ export function LiveTrackingScreen({task: taskProp, onBack}: Props) {
 
         {arrived ? (
           <View style={s.arrivedRow}>
-            <Text style={s.arrivedIcon}>✅</Text>
+            <View style={[s.arrivedIconWrap, {backgroundColor: colors.successLight}]}>
+              <Icon name="check" size={24} color={colors.success} />
+            </View>
             <View>
               <Text style={[s.arrivedTitle, {color: colors.success}]}>
-                {task?.type === 'park' ? 'Car Parked Successfully!' : 'Car Retrieved!'}
+                {task?.type === 'park'
+                  ? 'Car Parked Successfully!'
+                  : task?.status === 'delivered'
+                  // Driver's dropped it off, but the valet hasn't confirmed
+                  // the handover yet — don't tell the doctor "Retrieved!"
+                  // (past tense, done) before that's actually true.
+                  ? 'Car Has Arrived!'
+                  : 'Car Retrieved!'}
               </Text>
               <Text style={[s.arrivedSub, {color: colors.textMuted}]}>
-                {task?.type === 'retrieve' ? 'Delivered to you' : task?.slotId ? `Slot: ${task.slotId}` : 'Delivered to valet counter'}
+                {task?.type === 'retrieve'
+                  ? (task?.status === 'delivered' ? 'Please collect it at the entrance' : 'Delivered to you')
+                  : task?.slotId ? `Slot: ${task.slotId}` : 'Delivered to valet counter'}
               </Text>
             </View>
           </View>
@@ -231,12 +251,12 @@ export function LiveTrackingScreen({task: taskProp, onBack}: Props) {
             )}
 
             <View style={s.stepsRow}>
-              {['Key Collected', 'In Transit', task?.type === 'park' ? 'Parked ✓' : 'Delivered ✓'].map((step, i) => {
+              {['Key Collected', 'In Transit', task?.type === 'park' ? 'Parked' : 'Delivered'].map((step, i) => {
                 const done = progress > i * 0.4;
                 return (
                   <View key={step} style={s.step}>
                     <View style={[s.stepDot, {backgroundColor: done ? colors.success : colors.border}]}>
-                      {done && <Text style={s.stepCheck}>✓</Text>}
+                      {done && <Icon name="checkBold" size={12} color="#fff" />}
                     </View>
                     <Text style={[s.stepLabel, {color: done ? colors.textPrimary : colors.textMuted}]} numberOfLines={1}>{step}</Text>
                     {i < 2 && <View style={[s.stepLine, {backgroundColor: done ? colors.success : colors.border}]} />}
@@ -247,8 +267,9 @@ export function LiveTrackingScreen({task: taskProp, onBack}: Props) {
 
             {task?.slotId && (
               <View style={[s.slotChip, {backgroundColor: colors.primary + '12', borderColor: colors.primary + '30'}]}>
+                <Icon name={task.type === 'retrieve' ? 'pin' : 'parking'} size={14} color={colors.primary} />
                 <Text style={[s.slotChipTxt, {color: colors.primary}]}>
-                  {task.type === 'retrieve' ? '📍 Retrieving from' : '🅿️ Destination'}: <Text style={{fontWeight: '900'}}>{task.slotId}</Text>
+                  {task.type === 'retrieve' ? 'Retrieving from' : 'Destination'}: <Text style={{fontWeight: '900'}}>{task.slotId}</Text>
                 </Text>
               </View>
             )}
@@ -263,7 +284,6 @@ const s = StyleSheet.create({
   root: {flex: 1},
   map: {flex: 1},
   emptyRoot: {alignItems: 'center', justifyContent: 'center', padding: 40, gap: 8},
-  emptyIcon: {fontSize: 40, marginBottom: 8},
   emptyTitle: {fontSize: 18, fontWeight: '800'},
   emptyDesc: {fontSize: 13, textAlign: 'center', lineHeight: 19},
   backBtn: {position: 'absolute', top: 52, left: 16, zIndex: 10, width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: {width: 0, height: 2}, shadowOpacity: 0.2, shadowRadius: 8, elevation: 8},
@@ -271,7 +291,7 @@ const s = StyleSheet.create({
   liveBadge: {position: 'absolute', top: 52, right: 16, zIndex: 10, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6},
   liveDot: {width: 7, height: 7, borderRadius: 4, backgroundColor: '#fff'},
   liveTxt: {color: '#fff', fontSize: 11, fontWeight: '900', letterSpacing: 1},
-  gpsBadge: {position: 'absolute', top: 100, right: 16, zIndex: 10, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 5},
+  gpsBadge: {position: 'absolute', top: 100, right: 16, zIndex: 10, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 5},
   gpsTxt: {color: '#fff', fontSize: 10, fontWeight: '700'},
   sheet: {position: 'absolute', bottom: 0, left: 0, right: 0, borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 20, paddingTop: 8, paddingBottom: 32, shadowColor: '#000', shadowOffset: {width: 0, height: -4}, shadowOpacity: 0.15, shadowRadius: 16, elevation: 24},
   progressTrack: {height: 4, borderRadius: 2, marginVertical: 16, overflow: 'hidden'},
@@ -286,13 +306,12 @@ const s = StyleSheet.create({
   stepsRow: {flexDirection: 'row', alignItems: 'center', marginBottom: 16, marginTop: 8},
   step: {flex: 1, alignItems: 'center', position: 'relative'},
   stepDot: {width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginBottom: 6},
-  stepCheck: {color: '#fff', fontSize: 12, fontWeight: '900'},
   stepLabel: {fontSize: 10, fontWeight: '700', textAlign: 'center'},
   stepLine: {position: 'absolute', top: 14, right: '-50%', width: '100%', height: 2},
-  slotChip: {borderRadius: 12, borderWidth: 1, padding: 12, alignItems: 'center'},
+  slotChip: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 12, borderWidth: 1, padding: 12},
   slotChipTxt: {fontSize: 13, fontWeight: '600'},
   arrivedRow: {flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 8},
-  arrivedIcon: {fontSize: 36},
+  arrivedIconWrap: {width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center'},
   arrivedTitle: {fontSize: 17, fontWeight: '800'},
   arrivedSub: {fontSize: 12, marginTop: 4},
 });

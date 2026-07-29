@@ -1,13 +1,17 @@
-import React, {useState} from 'react';
-import {View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, TextInput, Linking, Alert} from 'react-native';
+import React, {useState, useRef, useEffect} from 'react';
+import {View, Text, StyleSheet, ScrollView, TextInput, Linking, Alert, StatusBar} from 'react-native';
+import {SafeAreaView} from 'react-native-safe-area-context';
 import LinearGradient from 'react-native-linear-gradient';
 import {useAuth} from '../../context/AuthContext';
-import {useAppState, Visitor} from '../../context/AppStateContext';
 import {useTheme} from '../../context/ThemeContext';
 import {BRAND_GRADIENT, BRAND_GRADIENT_DARK} from '../../theme/colors';
-import {Icon} from '../../components/Icon';
+import {Icon, IconName} from '../../components/Icon';
+import {PressableScale} from '../../components/PressableScale';
+import {DriverPickerList} from '../../components/DriverPickerList';
 import {usersApi} from '../../services/api';
 import {PUBLIC_BASE_URL} from '../../config/api';
+import {useValetActions} from './useValetActions';
+import {useAppState} from '../../context/AppStateContext';
 
 function sendWhatsApp(mobile: string, name: string, carNumber: string | undefined, token: string, publicToken: string) {
   const trackingUrl = `${PUBLIC_BASE_URL}/track/${publicToken}`;
@@ -24,12 +28,13 @@ function sendWhatsApp(mobile: string, name: string, carNumber: string | undefine
   }).catch(() => Alert.alert('WhatsApp', 'Could not open WhatsApp. Please check if it is installed.'));
 }
 
-type Screen = 'home' | 'scan' | 'assign' | 'visitor';
+type Screen = 'home' | 'scan' | 'assign' | 'visitor' | 'retrievals';
 
 export function ValetHomeScreen() {
   const {user} = useAuth();
-  const {drivers, tasks, visitors, addTask, assignDriver, markKeyCollected, pushNotification, addVisitor,
-    assignVisitorDriver, assignRetrievalDriver, cancelVisitor} = useAppState();
+  const {drivers, tasks, visitors, addTask, addVisitor, markKeyCollected, pushNotification,
+    activeTasks, availableDrivers, retrievalRequests, assignTaskDriver, assignVisitorPickupDriver,
+    confirmTaskDelivered} = useValetActions();
   const {colors, isDark} = useTheme();
 
   const [screen, setScreen] = useState<Screen>('home');
@@ -38,65 +43,83 @@ export function ValetHomeScreen() {
   const [foundUser, setFoundUser] = useState<any | null>(null);
   const [carNumber, setCarNumber] = useState('');
   const [pendingTaskId, setPendingTaskId] = useState<number | null>(null);
-  // Visitor-side counterpart to pendingTaskId — the 'assign' screen is
-  // reused for both doctor tasks and visitor pickups/retrievals, since it's
-  // the same "pick an available driver" interaction either way.
+  // Visitor-side counterpart to pendingTaskId — a freshly-created visitor
+  // token also needs a driver assigned right away to collect the key.
   const [pendingVisitorId, setPendingVisitorId] = useState<number | null>(null);
-  const [pendingVisitorMode, setPendingVisitorMode] = useState<'park' | 'retrieve' | null>(null);
 
   const [vName, setVName] = useState('');
   const [vCar, setVCar] = useState('');
   const [vMobile, setVMobile] = useState('');
   const [vVehicleType, setVVehicleType] = useState<'car' | 'bike'>('car');
-  const [vPurpose, setVPurpose] = useState('');
+  // Which input currently has the keyboard — drives the focus ring so the
+  // active field visibly "wakes up" instead of looking like a static box.
+  const [focused, setFocused] = useState<string | null>(null);
+  // Return-key chaining: enter on one field jumps to the next.
+  const fieldRefs = useRef<Record<string, TextInput | null>>({});
 
-  // "Active Tasks" = already assigned to a driver — a bare 'requested'
-  // retrieval isn't a task for anyone to act on yet, it's shown separately
-  // below until the valet assigns a driver to it.
-  const activeTasks = tasks.filter(t => t.status !== 'completed' && t.status !== 'requested');
-  // Least-busy first — every job fully occupies a driver, so among the
-  // available pool "fewest jobs completed today" is the fairest tiebreaker
-  // for who gets suggested. The valet can still tap any driver in the list.
-  const availableDrivers = drivers
-    .filter(d => d.status === 'available')
-    .sort((a, b) => (a.completedToday ?? 0) - (b.completedToday ?? 0));
-  // Pending retrieval requests — created only by the doctor/staff who owns
-  // the car (see ParkingScreen "Request Retrieval"). The valet's job here is
-  // strictly to assign a driver to an existing request, never to invent one.
-  const retrievalRequests = tasks.filter(t => t.type === 'retrieve' && t.status === 'requested');
-  const activeVisitors = visitors.filter(v => v.status !== 'retrieved' && v.status !== 'cancelled');
-  // A visitor's driverId is reused from the park leg and isn't cleared until
-  // retrieval completes, so it alone can't tell us whether a driver is
-  // *actively* out on the retrieval right now — checking that driver's own
-  // currentTaskId against this visitor is what disambiguates it. Mirrors the
-  // same check the backend does in visitor.service.js assignRetrievalDriver.
-  const hasActiveRetrievalDriver = (v: Visitor) => drivers.some(d => d.currentTaskId === v.id && d.status === 'busy');
-  const pendingTask = pendingTaskId ? tasks.find(t => t.id === pendingTaskId) ?? null : null;
   const pendingVisitor = pendingVisitorId ? visitors.find(v => v.id === pendingVisitorId) ?? null : null;
+  const pendingTask = pendingTaskId ? tasks.find(t => t.id === pendingTaskId) ?? null : null;
+
+  // Accept-timeout / reject prompt: the backend watchdog (or the driver's
+  // explicit reject) freed the job and asked us — the valet — to pick
+  // another driver. Confirming jumps straight into the assign screen.
+  const {reassignPrompt, clearReassignPrompt} = useAppState();
+  useEffect(() => {
+    if (!reassignPrompt) return;
+    const what = reassignPrompt.kind === 'task'
+      ? `${reassignPrompt.task?.carNumber ?? 'this car'} (${reassignPrompt.task?.doctorName ?? ''})`
+      : `${reassignPrompt.visitor?.name ?? 'this visitor'}'s car`;
+    const why = reassignPrompt.rejected ? 'rejected the job' : "didn't accept in time";
+    Alert.alert(
+      '⚠️ Driver did not accept',
+      `${reassignPrompt.driverName} ${why} for ${what}. Assign another driver?`,
+      [
+        {text: 'Later', style: 'cancel', onPress: clearReassignPrompt},
+        {
+          text: 'Reassign now',
+          onPress: () => {
+            if (reassignPrompt.kind === 'task' && reassignPrompt.task) {
+              setPendingVisitorId(null);
+              setPendingTaskId(reassignPrompt.task.id);
+            } else if (reassignPrompt.visitor) {
+              setPendingTaskId(null);
+              setPendingVisitorId(reassignPrompt.visitor.id);
+            }
+            setScreen('assign');
+            clearReassignPrompt();
+          },
+        },
+      ],
+    );
+  }, [reassignPrompt, clearReassignPrompt]);
 
   const handleScanCode = async () => {
     setCodeError('');
     const trimmed = code.trim();
     try {
       const found = await usersApi.lookupByCardCode(trimmed);
-      setFoundUser(found);
-      // Reuse the car number already on file for this person — no need for
-      // the valet to retype it every single visit.
-      setCarNumber(found.carNumber ?? '');
       setCode('');
+      // Staff already set their car number up on their own login — if it's
+      // on file, skip straight to driver assignment instead of asking the
+      // valet to retype something that's already known.
+      if (found.carNumber?.trim()) {
+        await createKeyTask(found, found.carNumber.trim());
+      } else {
+        setFoundUser(found);
+        setCarNumber('');
+      }
     } catch (err) {
       setCodeError('No user found with this code');
     }
   };
 
-  const handleKeyReceived = async () => {
-    if (!foundUser || !carNumber.trim()) return;
+  const createKeyTask = async (user: any, plate: string) => {
     try {
       const id = await addTask({
         type: 'park',
-        doctorId: foundUser.id,
-        doctorName: foundUser.name,
-        carNumber: carNumber.trim().toUpperCase(),
+        doctorId: user.id,
+        doctorName: user.name,
+        carNumber: plate.toUpperCase(),
         status: 'assigned',
         assignedAt: Date.now(),
       });
@@ -104,69 +127,36 @@ export function ValetHomeScreen() {
       pushNotification({
         targetRole: 'driver',
         title: '🚗 New Parking Task',
-        body: `Car ${carNumber.toUpperCase()} — ${foundUser.name}. Report to valet counter.`,
+        body: `Car ${plate.toUpperCase()} — ${user.name}. Report to valet counter.`,
         type: 'info',
       });
+      setFoundUser(null); setCarNumber('');
       setScreen('assign');
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Something went wrong');
     }
   };
 
+  const handleKeyReceived = async () => {
+    if (!foundUser || !carNumber.trim()) return;
+    await createKeyTask(foundUser, carNumber.trim());
+  };
+
   const handleAssignDriver = async (driverId: number) => {
-    if (pendingVisitorId) {
-      const visitor = visitors.find(v => v.id === pendingVisitorId);
-      try {
-        if (pendingVisitorMode === 'retrieve') {
-          await assignRetrievalDriver(pendingVisitorId, driverId);
-          pushNotification({
-            targetRole: `driver:${driverId}`, targetId: driverId,
-            title: '🔔 Visitor Retrieval!',
-            body: `Bring ${visitor?.carNumber} from slot ${visitor?.slotId} back for ${visitor?.name}.`,
-            type: 'alarm',
-          });
-        } else {
-          await assignVisitorDriver(pendingVisitorId, driverId);
-          pushNotification({
-            targetRole: `driver:${driverId}`, targetId: driverId,
-            title: '🔔 Visitor Car Pickup!',
-            body: `Collect key from valet for ${visitor?.name}'s car (${visitor?.carNumber}).`,
-            type: 'alarm',
-          });
-        }
-      } catch (err: any) {
-        Alert.alert('Error', err.message || 'Something went wrong');
+    try {
+      if (pendingVisitorId) {
+        await assignVisitorPickupDriver(pendingVisitorId, driverId);
+        setPendingVisitorId(null);
+      } else if (pendingTaskId) {
+        await assignTaskDriver(pendingTaskId, driverId);
+        setFoundUser(null); setCarNumber(''); setPendingTaskId(null);
+      } else {
         return;
       }
-      setPendingVisitorId(null); setPendingVisitorMode(null);
-      setScreen('home');
-      return;
-    }
-
-    if (!pendingTaskId) return;
-    try {
-      const task = tasks.find(t => t.id === pendingTaskId);
-      const isRetrieve = task?.type === 'retrieve';
-      await assignDriver(pendingTaskId, driverId);
-      pushNotification({
-        targetRole: `driver:${driverId}`, // precise: only the assigned driver, not every driver
-        targetId: driverId,
-        title: isRetrieve ? '🔔 Retrieval Task!' : '🔔 Task Assigned!',
-        body: isRetrieve
-          ? `Retrieve ${task?.carNumber} from slot ${task?.slotId} for ${task?.doctorName}.`
-          : `Collect key from valet for ${task?.doctorName}'s car (${task?.carNumber}).`,
-        type: 'alarm',
-      });
-      setFoundUser(null); setCarNumber(''); setPendingTaskId(null);
       setScreen('home');
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Something went wrong');
     }
-  };
-
-  const handleAssignRetrieval = (taskId: number) => {
-    setPendingTaskId(taskId);
-    setScreen('assign');
   };
 
   const handleAddVisitor = async () => {
@@ -177,44 +167,41 @@ export function ValetHomeScreen() {
         carNumber: vCar.trim() ? vCar.trim().toUpperCase() : undefined,
         mobile: vMobile.trim(),
         vehicleType: vVehicleType,
-        purpose: vPurpose.trim() || undefined,
       });
       sendWhatsApp(vMobile.trim(), vName.trim(), visitor.carNumber, visitor.token, visitor.publicToken);
-      setVName(''); setVCar(''); setVMobile(''); setVVehicleType('car'); setVPurpose('');
+      setVName(''); setVCar(''); setVMobile(''); setVVehicleType('car');
       // Straight into driver assignment — a token with nobody assigned to
       // collect the key is exactly the gap this flow used to leave open.
       setPendingVisitorId(visitor.id);
-      setPendingVisitorMode('park');
       setScreen('assign');
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Something went wrong');
     }
   };
 
-  const handleRequestVisitorRetrieval = (visitorId: number) => {
-    setPendingVisitorId(visitorId);
-    setPendingVisitorMode('retrieve');
+  const handleAssignRetrieval = (taskId: number) => {
+    setPendingTaskId(taskId);
     setScreen('assign');
   };
 
-  const handleCancelVisitor = (visitorId: number) => {
-    Alert.alert('Cancel Visitor Token', 'Why is this being cancelled?', [
-      {text: 'Never mind', style: 'cancel'},
-      {text: 'No-Show', onPress: () => cancelVisitor(visitorId, 'no_show').catch(err => Alert.alert('Error', err.message || 'Something went wrong'))},
-      {text: 'Cancel Visit', style: 'destructive', onPress: () => cancelVisitor(visitorId, 'valet_cancelled').catch(err => Alert.alert('Error', err.message || 'Something went wrong'))},
-    ]);
+  const handleConfirmTaskDelivered = async (taskId: number) => {
+    try {
+      await confirmTaskDelivered(taskId);
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not confirm handover');
+    }
   };
 
   // ── SCAN / KEY COLLECTION ──────────────────────────────────────────────
   if (screen === 'scan') {
     return (
       <SafeAreaView style={[s.safe, {backgroundColor: colors.background}]}>
-        <View style={s.header}>
-          <TouchableOpacity onPress={() => { setScreen('home'); setFoundUser(null); setCode(''); setCodeError(''); }} style={[s.backBtn, {backgroundColor: colors.surface, borderColor: colors.border}]}>
-            <Text style={[s.backTxt, {color: colors.textPrimary}]}>← Back</Text>
-          </TouchableOpacity>
+        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={colors.background} />
+        <View style={s.headerCompact}>
+          <PressableScale onPress={() => { setScreen('home'); setFoundUser(null); setCode(''); setCodeError(''); }} style={[s.circleBack, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+            <Icon name="back" size={18} color={colors.textPrimary} />
+          </PressableScale>
           <Text style={[s.headerTitle, {color: colors.textPrimary}]}>Key Collection</Text>
-          <View style={{width: 70}} />
         </View>
         <ScrollView contentContainerStyle={s.subContent}>
           {!foundUser ? (
@@ -222,48 +209,76 @@ export function ValetHomeScreen() {
               <Text style={[s.stepLabel, {color: colors.textMuted}]}>STEP 1 — IDENTIFY</Text>
               <Text style={[s.stepDesc, {color: colors.textPrimary}]}>Enter the 3-digit code from the doctor/staff card</Text>
               <View style={[s.codeBox, {backgroundColor: colors.surface, borderColor: colors.border}]}>
-                <TextInput
-                  style={[s.codeInput, {color: colors.textPrimary, borderBottomColor: colors.primary}]}
-                  value={code}
-                  onChangeText={t => { setCode(t.replace(/\D/g, '').slice(0, 3)); setCodeError(''); }}
-                  keyboardType="numeric"
-                  maxLength={3}
-                  placeholder="• • •"
-                  placeholderTextColor={colors.textMuted}
-                  textAlign="center"
-                  autoFocus
-                />
+                {/* OTP-style code entry — three visible cells that fill per
+                    digit, driven by one invisible TextInput stretched over
+                    them so tapping anywhere focuses the keyboard. */}
+                <View style={s.otpRow}>
+                  {[0, 1, 2].map(i => {
+                    const digit = code[i];
+                    const active = focused === 'code' && code.length === i;
+                    return (
+                      <View key={i} style={[
+                        s.otpCell,
+                        {backgroundColor: colors.background, borderColor: active ? colors.textPrimary : colors.border, borderWidth: active ? 2 : 1.5},
+                      ]}>
+                        {digit
+                          ? <Text style={[s.otpDigit, {color: colors.textPrimary}]}>{digit}</Text>
+                          : <View style={[s.otpDot, {backgroundColor: colors.textMuted}]} />}
+                      </View>
+                    );
+                  })}
+                  <TextInput
+                    style={s.otpHidden}
+                    value={code}
+                    onChangeText={t => { setCode(t.replace(/\D/g, '').slice(0, 3)); setCodeError(''); }}
+                    onFocus={() => setFocused('code')}
+                    onBlur={() => setFocused(null)}
+                    keyboardType="numeric"
+                    maxLength={3}
+                    caretHidden
+                    autoFocus
+                  />
+                </View>
                 {!!codeError && <Text style={[s.codeError, {color: colors.error}]}>{codeError}</Text>}
-                <TouchableOpacity
-                  style={[s.actionBtn, {backgroundColor: colors.primary, opacity: code.length === 3 ? 1 : 0.4}]}
+                <PressableScale
+                  style={[s.actionBtn, {backgroundColor: code.length === 3 ? colors.primary : colors.cardAlt}]}
                   onPress={handleScanCode} disabled={code.length !== 3}
                 >
-                  <Text style={s.actionBtnTxt}>Find Customer →</Text>
-                </TouchableOpacity>
+                  <Text style={[s.actionBtnTxt, {color: code.length === 3 ? colors.textOnPrimary : colors.textMuted}]}>Find Customer</Text>
+                  <Icon name="arrowRight" size={15} color={code.length === 3 ? colors.textOnPrimary : colors.textMuted} />
+                </PressableScale>
               </View>
             </>
           ) : (
             <>
               <Text style={[s.stepLabel, {color: colors.textMuted}]}>STEP 2 — CONFIRM & COLLECT KEY</Text>
               <View style={[s.foundCard, {backgroundColor: colors.success + '12', borderColor: colors.success + '40'}]}>
-                <Text style={s.foundIcon}>✅</Text>
+                <View style={[s.foundIconWrap, {backgroundColor: colors.successLight}]}>
+                  <Icon name="check" size={26} color={colors.success} />
+                </View>
                 <Text style={[s.foundName, {color: colors.textPrimary}]}>{foundUser.name}</Text>
                 <Text style={[s.foundDept, {color: colors.textSecondary}]}>{foundUser.department ?? foundUser.role}</Text>
                 <Text style={[s.foundId, {color: colors.textMuted}]}>ID: {foundUser.employeeId}</Text>
               </View>
               <Text style={[s.fieldLabel, {color: colors.textMuted}]}>CAR NUMBER PLATE</Text>
-              <View style={[s.inputRow, {borderColor: colors.border, backgroundColor: colors.surface}]}>
-                <Text style={s.inputIcon}>🚘</Text>
+              <View style={[s.inputRow, {borderColor: focused === 'plate' ? colors.textPrimary : colors.border, backgroundColor: colors.surface}]}>
+                <View style={[s.inputIconWrap, {backgroundColor: colors.cardAlt}]}>
+                  <Icon name="car" size={16} color={focused === 'plate' ? colors.textPrimary : colors.textMuted} />
+                </View>
                 <TextInput style={[s.textInput, {color: colors.textPrimary}]} value={carNumber}
                   onChangeText={setCarNumber} placeholder="e.g. TN09 AB 1234"
+                  onFocus={() => setFocused('plate')} onBlur={() => setFocused(null)}
+                  returnKeyType="done"
+                  onSubmitEditing={() => carNumber.trim() && handleKeyReceived()}
                   placeholderTextColor={colors.textMuted} autoCapitalize="characters" />
               </View>
-              <TouchableOpacity
-                style={[s.actionBtn, {backgroundColor: colors.success, opacity: carNumber.trim() ? 1 : 0.4}]}
+              <PressableScale
+                style={[s.actionBtn, {backgroundColor: carNumber.trim() ? colors.primary : colors.cardAlt}]}
                 onPress={handleKeyReceived} disabled={!carNumber.trim()}
               >
-                <Text style={s.actionBtnTxt}>✓ Key Received — Assign Driver</Text>
-              </TouchableOpacity>
+                <Icon name="check" size={15} color={carNumber.trim() ? colors.textOnPrimary : colors.textMuted} />
+                <Text style={[s.actionBtnTxt, {color: carNumber.trim() ? colors.textOnPrimary : colors.textMuted}]}>Key Received — Assign Driver</Text>
+              </PressableScale>
             </>
           )}
         </ScrollView>
@@ -275,10 +290,11 @@ export function ValetHomeScreen() {
   if (screen === 'assign') {
     return (
       <SafeAreaView style={[s.safe, {backgroundColor: colors.background}]}>
+        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={colors.background} />
         <View style={s.header}>
-          <TouchableOpacity onPress={() => { setScreen('home'); setPendingVisitorId(null); setPendingVisitorMode(null); }} style={[s.backBtn, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+          <PressableScale onPress={() => { setScreen('home'); setPendingVisitorId(null); }} style={[s.backBtn, {backgroundColor: colors.surface, borderColor: colors.border}]}>
             <Text style={[s.backTxt, {color: colors.textPrimary}]}>Skip</Text>
-          </TouchableOpacity>
+          </PressableScale>
           <Text style={[s.headerTitle, {color: colors.textPrimary}]}>Assign Driver</Text>
           <View style={{width: 70}} />
         </View>
@@ -286,34 +302,54 @@ export function ValetHomeScreen() {
           <Text style={[s.stepLabel, {color: colors.textMuted}]}>SELECT DRIVER</Text>
           <Text style={[s.stepDesc, {color: colors.textPrimary}]}>
             {pendingVisitor
-              ? (pendingVisitorMode === 'retrieve'
-                ? `Assign a driver to retrieve ${pendingVisitor.carNumber} from slot ${pendingVisitor.slotId} for ${pendingVisitor.name}`
-                : `Tap a driver to collect the key and park ${pendingVisitor.name}'s car (${pendingVisitor.carNumber})`)
+              ? `Tap a driver to collect the key and park ${pendingVisitor.name}'s car (${pendingVisitor.carNumber})`
               : pendingTask?.type === 'retrieve'
               ? `Assign a driver to retrieve ${pendingTask.carNumber} from slot ${pendingTask.slotId}`
               : 'Tap a driver to assign this parking task'}
           </Text>
-          {availableDrivers.length === 0 && (
+          <DriverPickerList drivers={availableDrivers} onAssign={handleAssignDriver} />
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  // ── RETRIEVAL REQUESTS ───────────────────────────────────────────────
+  if (screen === 'retrievals') {
+    return (
+      <SafeAreaView style={[s.safe, {backgroundColor: colors.background}]}>
+        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={colors.background} />
+        <View style={s.headerCompact}>
+          <PressableScale onPress={() => setScreen('home')} style={[s.circleBack, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+            <Icon name="back" size={18} color={colors.textPrimary} />
+          </PressableScale>
+          <Text style={[s.headerTitle, {color: colors.textPrimary}]}>Retrieval Requests</Text>
+        </View>
+        <ScrollView contentContainerStyle={s.subContent}>
+          {retrievalRequests.length === 0 ? (
             <View style={[s.emptyBox, {borderColor: colors.border}]}>
-              <Text style={s.emptyIcon}>⏳</Text>
-              <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No drivers available right now</Text>
+              <Icon name="inbox" size={26} color={colors.textMuted} style={{marginBottom: 8}} />
+              <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No retrieval requests right now.</Text>
             </View>
-          )}
-          {availableDrivers.map((d, i) => (
-            <TouchableOpacity key={d.id} style={[s.driverCard, {backgroundColor: colors.surface, borderColor: i === 0 ? colors.primary + '80' : colors.success + '44'}]}
-              onPress={() => handleAssignDriver(d.id)} activeOpacity={0.75}>
-              <View style={[s.driverStripe, {backgroundColor: i === 0 ? colors.primary : colors.success}]} />
-              <View style={[s.avatar, {backgroundColor: colors.primary + '18'}]}>
-                <Text style={[s.avatarTxt, {color: colors.primary}]}>{d.name[0]}</Text>
+          ) : retrievalRequests.map(t => (
+            <View key={t.id} style={[s.taskCard, {backgroundColor: colors.surface, borderColor: colors.border, borderLeftColor: colors.warning}]}>
+              <View style={s.taskTop}>
+                <View style={[s.typePill, {backgroundColor: colors.warning + '15'}]}>
+                  <Icon name="parking" size={11} color={colors.warning} />
+                  <Text style={[s.typePillTxt, {color: colors.warning}]}>SLOT {t.slotId}</Text>
+                </View>
+                <Text style={[s.taskStatusTxt, {color: colors.warning}]}>{t.eta ? `Leaving in ${t.eta} min` : 'Requested'}</Text>
               </View>
-              <View style={{flex: 1}}>
-                <Text style={[s.driverName, {color: colors.textPrimary}]}>{d.name}</Text>
-                <Text style={[s.driverStatusTxt, {color: colors.success}]}>
-                  {i === 0 ? '⭐ Suggested · ' : ''}{d.completedToday ?? 0} done today
-                </Text>
+              <Text style={[s.taskDoctor, {color: colors.textPrimary}]}>{t.doctorName}</Text>
+              <View style={s.taskMetaRow}>
+                <Icon name="car" size={12} color={colors.textSecondary} />
+                <Text style={[s.taskMeta, {color: colors.textSecondary}]}>{t.carNumber}</Text>
               </View>
-              <Text style={[s.assignArrow, {color: colors.primary}]}>Assign →</Text>
-            </TouchableOpacity>
+              <PressableScale style={[s.taskActionBtn, {borderColor: colors.warning, backgroundColor: colors.warning + '12'}]}
+                onPress={() => handleAssignRetrieval(t.id)}>
+                <Icon name="arrowUp" size={13} color={colors.warning} />
+                <Text style={[s.taskActionTxt, {color: colors.warning}]}>Assign Driver</Text>
+              </PressableScale>
+            </View>
           ))}
         </ScrollView>
       </SafeAreaView>
@@ -324,219 +360,231 @@ export function ValetHomeScreen() {
   if (screen === 'visitor') {
     return (
       <SafeAreaView style={[s.safe, {backgroundColor: colors.background}]}>
-        <View style={s.header}>
-          <TouchableOpacity onPress={() => setScreen('home')} style={[s.backBtn, {backgroundColor: colors.surface, borderColor: colors.border}]}>
-            <Text style={[s.backTxt, {color: colors.textPrimary}]}>← Back</Text>
-          </TouchableOpacity>
+        <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={colors.background} />
+        <View style={s.headerCompact}>
+          <PressableScale onPress={() => setScreen('home')} style={[s.circleBack, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+            <Icon name="back" size={18} color={colors.textPrimary} />
+          </PressableScale>
           <Text style={[s.headerTitle, {color: colors.textPrimary}]}>Visitor / Patient</Text>
-          <View style={{width: 70}} />
         </View>
         <ScrollView contentContainerStyle={s.subContent}>
           <Text style={[s.stepLabel, {color: colors.textMuted}]}>VISITOR DETAILS</Text>
           <Text style={[s.stepDesc, {color: colors.textPrimary}]}>WhatsApp tracking link will be sent automatically</Text>
           {[
-            {label: 'Full Name', icon: '👤', val: vName, set: setVName, ph: 'Patient / Visitor name', kb: 'default' as const},
-            {label: 'Mobile Number', icon: '📱', val: vMobile, set: setVMobile, ph: '10-digit number', kb: 'numeric' as const},
-            {label: 'Car Number (optional)', icon: '🚘', val: vCar, set: setVCar, ph: 'e.g. TN09 AB 1234', kb: 'default' as const},
-            {label: 'Purpose of Visit (optional)', icon: '📋', val: vPurpose, set: setVPurpose, ph: 'e.g. OPD, Cardiology', kb: 'default' as const},
-          ].map(f => (
-            <View key={f.label} style={{marginBottom: 4}}>
-              <Text style={[s.fieldLabel, {color: colors.textMuted}]}>{f.label.toUpperCase()}</Text>
-              <View style={[s.inputRow, {borderColor: colors.border, backgroundColor: colors.surface}]}>
-                <Text style={s.inputIcon}>{f.icon}</Text>
-                <TextInput style={[s.textInput, {color: colors.textPrimary}]} value={f.val} onChangeText={f.set}
-                  placeholder={f.ph} placeholderTextColor={colors.textMuted}
-                  keyboardType={f.kb} autoCapitalize={f.kb === 'default' ? 'words' : 'none'} />
+            {key: 'name', label: 'Full Name', icon: 'user' as IconName, val: vName, set: setVName, ph: 'Patient / Visitor name', kb: 'default' as const},
+            {key: 'mobile', label: 'Mobile Number', icon: 'phone' as IconName, val: vMobile, set: setVMobile, ph: '10-digit number', kb: 'numeric' as const},
+            {key: 'car', label: 'Car Number (optional)', icon: 'car' as IconName, val: vCar, set: setVCar, ph: 'e.g. TN09 AB 1234', kb: 'default' as const},
+          ].map((f, i, arr) => {
+            const nextKey = arr[i + 1]?.key;
+            return (
+              <View key={f.key} style={{marginBottom: 4}}>
+                <Text style={[s.fieldLabel, {color: colors.textMuted}]}>{f.label.toUpperCase()}</Text>
+                <View style={[s.inputRow, {borderColor: focused === f.key ? colors.textPrimary : colors.border, backgroundColor: colors.surface}]}>
+                  <View style={[s.inputIconWrap, {backgroundColor: colors.cardAlt}]}>
+                    <Icon name={f.icon} size={16} color={focused === f.key ? colors.textPrimary : colors.textMuted} />
+                  </View>
+                  <TextInput style={[s.textInput, {color: colors.textPrimary}]} value={f.val} onChangeText={f.set}
+                    ref={r => { fieldRefs.current[f.key] = r; }}
+                    onFocus={() => setFocused(f.key)} onBlur={() => setFocused(null)}
+                    returnKeyType={nextKey ? 'next' : 'done'}
+                    blurOnSubmit={!nextKey}
+                    onSubmitEditing={() => nextKey && fieldRefs.current[nextKey]?.focus()}
+                    placeholder={f.ph} placeholderTextColor={colors.textMuted}
+                    keyboardType={f.kb} autoCapitalize={f.kb === 'default' ? 'words' : 'none'} />
+                </View>
               </View>
-            </View>
-          ))}
+            );
+          })}
           <Text style={[s.fieldLabel, {color: colors.textMuted}]}>VEHICLE TYPE</Text>
           <View style={{flexDirection: 'row', gap: 10, marginBottom: 16}}>
-            {(['car', 'bike'] as const).map(t => (
-              <TouchableOpacity key={t} onPress={() => setVVehicleType(t)} activeOpacity={0.8}
-                style={[s.roleChip, {borderColor: vVehicleType === t ? colors.primary : colors.border, backgroundColor: vVehicleType === t ? colors.primary + '15' : colors.surface, flex: 1, justifyContent: 'center'}]}>
-                <Text style={{fontSize: 16}}>{t === 'car' ? '🚗' : '🏍️'}</Text>
-                <Text style={[s.roleChipTxt, {color: vVehicleType === t ? colors.primary : colors.textSecondary}]}>{t === 'car' ? 'Car' : 'Bike'}</Text>
-              </TouchableOpacity>
-            ))}
+            {(['car', 'bike'] as const).map(t => {
+              const on = vVehicleType === t;
+              return (
+                <PressableScale key={t} onPress={() => setVVehicleType(t)}
+                  style={[s.segment, {backgroundColor: on ? colors.primary : colors.surface, borderColor: on ? colors.primary : colors.border}]}>
+                  <Icon name={t === 'car' ? 'car' : 'bike'} size={16} color={on ? colors.textOnPrimary : colors.textSecondary} />
+                  <Text style={[s.segmentTxt, {color: on ? colors.textOnPrimary : colors.textSecondary}]}>{t === 'car' ? 'Car' : 'Bike'}</Text>
+                </PressableScale>
+              );
+            })}
           </View>
-          <View style={[s.whatsappNote, {backgroundColor: '#25D36614', borderColor: '#25D36638'}]}>
-            <Text style={{fontSize: 18}}>💬</Text>
+          <View style={[s.whatsappNote, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+            <Icon name="whatsapp" size={17} color="#25D366" />
             <Text style={[s.whatsappTxt, {color: colors.textSecondary}]}>
               Live tracking link + parking status will be sent to {vMobile || 'their number'} via WhatsApp.
             </Text>
           </View>
-          <TouchableOpacity
-            style={[s.actionBtn, {backgroundColor: '#25D366', opacity: (vName && vMobile.length >= 10) ? 1 : 0.4, marginTop: 8}]}
+          <PressableScale
+            style={[s.actionBtn, {backgroundColor: (vName && vMobile.length >= 10) ? colors.primary : colors.cardAlt, marginTop: 8}]}
             onPress={handleAddVisitor} disabled={!(vName && vMobile.length >= 10)}
           >
-            <Text style={s.actionBtnTxt}>Generate Token & Send WhatsApp</Text>
-          </TouchableOpacity>
+            <Icon name="whatsapp" size={17} color={(vName && vMobile.length >= 10) ? colors.textOnPrimary : colors.textMuted} />
+            <Text style={[s.actionBtnTxt, {color: (vName && vMobile.length >= 10) ? colors.textOnPrimary : colors.textMuted}]}>Generate Token & Send WhatsApp</Text>
+          </PressableScale>
         </ScrollView>
       </SafeAreaView>
     );
   }
 
-  // ── HOME ───────────────────────────────────────────────────────────────
+  // ── HOME (Queue) ─────────────────────────────────────────────────────
+  const busyDrivers = drivers.filter(d => d.status === 'busy').length;
+  const offDrivers = drivers.filter(d => d.status === 'off').length;
+  const completedToday = drivers.reduce((sum, d) => sum + (d.completedToday ?? 0), 0);
+  const todayLabel = new Date().toLocaleDateString(undefined, {weekday: 'long', month: 'short', day: 'numeric'});
+
   return (
-    <SafeAreaView style={[s.safe, {backgroundColor: colors.background}]}>
+    <SafeAreaView edges={['top','bottom','left','right']} style={[s.safe, {backgroundColor: colors.background}]}>
+      <StatusBar barStyle="light-content" backgroundColor={isDark ? BRAND_GRADIENT_DARK[0] : BRAND_GRADIENT[0]} />
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
-        {/* Gradient header */}
+        {/* Header */}
         <LinearGradient colors={isDark ? BRAND_GRADIENT_DARK : BRAND_GRADIENT} style={s.gradHeader} start={{x:0,y:0}} end={{x:1,y:1}}>
-          <View style={s.greetRow}>
+          <View style={s.gradTopRow}>
             <View>
-              <Text style={s.gradGreetSub}>Valet Station</Text>
+              <Text style={s.gradGreetSub}>{todayLabel}</Text>
               <Text style={s.gradGreetName}>{user?.name}</Text>
             </View>
-            <View style={s.gradBadge}>
-              <Text style={s.gradBadgeNum}>{availableDrivers.length}</Text>
-              <Text style={s.gradBadgeSub}>drivers{'\n'}ready</Text>
+            <PressableScale style={s.inboxBtn} onPress={() => setScreen('retrievals')}>
+              <Icon name="inbox" size={20} color="#fff" />
+              {retrievalRequests.length > 0 && (
+                <View style={s.inboxBadge}>
+                  <Text style={s.inboxBadgeTxt}>{retrievalRequests.length > 9 ? '9+' : retrievalRequests.length}</Text>
+                </View>
+              )}
+            </PressableScale>
+          </View>
+          <View style={s.statRow}>
+            <View style={s.statItem}>
+              <Text style={s.statNum}>{availableDrivers.length}</Text>
+              <Text style={s.statLbl}>Ready</Text>
+            </View>
+            <View style={s.statDivider} />
+            <View style={s.statItem}>
+              <Text style={s.statNum}>{busyDrivers}</Text>
+              <Text style={s.statLbl}>On task</Text>
+            </View>
+            <View style={s.statDivider} />
+            <View style={s.statItem}>
+              <Text style={s.statNum}>{offDrivers}</Text>
+              <Text style={s.statLbl}>Off duty</Text>
+            </View>
+            <View style={s.statDivider} />
+            <View style={s.statItem}>
+              <Text style={s.statNum}>{completedToday}</Text>
+              <Text style={s.statLbl}>Done today</Text>
             </View>
           </View>
         </LinearGradient>
 
         <View style={s.body}>
+        {/* Retrieval requests now live on their own page — see the inbox
+            icon (with badge count) in the header above, and the
+            screen === 'retrievals' block. */}
+
         {/* Primary CTA buttons */}
         <View style={s.primaryRow}>
-          <TouchableOpacity style={[s.primaryBtn, {backgroundColor: colors.primary}]} onPress={() => setScreen('scan')} activeOpacity={0.85}>
+          <PressableScale style={[s.primaryBtn, {backgroundColor: colors.primary}]} onPress={() => setScreen('scan')}>
             <View style={s.primaryIconWrap}><Icon name="key" size={26} color="#fff" /></View>
-            <Text style={s.primaryBtnTxt}>Collect Key</Text>
-            <Text style={s.primaryBtnSub}>Doctor / Staff</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[s.primaryBtn, {backgroundColor: colors.accent}]} onPress={() => setScreen('visitor')} activeOpacity={0.85}>
+            <Text style={s.primaryBtnTxt}>Staff</Text>
+            <Text style={s.primaryBtnSub} numberOfLines={2}>Collect key from doctor / staff</Text>
+          </PressableScale>
+          <PressableScale style={[s.primaryBtn, {backgroundColor: colors.accent}]} onPress={() => setScreen('visitor')}>
             <View style={s.primaryIconWrap}><Icon name="ticket" size={26} color="#fff" /></View>
             <Text style={s.primaryBtnTxt}>Visitor</Text>
-            <Text style={s.primaryBtnSub}>Patient / VIP</Text>
-          </TouchableOpacity>
+            <Text style={s.primaryBtnSub} numberOfLines={2}>Patient / VIP token</Text>
+          </PressableScale>
         </View>
 
-        {/* Driver pills */}
-        <Text style={[s.sectionTitle, {color: colors.textPrimary}]}>Driver Status</Text>
+        {/* Driver status */}
+        <Text style={[s.sectionTitle, {color: colors.textPrimary}]}>Driver Status ({drivers.length})</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{marginHorizontal: -20, marginBottom: 20}} contentContainerStyle={{paddingHorizontal: 20, gap: 10}}>
           {drivers.map(d => {
             const sc = d.status === 'available' ? colors.success : d.status === 'busy' ? colors.warning : colors.textMuted;
-            const sl = d.status === 'available' ? 'Ready' : d.status === 'busy' ? 'On Task' : 'Off Duty';
+            const sl = d.status === 'available' ? 'Ready' : d.status === 'busy' ? 'On task' : 'Off duty';
             return (
-              <View key={d.id} style={[s.driverPill, {backgroundColor: colors.surface, borderColor: sc + '44'}]}>
-                <View style={[s.driverDot, {backgroundColor: sc}]} />
-                <View style={[s.avatar, {backgroundColor: sc + '15', width: 36, height: 36, borderRadius: 18}]}>
-                  <Text style={[s.avatarTxt, {color: sc}]}>{d.name[0]}</Text>
+              <View key={d.id} style={[s.driverPill, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+                <View style={[s.driverPillTop, {borderBottomColor: colors.divider}]}>
+                  <View style={[s.driverAvatar, {backgroundColor: sc + '14'}]}>
+                    <Text style={[s.avatarTxt, {color: sc}]}>{d.name[0]}</Text>
+                  </View>
+                  <Text style={[s.driverPillName, {color: colors.textPrimary}]} numberOfLines={1}>{d.name.split(' ')[0]}</Text>
                 </View>
-                <Text style={[s.driverPillName, {color: colors.textPrimary}]} numberOfLines={1}>{d.name.split(' ')[0]}</Text>
-                <Text style={[s.driverStatusTxt, {color: sc, fontSize: 10}]}>{sl}</Text>
+                <View style={s.driverPillBottom}>
+                  <Text style={[s.driverPillStatus, {color: sc}]}>{sl}</Text>
+                  <Text style={[s.driverPillMeta, {color: colors.textMuted}]}>{d.completedToday ?? 0} today</Text>
+                </View>
               </View>
             );
           })}
         </ScrollView>
 
-        {/* Active tasks */}
-        <Text style={[s.sectionTitle, {color: colors.textPrimary}]}>Active Tasks ({activeTasks.length})</Text>
+        {/* Job Queue — every task from assignment through to the valet's
+            final confirmation that the owner actually took the car back.
+            One card per job, one contextual action button that changes as
+            the job's own stage changes — no separate panel for "needs a
+            driver" vs "needs confirming"; it's all still the same job. */}
+        <Text style={[s.sectionTitle, {color: colors.textPrimary}]}>Job Queue ({activeTasks.length})</Text>
         {activeTasks.length === 0 ? (
           <View style={[s.emptyBox, {borderColor: colors.border}]}>
-            <Text style={s.emptyIcon}>✅</Text>
-            <Text style={[s.emptyTxt, {color: colors.textMuted}]}>All clear — no active tasks</Text>
+            <Icon name="check" size={26} color={colors.textMuted} style={{marginBottom: 8}} />
+            <Text style={[s.emptyTxt, {color: colors.textMuted}]}>All clear — no active jobs</Text>
           </View>
         ) : activeTasks.map(t => {
           const tc = t.type === 'park' ? colors.primary : colors.warning;
-          const sl: Record<string,string> = {assigned:'Waiting for driver', key_collected:'Driver has key', in_transit:'In transit', completed:'Done'};
+          // 'assigned' is the task's status from creation — it does NOT by
+          // itself mean a driver has been picked (a park task starts here
+          // with no driver, and a rejected/timed-out driver rolls a park
+          // task back to 'assigned' with driverId cleared rather than a
+          // separate status). Whether a driver is actually attached has to
+          // come from driverId, not the status string.
+          const needsDriver = t.status === 'assigned' && !t.driverId;
+          // Car's back at the counter, but nothing's confirmed the handover
+          // yet — the one stage on this whole screen that's actually
+          // time-sensitive right now, so the card itself gets highlighted.
+          const needsConfirm = t.status === 'delivered';
+          const sl: Record<string,string> = {
+            assigned: needsDriver ? 'Awaiting driver' : 'Driver assigned',
+            key_collected:'Driver has key', in_transit:'In transit',
+            delivered: 'Awaiting pickup confirmation', completed:'Done',
+          };
           return (
-            <View key={t.id} style={[s.taskCard, {backgroundColor: colors.surface, borderColor: colors.border, borderLeftColor: tc}]}>
+            <View key={t.id} style={[
+              s.taskCard,
+              {backgroundColor: colors.surface, borderColor: colors.border, borderLeftColor: tc},
+              needsConfirm && {borderWidth: 2, borderColor: colors.warning},
+            ]}>
               <View style={s.taskTop}>
                 <View style={[s.typePill, {backgroundColor: tc + '15'}]}>
-                  <Text style={[s.typePillTxt, {color: tc}]}>{t.type === 'park' ? '↓ PARK' : '↑ RETRIEVE'}</Text>
+                  <Icon name={t.type === 'park' ? 'arrowDown' : 'arrowUp'} size={11} color={tc} />
+                  <Text style={[s.typePillTxt, {color: tc}]}>{t.type === 'park' ? 'PARK' : 'RETRIEVE'}</Text>
                 </View>
                 <Text style={[s.taskStatusTxt, {color: tc}]}>{sl[t.status]}</Text>
               </View>
               <Text style={[s.taskDoctor, {color: colors.textPrimary}]}>{t.doctorName}</Text>
-              <Text style={[s.taskMeta, {color: colors.textSecondary}]}>🚘 {t.carNumber}{t.slotId ? ` · Slot ${t.slotId}` : ''}</Text>
+              <View style={s.taskMetaRow}>
+                <Icon name="car" size={12} color={colors.textSecondary} />
+                <Text style={[s.taskMeta, {color: colors.textSecondary}]}>{t.carNumber}{t.slotId ? ` · Slot ${t.slotId}` : ''}</Text>
+              </View>
               {!!t.driverName && <Text style={[s.taskDriverTxt, {color: colors.textMuted}]}>Driver: {t.driverName}</Text>}
-              {t.status === 'assigned' && t.type === 'park' && (
-                <TouchableOpacity style={[s.taskActionBtn, {borderColor: colors.success, backgroundColor: colors.success + '10'}]}
-                  onPress={() => markKeyCollected(t.id)}>
-                  <Text style={[s.taskActionTxt, {color: colors.success}]}>✓ Mark Key Handed to Driver</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          );
-        })}
-
-        {/* Retrieval requests — raised only by the doctor/staff who owns the
-            car (see ParkingScreen). The valet assigns a driver to each; they
-            cannot start a retrieval on their own. */}
-        <Text style={[s.sectionTitle, {color: colors.textPrimary, marginTop: 20}]}>Retrieval Requests ({retrievalRequests.length})</Text>
-        {retrievalRequests.length === 0 ? (
-          <View style={[s.emptyBox, {borderColor: colors.border}]}>
-            <Text style={s.emptyIcon}>🅿️</Text>
-            <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No pending retrieval requests</Text>
-          </View>
-        ) : retrievalRequests.map(t => (
-          <View key={t.id} style={[s.taskCard, {backgroundColor: colors.surface, borderColor: colors.border, borderLeftColor: colors.warning}]}>
-            <View style={s.taskTop}>
-              <View style={[s.typePill, {backgroundColor: colors.warning + '15'}]}>
-                <Text style={[s.typePillTxt, {color: colors.warning}]}>🅿️ SLOT {t.slotId}</Text>
-              </View>
-              <Text style={[s.taskStatusTxt, {color: colors.warning}]}>{t.eta ? `Leaving in ${t.eta} min` : 'Requested'}</Text>
-            </View>
-            <Text style={[s.taskDoctor, {color: colors.textPrimary}]}>{t.doctorName}</Text>
-            <Text style={[s.taskMeta, {color: colors.textSecondary}]}>🚘 {t.carNumber}</Text>
-            <TouchableOpacity style={[s.taskActionBtn, {borderColor: colors.warning, backgroundColor: colors.warning + '12'}]}
-              onPress={() => handleAssignRetrieval(t.id)}>
-              <Text style={[s.taskActionTxt, {color: colors.warning}]}>↑ Assign Driver</Text>
-            </TouchableOpacity>
-          </View>
-        ))}
-
-        {/* Visitors/patients — tokens generated via the Visitor flow. Each
-            one is tracked here until retrieved, so it's always visible who
-            (if anyone) has been assigned to take the keys. */}
-        <Text style={[s.sectionTitle, {color: colors.textPrimary, marginTop: 20}]}>Visitors ({activeVisitors.length})</Text>
-        {activeVisitors.length === 0 ? (
-          <View style={[s.emptyBox, {borderColor: colors.border}]}>
-            <Text style={s.emptyIcon}>🎫</Text>
-            <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No active visitor tokens</Text>
-          </View>
-        ) : activeVisitors.map(v => {
-          const needsDriver = v.status === 'parked' && v.retrievalRequested && !hasActiveRetrievalDriver(v);
-          const vc = v.status === 'parked'
-            ? (v.retrievalRequested ? (needsDriver ? colors.warning : colors.success) : colors.success)
-            : colors.accent;
-          const label = v.status === 'parked'
-            ? (v.retrievalRequested
-              ? (needsDriver ? 'Requested — needs driver' : `${v.driverName ?? 'Driver'} en route`)
-              : `Parked · ${v.slotId ?? ''}`)
-            : v.pickedUpAt ? `${v.driverName ?? 'Driver'} parking now`
-            : v.acceptedAt ? `${v.driverName ?? 'Driver'} collecting key`
-            : v.driverId ? `Waiting for ${v.driverName ?? 'driver'} to accept`
-            : 'Waiting for driver';
-          return (
-            <View key={v.id} style={[s.taskCard, {backgroundColor: colors.surface, borderColor: colors.border, borderLeftColor: vc}]}>
-              <View style={s.taskTop}>
-                <View style={[s.typePill, {backgroundColor: vc + '15'}]}>
-                  <Text style={[s.typePillTxt, {color: vc}]}>🎫 TOKEN {v.token}</Text>
-                </View>
-                <Text style={[s.taskStatusTxt, {color: vc}]}>{label}</Text>
-              </View>
-              <Text style={[s.taskDoctor, {color: colors.textPrimary}]}>{v.name}</Text>
-              <Text style={[s.taskMeta, {color: colors.textSecondary}]}>
-                {v.vehicleType === 'bike' ? '🏍️' : '🚘'} {v.carNumber ?? 'no plate'}{v.purpose ? ` · ${v.purpose}` : ''}
-              </Text>
-              {v.status === 'parked' && !v.retrievalRequested && (
-                <TouchableOpacity style={[s.taskActionBtn, {borderColor: colors.warning, backgroundColor: colors.warning + '12'}]}
-                  onPress={() => handleRequestVisitorRetrieval(v.id)}>
-                  <Text style={[s.taskActionTxt, {color: colors.warning}]}>↑ Request Retrieval</Text>
-                </TouchableOpacity>
-              )}
               {needsDriver && (
-                <TouchableOpacity style={[s.taskActionBtn, {borderColor: colors.warning, backgroundColor: colors.warning + '12'}]}
-                  onPress={() => handleRequestVisitorRetrieval(v.id)}>
-                  <Text style={[s.taskActionTxt, {color: colors.warning}]}>↑ Assign Driver — visitor is ready to leave</Text>
-                </TouchableOpacity>
+                <PressableScale style={[s.taskActionBtn, {borderColor: colors.warning, backgroundColor: colors.warning + '12'}]}
+                  onPress={() => handleAssignRetrieval(t.id)}>
+                  <Icon name="arrowUp" size={13} color={colors.warning} />
+                  <Text style={[s.taskActionTxt, {color: colors.warning}]}>Assign Driver</Text>
+                </PressableScale>
               )}
-              {v.status === 'pending' && (
-                <TouchableOpacity style={[s.taskActionBtn, {borderColor: colors.error, backgroundColor: colors.error + '12', marginTop: 8}]}
-                  onPress={() => handleCancelVisitor(v.id)}>
-                  <Text style={[s.taskActionTxt, {color: colors.error}]}>✕ Cancel / No-Show</Text>
-                </TouchableOpacity>
+              {t.status === 'assigned' && !needsDriver && t.type === 'park' && (
+                <PressableScale style={[s.taskActionBtn, {borderColor: colors.success, backgroundColor: colors.success + '10'}]}
+                  onPress={() => markKeyCollected(t.id)}>
+                  <Icon name="check" size={13} color={colors.success} />
+                  <Text style={[s.taskActionTxt, {color: colors.success}]}>Mark Key Handed to Driver</Text>
+                </PressableScale>
+              )}
+              {needsConfirm && (
+                <PressableScale style={[s.taskActionBtn, {borderColor: colors.success, backgroundColor: colors.success}]}
+                  onPress={() => handleConfirmTaskDelivered(t.id)}>
+                  <Icon name="checkBold" size={13} color="#fff" />
+                  <Text style={[s.taskActionTxt, {color: '#fff'}]}>Confirm Handed to Owner</Text>
+                </PressableScale>
               )}
             </View>
           );
@@ -550,68 +598,79 @@ export function ValetHomeScreen() {
 const s = StyleSheet.create({
   safe:{flex:1}, scroll:{paddingBottom:40},
   body:{padding:16,gap:8},
-  gradHeader:{paddingTop:20,paddingBottom:28,paddingHorizontal:20},
-  greetRow:{flexDirection:'row',justifyContent:'space-between',alignItems:'flex-start'},
-  gradGreetSub:{color:'rgba(255,255,255,0.75)',fontSize:12,fontWeight:'600'},
-  gradGreetName:{color:'#fff',fontSize:20,fontWeight:'900',marginTop:2},
-  gradBadge:{backgroundColor:'rgba(255,255,255,0.2)',borderRadius:14,paddingHorizontal:16,paddingVertical:10,alignItems:'center',borderWidth:1,borderColor:'rgba(255,255,255,0.25)'},
-  gradBadgeNum:{color:'#fff',fontSize:24,fontWeight:'900'},
-  gradBadgeSub:{color:'rgba(255,255,255,0.75)',fontSize:10,fontWeight:'700',textAlign:'center'},
+  gradHeader:{paddingTop:16,paddingBottom:20,paddingHorizontal:20},
+  gradTopRow:{flexDirection:'row',justifyContent:'space-between',alignItems:'flex-start'},
+  gradGreetSub:{color:'rgba(255,255,255,0.65)',fontSize:12,fontWeight:'600'},
+  gradGreetName:{color:'#fff',fontSize:24,fontWeight:'900',marginTop:2,marginBottom:18},
+  inboxBtn:{width:40,height:40,borderRadius:20,alignItems:'center',justifyContent:'center',backgroundColor:'rgba(255,255,255,0.18)'},
+  inboxBadge:{position:'absolute',top:-4,right:-4,minWidth:18,height:18,borderRadius:9,paddingHorizontal:4,backgroundColor:'#E53935',alignItems:'center',justifyContent:'center',borderWidth:1.5,borderColor:'#fff'},
+  inboxBadgeTxt:{color:'#fff',fontSize:10,fontWeight:'800'},
+  statRow:{flexDirection:'row',alignItems:'center'},
+  statItem:{flex:1},
+  statNum:{color:'#fff',fontSize:20,fontWeight:'900'},
+  statLbl:{color:'rgba(255,255,255,0.6)',fontSize:11,fontWeight:'600',marginTop:2},
+  statDivider:{width:1,height:28,backgroundColor:'rgba(255,255,255,0.15)',marginHorizontal:4},
+
   header:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',padding:16,paddingTop:20},
-  backBtn:{borderRadius:10,borderWidth:1,paddingHorizontal:12,paddingVertical:8},
+  headerCompact:{flexDirection:'row',alignItems:'center',gap:12,padding:16,paddingTop:20},
+  circleBack:{width:36,height:36,borderRadius:18,borderWidth:1,alignItems:'center',justifyContent:'center'},
+  backBtn:{flexDirection:'row',alignItems:'center',gap:6,borderRadius:10,borderWidth:1,paddingHorizontal:12,paddingVertical:8},
   backTxt:{fontSize:13,fontWeight:'700'},
   headerTitle:{fontSize:17,fontWeight:'900'},
-  driverBadge:{borderRadius:12,borderWidth:1,paddingHorizontal:14,paddingVertical:8,alignItems:'center'},
-  driverBadgeNum:{fontSize:22,fontWeight:'900'},
-  driverBadgeSub:{fontSize:10,fontWeight:'700',textAlign:'center'},
+
   primaryRow:{flexDirection:'row',gap:12,marginBottom:24},
   primaryBtn:{flex:1,borderRadius:18,padding:20,alignItems:'center'},
   primaryIconWrap:{width:52,height:52,borderRadius:16,backgroundColor:'rgba(255,255,255,0.18)',alignItems:'center',justifyContent:'center',marginBottom:8},
   primaryBtnTxt:{color:'#fff',fontSize:15,fontWeight:'800'},
-  primaryBtnSub:{color:'rgba(255,255,255,0.7)',fontSize:11,marginTop:2},
+  primaryBtnSub:{color:'rgba(255,255,255,0.7)',fontSize:11,lineHeight:14,marginTop:4,height:28,textAlign:'center'},
   sectionTitle:{fontSize:14,fontWeight:'800',marginBottom:12},
-  driverPill:{borderRadius:14,borderWidth:1,padding:10,alignItems:'center',gap:4,width:86,position:'relative'},
-  driverDot:{position:'absolute',top:7,right:7,width:7,height:7,borderRadius:4},
-  driverPillName:{fontSize:11,fontWeight:'700'},
+  driverPill:{borderRadius:16,borderWidth:1,width:128,overflow:'hidden'},
+  driverPillTop:{flexDirection:'row',alignItems:'center',gap:8,padding:12,borderBottomWidth:1},
+  driverAvatar:{width:34,height:34,borderRadius:10,alignItems:'center',justifyContent:'center'},
+  driverPillName:{flex:1,fontSize:13,fontWeight:'800'},
+  driverPillBottom:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',paddingHorizontal:12,paddingVertical:8},
+  driverPillStatus:{fontSize:11,fontWeight:'700'},
+  driverPillMeta:{fontSize:10,fontWeight:'600'},
   taskCard:{borderRadius:16,borderWidth:1,borderLeftWidth:4,padding:16,marginBottom:10},
   taskTop:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',marginBottom:8},
-  typePill:{borderRadius:6,paddingHorizontal:8,paddingVertical:3},
+  typePill:{flexDirection:'row',alignItems:'center',gap:4,borderRadius:6,paddingHorizontal:8,paddingVertical:3},
   typePillTxt:{fontSize:10,fontWeight:'800',letterSpacing:0.5},
   taskStatusTxt:{fontSize:11,fontWeight:'700'},
   taskDoctor:{fontSize:14,fontWeight:'800',marginBottom:2},
-  taskMeta:{fontSize:12,fontWeight:'600',marginBottom:4},
+  taskMetaRow:{flexDirection:'row',alignItems:'center',gap:5,marginBottom:4},
+  taskMeta:{fontSize:12,fontWeight:'600'},
   taskDriverTxt:{fontSize:11,marginBottom:8},
-  taskActionBtn:{borderRadius:10,borderWidth:1,paddingVertical:10,alignItems:'center'},
+  taskActionBtn:{flexDirection:'row',alignItems:'center',justifyContent:'center',gap:6,borderRadius:10,borderWidth:1,paddingVertical:10},
   taskActionTxt:{fontSize:12,fontWeight:'700'},
   emptyBox:{borderRadius:14,borderWidth:1,borderStyle:'dashed',padding:24,alignItems:'center',marginBottom:16},
-  emptyIcon:{fontSize:28,marginBottom:8},
   emptyTxt:{fontSize:13,fontWeight:'600'},
   subContent:{padding:20,paddingBottom:40},
   stepLabel:{fontSize:10,fontWeight:'800',letterSpacing:1.5,marginBottom:8},
   stepDesc:{fontSize:16,fontWeight:'700',marginBottom:24},
   codeBox:{borderRadius:20,borderWidth:1,padding:32,alignItems:'center',gap:20},
-  codeInput:{fontSize:52,fontWeight:'900',letterSpacing:16,borderBottomWidth:3,paddingBottom:8,width:180,textAlign:'center'},
+  otpRow:{flexDirection:'row',gap:14},
+  otpCell:{width:60,height:72,borderRadius:16,alignItems:'center',justifyContent:'center'},
+  otpDigit:{fontSize:34,fontWeight:'900'},
+  otpDot:{width:10,height:10,borderRadius:5},
+  otpHidden:{position:'absolute',top:0,left:0,right:0,bottom:0,opacity:0,fontSize:1},
   codeError:{fontSize:13,fontWeight:'600'},
-  actionBtn:{borderRadius:14,height:52,alignItems:'center',justifyContent:'center',paddingHorizontal:24,width:'100%'},
-  actionBtnTxt:{color:'#fff',fontSize:14,fontWeight:'800'},
+  actionBtn:{flexDirection:'row',alignItems:'center',justifyContent:'center',gap:8,borderRadius:14,height:52,paddingHorizontal:24,width:'100%'},
+  actionBtnTxt:{fontSize:14,fontWeight:'800'},
   foundCard:{borderRadius:16,borderWidth:1,padding:20,alignItems:'center',marginBottom:20},
-  foundIcon:{fontSize:32,marginBottom:8},
+  foundIconWrap:{width:52,height:52,borderRadius:26,alignItems:'center',justifyContent:'center',marginBottom:8},
   foundName:{fontSize:18,fontWeight:'900'},
   foundDept:{fontSize:13,marginTop:2},
   foundId:{fontSize:11,marginTop:4},
   fieldLabel:{fontSize:10,fontWeight:'700',letterSpacing:1,marginBottom:8,marginTop:4},
-  roleChip:{flexDirection:'row',alignItems:'center',gap:6,borderWidth:1.5,borderRadius:12,paddingVertical:12,paddingHorizontal:14},
-  roleChipTxt:{fontSize:13,fontWeight:'700'},
-  inputRow:{flexDirection:'row',alignItems:'center',borderWidth:1.5,borderRadius:12,paddingHorizontal:14,height:52,marginBottom:16},
-  inputIcon:{fontSize:16,marginRight:10},
+  segment:{flex:1,flexDirection:'row',alignItems:'center',justifyContent:'center',gap:8,borderWidth:1.5,borderRadius:14,height:50},
+  segmentTxt:{fontSize:14,fontWeight:'800'},
+  inputRow:{
+    flexDirection:'row',alignItems:'center',borderWidth:1.5,borderRadius:14,paddingHorizontal:10,height:58,marginBottom:16,
+    shadowColor:'#000',shadowOffset:{width:0,height:3},shadowOpacity:0.06,shadowRadius:8,elevation:2,
+  },
+  inputIconWrap:{width:34,height:34,borderRadius:10,alignItems:'center',justifyContent:'center',marginRight:10},
   textInput:{flex:1,fontSize:15,fontWeight:'600'},
-  driverCard:{flexDirection:'row',alignItems:'center',borderRadius:16,borderWidth:1,padding:16,marginBottom:10,gap:12,overflow:'hidden'},
-  driverStripe:{position:'absolute',left:0,top:0,bottom:0,width:4},
-  avatar:{alignItems:'center',justifyContent:'center'},
   avatarTxt:{fontSize:16,fontWeight:'800'},
-  driverName:{fontSize:14,fontWeight:'800'},
-  driverStatusTxt:{fontSize:12,fontWeight:'600'},
-  assignArrow:{fontSize:13,fontWeight:'700'},
   whatsappNote:{flexDirection:'row',alignItems:'flex-start',gap:10,borderRadius:12,borderWidth:1,padding:14,marginBottom:8,marginTop:4},
   whatsappTxt:{flex:1,fontSize:12,lineHeight:17},
 });

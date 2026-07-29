@@ -1,21 +1,15 @@
 import React from 'react';
-import {
-  ScrollView,
-  View,
-  Text,
-  StyleSheet,
-  SafeAreaView,
-  TouchableOpacity,
-  TextInput,
-  Alert,
-} from 'react-native';
+import {ScrollView, View, Text, StyleSheet, Alert} from 'react-native';
+import {PressableScale} from '../../components/PressableScale';
+import {SafeAreaView} from 'react-native-safe-area-context';
 import {useTheme} from '../../context/ThemeContext';
 import {useAuth} from '../../context/AuthContext';
 import {ThemeToggleRow, AppSwitch} from '../../components/AppSwitch';
 import {Card} from '../../components/Card';
+import {Icon, IconName} from '../../components/Icon';
 import {typography, spacing, radius} from '../../theme';
-import {usersApi} from '../../services/api';
 import {APP_VERSION_NAME, APP_VERSION_CODE} from '../../config/version';
+import {adminApi} from '../../services/api';
 
 type ThemeMode = 'light' | 'dark' | 'system';
 
@@ -26,34 +20,35 @@ const ROLE_LABELS: Record<string, string> = {
 
 export function SharedSettingsScreen() {
   const {colors, mode, setMode} = useTheme();
-  const {user, logout, updateProfile} = useAuth();
+  const {user, logout} = useAuth();
+
+  // Admin-only: driver accept window (seconds) — how long a driver has to
+  // accept an assignment before the valet is prompted to reassign.
+  const [acceptTimeout, setAcceptTimeout] = React.useState<number | null>(null);
+  React.useEffect(() => {
+    if (user?.role !== 'admin') return;
+    adminApi.getSettings()
+      .then(s => setAcceptTimeout(Number(s.driverAcceptTimeoutSeconds) || 60))
+      .catch(() => {});
+  }, [user?.role]);
+
+  const changeAcceptTimeout = (delta: number) => {
+    setAcceptTimeout(prev => {
+      const next = Math.min(600, Math.max(10, (prev ?? 60) + delta));
+      adminApi.updateSettings({driverAcceptTimeoutSeconds: next}).catch(() => {});
+      return next;
+    });
+  };
 
   const [notifTasks,    setNotifTasks]    = React.useState(true);
   const [notifShift,    setNotifShift]    = React.useState(true);
   const [notifUpdates,  setNotifUpdates]  = React.useState(false);
   const [biometrics,    setBiometrics]    = React.useState(true);
 
-  const showVehicleField = user?.role === 'doctor' || user?.role === 'staff';
-  const [carNumber, setCarNumber] = React.useState(user?.carNumber ?? '');
-  const [savingCar, setSavingCar] = React.useState(false);
-
-  const handleSaveCarNumber = async () => {
-    setSavingCar(true);
-    try {
-      const updated = await usersApi.updateMe({carNumber: carNumber.trim()});
-      updateProfile({carNumber: updated.carNumber});
-      Alert.alert('Saved', 'Your car number is on file — the valet won’t need to ask for it again.');
-    } catch (err: any) {
-      Alert.alert('Could not save', err.message || 'Something went wrong');
-    } finally {
-      setSavingCar(false);
-    }
-  };
-
-  const modeOptions: {value: ThemeMode; label: string; icon: string}[] = [
-    {value: 'light', label: 'Light', icon: '☀️'},
-    {value: 'dark',  label: 'Dark',  icon: '🌙'},
-    {value: 'system',label: 'System',icon: '📱'},
+  const modeOptions: {value: ThemeMode; label: string; icon: IconName}[] = [
+    {value: 'light', label: 'Light', icon: 'sun'},
+    {value: 'dark',  label: 'Dark',  icon: 'moon'},
+    {value: 'system',label: 'System',icon: 'phone'},
   ];
 
   const initials = user?.name
@@ -63,7 +58,7 @@ export function SharedSettingsScreen() {
     .slice(0, 2) ?? '??';
 
   return (
-    <SafeAreaView style={[styles.safe, {backgroundColor: colors.background}]}>
+    <SafeAreaView edges={['bottom','left','right']} style={[styles.safe, {backgroundColor: colors.background}]}>
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
 
         {/* Profile */}
@@ -81,35 +76,6 @@ export function SharedSettingsScreen() {
           </View>
         </Card>
 
-        {/* Vehicle — doctor/staff only, reused by the valet at key handover */}
-        {showVehicleField && (
-          <>
-            <Text style={[styles.sectionTitle, {color: colors.textMuted}]}>VEHICLE</Text>
-            <Card>
-              <Text style={[styles.cardTitle, {color: colors.textSecondary}]}>Car Number Plate</Text>
-              <View style={styles.carRow}>
-                <TextInput
-                  style={[styles.carInput, {borderColor: colors.border, backgroundColor: colors.cardAlt, color: colors.textPrimary}]}
-                  value={carNumber}
-                  onChangeText={t => setCarNumber(t.toUpperCase())}
-                  placeholder="e.g. TN09 AB 1234"
-                  placeholderTextColor={colors.textMuted}
-                  autoCapitalize="characters"
-                />
-                <TouchableOpacity
-                  style={[styles.carSaveBtn, {backgroundColor: colors.primary, opacity: savingCar ? 0.6 : 1}]}
-                  onPress={handleSaveCarNumber} disabled={savingCar}
-                >
-                  <Text style={styles.carSaveTxt}>Save</Text>
-                </TouchableOpacity>
-              </View>
-              <Text style={[styles.carHint, {color: colors.textMuted}]}>
-                Saved here once — the valet will see it automatically next time you hand over your key.
-              </Text>
-            </Card>
-          </>
-        )}
-
         {/* Appearance */}
         <Text style={[styles.sectionTitle, {color: colors.textMuted}]}>APPEARANCE</Text>
         <ThemeToggleRow />
@@ -119,9 +85,8 @@ export function SharedSettingsScreen() {
             {modeOptions.map(opt => {
               const isActive = mode === opt.value;
               return (
-                <TouchableOpacity
+                <PressableScale
                   key={opt.value}
-                  activeOpacity={0.7}
                   onPress={() => setMode(opt.value)}
                   style={[
                     styles.modeChip,
@@ -130,15 +95,41 @@ export function SharedSettingsScreen() {
                       borderColor: isActive ? colors.primary : colors.border,
                     },
                   ]}>
-                  <Text style={styles.modeIcon}>{opt.icon}</Text>
+                  <Icon name={opt.icon} size={20} color={isActive ? colors.primary : colors.textSecondary} />
                   <Text style={[styles.modeLabel, {color: isActive ? colors.primary : colors.textSecondary}]}>
                     {opt.label}
                   </Text>
-                </TouchableOpacity>
+                </PressableScale>
               );
             })}
           </View>
         </Card>
+
+        {/* Operations (admin only) */}
+        {user?.role === 'admin' && acceptTimeout != null && (
+          <>
+            <Text style={[styles.sectionTitle, {color: colors.textMuted}]}>OPERATIONS</Text>
+            <Card>
+              <Text style={[styles.cardTitle, {color: colors.textSecondary}]}>Driver Accept Timeout</Text>
+              <View style={styles.stepperRow}>
+                <PressableScale
+                  onPress={() => changeAcceptTimeout(-10)}
+                  style={[styles.stepperBtn, {backgroundColor: colors.cardAlt, borderColor: colors.border}]}>
+                  <Text style={[styles.stepperBtnTxt, {color: colors.textPrimary}]}>−10s</Text>
+                </PressableScale>
+                <Text style={[styles.stepperValue, {color: colors.textPrimary}]}>{acceptTimeout}s</Text>
+                <PressableScale
+                  onPress={() => changeAcceptTimeout(10)}
+                  style={[styles.stepperBtn, {backgroundColor: colors.cardAlt, borderColor: colors.border}]}>
+                  <Text style={[styles.stepperBtnTxt, {color: colors.textPrimary}]}>+10s</Text>
+                </PressableScale>
+              </View>
+              <Text style={[styles.infoLabel, {color: colors.textSecondary}]}>
+                If a driver doesn't accept a job within this window, the valet is alerted and asked to reassign.
+              </Text>
+            </Card>
+          </>
+        )}
 
         {/* Notifications */}
         <Text style={[styles.sectionTitle, {color: colors.textMuted}]}>NOTIFICATIONS</Text>
@@ -194,8 +185,7 @@ export function SharedSettingsScreen() {
         </Card>
 
         {/* Logout */}
-        <TouchableOpacity
-          activeOpacity={0.8}
+        <PressableScale
           onPress={() =>
             Alert.alert('Logout', 'Are you sure you want to logout?', [
               {text: 'Cancel', style: 'cancel'},
@@ -204,7 +194,7 @@ export function SharedSettingsScreen() {
           }
           style={[styles.logoutBtn, {backgroundColor: colors.errorLight, borderColor: colors.error + '44'}]}>
           <Text style={[styles.logoutText, {color: colors.error}]}>Logout</Text>
-        </TouchableOpacity>
+        </PressableScale>
 
       </ScrollView>
     </SafeAreaView>
@@ -238,16 +228,15 @@ const styles = StyleSheet.create({
     flex: 1, paddingVertical: spacing.sm, borderRadius: radius.md,
     borderWidth: 1.5, alignItems: 'center', gap: 4,
   },
-  modeIcon: {fontSize: 20},
   modeLabel: {fontSize: typography.sizes.xs, fontWeight: typography.weights.bold, textTransform: 'uppercase', letterSpacing: 0.5},
 
-  carRow: {flexDirection: 'row', gap: spacing.sm},
-  carInput: {flex: 1, borderWidth: 1.5, borderRadius: radius.md, paddingHorizontal: spacing.sm, height: 46, fontSize: typography.sizes.sm, fontWeight: typography.weights.bold},
-  carSaveBtn: {borderRadius: radius.md, paddingHorizontal: spacing.md, height: 46, alignItems: 'center', justifyContent: 'center'},
-  carSaveTxt: {color: '#fff', fontSize: typography.sizes.sm, fontWeight: typography.weights.bold},
-  carHint: {fontSize: typography.sizes.xs, marginTop: spacing.sm, lineHeight: 16},
 
   divider: {height: 1, marginVertical: spacing.xs},
+
+  stepperRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.sm},
+  stepperBtn: {borderRadius: radius.md, borderWidth: 1.5, paddingHorizontal: spacing.base, paddingVertical: spacing.sm},
+  stepperBtnTxt: {fontSize: typography.sizes.sm, fontWeight: typography.weights.bold},
+  stepperValue: {fontSize: typography.sizes.lg, fontWeight: typography.weights.black},
 
   infoRow: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',

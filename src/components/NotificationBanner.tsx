@@ -1,8 +1,10 @@
 import React, {useEffect, useRef, useState} from 'react';
-import {Animated, Text, StyleSheet, TouchableOpacity, Vibration, View} from 'react-native';
+import {Animated, Text, StyleSheet, Vibration, View} from 'react-native';
+import {PressableScale} from './PressableScale';
 import {useAppState} from '../context/AppStateContext';
 import {useAuth} from '../context/AuthContext';
 import {useTheme} from '../context/ThemeContext';
+import {Icon} from './Icon';
 
 export function NotificationBanner() {
   const {notifications, markNotificationRead} = useAppState();
@@ -46,19 +48,17 @@ export function NotificationBanner() {
   return (
     <Animated.View style={[s.banner, {backgroundColor: bgColor, transform: [{translateY: anim}]}]}>
       <View style={s.row}>
-        <Text style={s.icon}>
-          {current.type === 'alarm' ? '🔔' : current.type === 'warning' ? '⚠️' : 'ℹ️'}
-        </Text>
+        <Icon name={current.type === 'alarm' ? 'bellAlert' : current.type === 'warning' ? 'alert' : 'info'} size={22} color="#fff" />
         <View style={s.text}>
           <Text style={s.title}>{current.title}</Text>
           <Text style={s.body}>{current.body}</Text>
         </View>
-        <TouchableOpacity onPress={() => {
+        <PressableScale onPress={() => {
           markNotificationRead(current.id);
           Animated.timing(anim, {toValue: -120, duration: 200, useNativeDriver: true}).start(() => setCurrent(null));
         }}>
-          <Text style={s.close}>✕</Text>
-        </TouchableOpacity>
+          <Icon name="close" size={18} color="#fff" />
+        </PressableScale>
       </View>
     </Animated.View>
   );
@@ -67,9 +67,7 @@ export function NotificationBanner() {
 const s = StyleSheet.create({
   banner: {position: 'absolute', top: 0, left: 0, right: 0, zIndex: 9999, paddingTop: 48, paddingBottom: 16, paddingHorizontal: 16, shadowColor: '#000', shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.3, shadowRadius: 8, elevation: 20},
   row: {flexDirection: 'row', alignItems: 'center', gap: 12},
-  icon: {fontSize: 24},
   text: {flex: 1},
   title: {color: '#fff', fontWeight: '800', fontSize: 14},
   body: {color: 'rgba(255,255,255,0.85)', fontSize: 12, marginTop: 2},
-  close: {color: '#fff', fontSize: 18, fontWeight: '700', padding: 4},
 });

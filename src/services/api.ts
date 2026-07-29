@@ -33,6 +33,11 @@ export function setAuthToken(token: string | null) {
   authToken = token;
 }
 
+/** Same JWT the REST calls use — handed to the socket connection auth. */
+export function getAuthToken(): string | null {
+  return authToken;
+}
+
 /** Called once by AuthContext to force a logout when any request comes back 401. */
 export function setUnauthorizedHandler(handler: (() => void) | null) {
   onUnauthorized = handler;
@@ -106,6 +111,10 @@ export const tasksApi = {
     client.post('/tasks/request-retrieval', data).then(r => r.data.task),
   assignDriver: (id: number, driverId: number) =>
     client.patch(`/tasks/${id}/assign`, {driverId}).then(r => r.data.task),
+  accept: (id: number) =>
+    client.patch(`/tasks/${id}/accept`).then(r => r.data.task),
+  reject: (id: number) =>
+    client.patch(`/tasks/${id}/reject`).then(r => r.data.task),
   keyCollected: (id: number) =>
     client.patch(`/tasks/${id}/key-collected`).then(r => r.data.task),
   inTransit: (id: number) =>
@@ -114,6 +123,8 @@ export const tasksApi = {
     client.patch(`/tasks/${id}/park`, {slotId}).then(r => r.data.task),
   retrieve: (id: number) =>
     client.patch(`/tasks/${id}/retrieve`).then(r => r.data.task),
+  confirmDelivered: (id: number) =>
+    client.patch(`/tasks/${id}/confirm-delivered`).then(r => r.data.task),
   updateLocation: (id: number, lat: number, lng: number) =>
     client.patch(`/tasks/${id}/location`, {lat, lng}).then(r => r.data.task),
 };
@@ -136,7 +147,7 @@ export const slotsApi = {
 // ── Visitors ─────────────────────────────────────────────────────────────
 export const visitorsApi = {
   list: () => client.get('/visitors').then(r => r.data.visitors),
-  create: (data: {name: string; carNumber?: string; mobile: string; vehicleType?: 'car' | 'bike'; purpose?: string}) =>
+  create: (data: {name: string; carNumber?: string; mobile: string; vehicleType?: 'car' | 'bike'}) =>
     client.post('/visitors', data).then(r => r.data.visitor),
   assignDriver: (id: number, driverId: number) =>
     client.patch(`/visitors/${id}/assign`, {driverId}).then(r => r.data.visitor),
@@ -155,6 +166,8 @@ export const visitorsApi = {
     client.patch(`/visitors/${id}/assign-retrieval`, {driverId}).then(r => r.data.visitor),
   retrieve: (id: number) =>
     client.patch(`/visitors/${id}/retrieve`).then(r => r.data.visitor),
+  confirmDelivered: (id: number) =>
+    client.patch(`/visitors/${id}/confirm-delivered`).then(r => r.data.visitor),
 };
 
 // ── Notifications ────────────────────────────────────────────────────────
@@ -164,6 +177,10 @@ export const notificationsApi = {
     client.post('/notifications', data).then(r => r.data.notification),
   markRead: (id: number) =>
     client.patch(`/notifications/${id}/read`).then(r => r.data.notification),
+  // FCM token registration — lets pushes reach this phone even when the app
+  // is killed or the phone was rebooted.
+  registerDevice: (token: string, platform = 'android') =>
+    client.post('/notifications/register-device', {token, platform}).then(() => undefined),
 };
 
 // ── Attendance ───────────────────────────────────────────────────────────
@@ -189,6 +206,10 @@ export const adminApi = {
   resetPassword: (id: number, password: string) =>
     client.patch(`/admin/users/${id}/password`, {password}).then(r => r.data),
   deleteUser: (id: number) => client.delete(`/admin/users/${id}`).then(() => undefined),
+  // Operational settings (driver accept timeout etc.)
+  getSettings: () => client.get('/admin/settings').then(r => r.data.settings as {driverAcceptTimeoutSeconds: string}),
+  updateSettings: (patch: {driverAcceptTimeoutSeconds?: number | string}) =>
+    client.patch('/admin/settings', patch).then(r => r.data.settings),
   attendanceToday: () => client.get('/admin/attendance/today').then(r => r.data.attendance),
   attendanceMonthly: (month: string) =>
     client.get('/admin/attendance/monthly', {params: {month}}).then(r => r.data as {

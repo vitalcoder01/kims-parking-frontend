@@ -15,6 +15,9 @@ buildscript {
         classpath("com.android.tools.build:gradle")
         classpath("com.facebook.react:react-native-gradle-plugin")
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin")
+        // Firebase (FCM push) — the plugin is only *applied* in app/build.gradle
+        // when google-services.json actually exists.
+        classpath("com.google.gms:google-services:4.4.2")
     }
 }
 

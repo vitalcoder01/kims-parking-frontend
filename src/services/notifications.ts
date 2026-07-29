@@ -1,10 +1,16 @@
-import notifee, {AndroidImportance, AndroidColor, TriggerType, TimestampTrigger, AuthorizationStatus} from '@notifee/react-native';
+import notifee, {AndroidImportance, AndroidColor, AndroidCategory, TriggerType, TimestampTrigger, AuthorizationStatus} from '@notifee/react-native';
+import {Vibration, Platform} from 'react-native';
 
 // Central place for OS-level (system tray) notifications.
 // Works while the app is backgrounded; scheduled ones fire even when the app is fully closed.
 
 const CHANNEL_ID = 'kims_parking';
 const ALARM_CHANNEL_ID = 'kims_parking_alarm';
+// Android channels are immutable after creation — the loud full-alarm config
+// (sound + bypass DND + alarm category) needs a fresh channel id on devices
+// that already created the old silent-ish one.
+const RING_CHANNEL_ID = 'kims_parking_ring_v2';
+const RING_NOTIFICATION_ID = 'kims-assignment-alarm';
 
 let channelsReady = false;
 
@@ -26,7 +32,68 @@ export async function initNotifications(): Promise<void> {
       vibration: true,
       vibrationPattern: [300, 500, 300, 500],
     });
+    await notifee.createChannel({
+      id: RING_CHANNEL_ID,
+      name: 'KIMS Job Assignment Alarm',
+      importance: AndroidImportance.HIGH,
+      sound: 'default',
+      vibration: true,
+      vibrationPattern: [300, 600, 300, 600],
+      bypassDnd: true,
+    });
     channelsReady = true;
+  }
+}
+
+/**
+ * The driver assignment alarm — native Android notification on the alarm
+ * channel (sound + vibration + full-screen intent when locked), plus an
+ * in-process vibration loop when we're actually running in the foreground.
+ * Works from the FCM background handler too (app killed / after reboot):
+ * there it's just the notification part, which is exactly the requirement's
+ * "send the alarm like a push notification" fallback.
+ */
+export async function ringAssignmentAlarm(title: string, body: string): Promise<void> {
+  try {
+    await initNotifications();
+    await notifee.displayNotification({
+      id: RING_NOTIFICATION_ID,
+      title,
+      body,
+      android: {
+        channelId: RING_CHANNEL_ID,
+        importance: AndroidImportance.HIGH,
+        category: AndroidCategory.ALARM,
+        color: AndroidColor.RED,
+        smallIcon: 'ic_launcher',
+        pressAction: {id: 'default', launchActivity: 'default'},
+        // Rings over the lock screen like an incoming call.
+        fullScreenAction: {id: 'default', launchActivity: 'default'},
+        // 3 rings, not an indefinite loop — still gets attention without
+        // ringing forever if nobody's near the phone to dismiss it.
+        loopSound: false,
+        sound: 'default',
+        ongoing: true,
+        autoCancel: false,
+      },
+    });
+    if (Platform.OS === 'android') {
+      // Fixed-length pattern (3 buzzes), not an infinite repeat — same
+      // "insistent but bounded" behaviour as the sound above.
+      Vibration.vibrate([0, 600, 400, 600, 400, 600, 400], false);
+    }
+  } catch {
+    // Alarms are best-effort; never crash over them.
+  }
+}
+
+/** Stop the vibration loop + dismiss the ongoing alarm notification. */
+export async function stopAssignmentAlarm(): Promise<void> {
+  try {
+    Vibration.cancel();
+    await notifee.cancelNotification(RING_NOTIFICATION_ID);
+  } catch {
+    // ignore
   }
 }
 

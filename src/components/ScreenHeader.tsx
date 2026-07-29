@@ -1,5 +1,6 @@
 import React from 'react';
-import {View, Text, TouchableOpacity, StyleSheet} from 'react-native';
+import {View, Text, StyleSheet} from 'react-native';
+import {PressableScale} from './PressableScale';
 import {useTheme} from '../context/ThemeContext';
 import {typography, spacing} from '../theme';
 
@@ -23,12 +24,12 @@ export function ScreenHeader({title, subtitle, onBack, right}: ScreenHeaderProps
         },
       ]}>
       {onBack ? (
-        <TouchableOpacity
+        <PressableScale
           onPress={onBack}
           hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}
           style={[styles.backBtn, {backgroundColor: colors.cardAlt, borderColor: colors.border}]}>
           <Text style={{color: colors.textPrimary, fontSize: 16}}>←</Text>
-        </TouchableOpacity>
+        </PressableScale>
       ) : (
         <View style={styles.backBtn} />
       )}

@@ -13,6 +13,7 @@ export interface CurrentUser {
   department?: string;
   cardCode?: string;       // 3-digit virtual card code
   carNumber?: string;
+  phone?: string;
   profileComplete?: boolean;
   loginTime?: number;
   linkedDriverId?: number; // links a driver login to its backend Driver record
@@ -21,7 +22,7 @@ export interface CurrentUser {
 interface AuthContextValue {
   user: CurrentUser | null;
   isLoading: boolean;
-  login: (username: string, password: string) => Promise<void>;
+  login: (username: string, password: string) => Promise<CurrentUser>;
   logout: () => void;
   updateProfile: (patch: Partial<CurrentUser>) => void;
 }
@@ -32,7 +33,7 @@ const SESSION_HOURS = 12;
 const Ctx = createContext<AuthContextValue>({
   user: null,
   isLoading: true,
-  login: async () => {},
+  login: async () => ({} as CurrentUser),
   logout: () => {},
   updateProfile: () => {},
 });
@@ -89,6 +90,7 @@ export function AuthProvider({children}: {children: React.ReactNode}) {
     setAuthToken(token);
     setUser(withTime);
     await AsyncStorage.setItem(SESSION_KEY, JSON.stringify({user: withTime, token, loginTime: Date.now()}));
+    return withTime;
   }, []);
 
   const updateProfile = useCallback((patch: Partial<CurrentUser>) => {

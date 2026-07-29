@@ -1,14 +1,16 @@
 import React, {createContext, useContext, useState, useCallback, useEffect, useRef} from 'react';
-import {Platform, PermissionsAndroid, AppState as RNAppState} from 'react-native';
+import {Platform, PermissionsAndroid} from 'react-native';
 import Geolocation from 'react-native-geolocation-service';
-import {displayNotification} from '../services/notifications';
-import {tasksApi, driversApi, slotsApi, visitorsApi, notificationsApi} from '../services/api';
+import {displayNotification, ringAssignmentAlarm, stopAssignmentAlarm} from '../services/notifications';
+import {tasksApi, driversApi, slotsApi, visitorsApi, notificationsApi, getAuthToken} from '../services/api';
+import {connectSocket, disconnectSocket, emitDriverLocation} from '../services/socket';
+import {initPushMessaging} from '../services/pushMessaging';
 import {getCurrentPositionSafe} from '../utils/location';
 import {useAuth} from './AuthContext';
 
 export type DriverStatus = 'available' | 'busy' | 'off';
 export type TaskType = 'park' | 'retrieve';
-export type TaskStatus = 'requested' | 'assigned' | 'key_collected' | 'in_transit' | 'completed';
+export type TaskStatus = 'requested' | 'assigned' | 'key_collected' | 'in_transit' | 'delivered' | 'completed';
 export type SlotStatus = 'free' | 'occupied' | 'reserved';
 
 export interface Driver {
@@ -36,6 +38,7 @@ export interface ParkingTask {
   status: TaskStatus;
   requestedAt?: number;
   assignedAt?: number;
+  acceptedAt?: number; // driver's explicit accept — see accept watchdog flow
   keyCollectedAt?: number;
   completedAt?: number;
   eta?: number; // minutes
@@ -65,11 +68,10 @@ export interface Visitor {
   carNumber?: string; // optional — plate may not be available at intake
   mobile: string;
   vehicleType: 'car' | 'bike';
-  purpose?: string;
   slotId?: string; // ParkingSlot's id stays a human-readable code
   driverId?: number;
   driverName?: string;
-  status: 'parked' | 'pending' | 'retrieved' | 'cancelled';
+  status: 'parked' | 'pending' | 'delivered' | 'retrieved' | 'cancelled';
   retrievalRequested: boolean;
   // Assignment/accept handshake — see backend visitor.service.js. Both
   // clear again if the driver rejects or the 60s accept timeout fires.
@@ -101,24 +103,52 @@ export interface Notification {
   read: boolean;
 }
 
+// Live GPS positions streamed over the socket — keyed by driverId. A driver
+// whose app is killed disconnects and is removed (presence), so the map
+// never shows stale phantom markers.
+export interface DriverLocation {
+  driverId: number;
+  name: string;
+  lat: number;
+  lng: number;
+  at: number;
+}
+
+// Socket-driven "driver didn't accept in time / rejected" prompt for the
+// valet — consumed by ValetHomeScreen to jump straight into reassignment.
+export interface ReassignPrompt {
+  kind: 'task' | 'visitor';
+  task?: ParkingTask;
+  visitor?: Visitor;
+  driverName: string;
+  rejected?: boolean;
+}
+
 interface AppState {
   drivers: Driver[];
   tasks: ParkingTask[];
   slots: ParkingSlot[];
   visitors: Visitor[];
   notifications: Notification[];
+  driverLocations: Record<number, DriverLocation>;
+  onlineDriverIds: number[];
+  reassignPrompt: ReassignPrompt | null;
+  clearReassignPrompt: () => void;
 
   // Actions — all backed by the API now, so all return Promises.
   addTask: (task: Omit<ParkingTask, 'id'>) => Promise<number>;
   requestRetrieval: (eta: number) => Promise<number>;
   updateTask: (id: number, patch: Partial<ParkingTask>) => Promise<void>;
   assignDriver: (taskId: number, driverId: number) => Promise<void>;
+  acceptTask: (taskId: number) => Promise<void>;
+  rejectTask: (taskId: number) => Promise<void>;
   markKeyCollected: (taskId: number) => Promise<void>;
   markParked: (taskId: number, slotId: string) => Promise<void>;
   markRetrieved: (taskId: number) => Promise<void>;
+  confirmTaskDelivered: (taskId: number) => Promise<void>;
   reportLocation: (taskId: number, lat: number, lng: number) => Promise<void>;
   setDriverStatus: (driverId: number, status: DriverStatus) => Promise<void>;
-  addVisitor: (v: {name: string; carNumber?: string; mobile: string; vehicleType?: 'car' | 'bike'; purpose?: string}) => Promise<Visitor>;
+  addVisitor: (v: {name: string; carNumber?: string; mobile: string; vehicleType?: 'car' | 'bike'}) => Promise<Visitor>;
   assignVisitorDriver: (visitorId: number, driverId: number) => Promise<void>;
   acceptVisitorTask: (visitorId: number) => Promise<void>;
   rejectVisitorTask: (visitorId: number) => Promise<void>;
@@ -127,6 +157,7 @@ interface AppState {
   markVisitorParked: (visitorId: number) => Promise<void>;
   assignRetrievalDriver: (visitorId: number, driverId: number) => Promise<void>;
   markVisitorRetrieved: (visitorId: number) => Promise<void>;
+  confirmVisitorDelivered: (visitorId: number) => Promise<void>;
   pushNotification: (n: Omit<Notification, 'id' | 'createdAt' | 'read'>) => Promise<void>;
   markNotificationRead: (id: number) => Promise<void>;
   clearNotifications: () => void;
@@ -134,7 +165,9 @@ interface AppState {
 
 const Ctx = createContext<AppState>({} as AppState);
 
-const POLL_INTERVAL_MS = 4000;
+// A driver's marker goes stale if no GPS ping for this long (phone offline
+// but socket not yet timed out) — the map drops it rather than lying.
+const LOCATION_STALE_MS = 60 * 1000;
 
 // ── wire-format -> app-shape mappers ────────────────────────────────────
 // The backend already mirrors these field names closely (see serialize.js),
@@ -150,6 +183,7 @@ function mapTask(t: any): ParkingTask {
     ...t,
     requestedAt: toEpoch(t.requestedAt),
     assignedAt: toEpoch(t.assignedAt),
+    acceptedAt: toEpoch(t.acceptedAt),
     keyCollectedAt: toEpoch(t.keyCollectedAt),
     completedAt: toEpoch(t.completedAt),
     locationUpdatedAt: toEpoch(t.locationUpdatedAt),
@@ -157,7 +191,22 @@ function mapTask(t: any): ParkingTask {
 }
 
 function mapVisitor(v: any): Visitor {
-  return {...v, createdAt: toEpoch(v.createdAt) ?? Date.now()};
+  return {
+    ...v,
+    driverAssignedAt: toEpoch(v.driverAssignedAt),
+    acceptedAt: toEpoch(v.acceptedAt),
+    pickedUpAt: toEpoch(v.pickedUpAt),
+    cancelledAt: toEpoch(v.cancelledAt),
+    createdAt: toEpoch(v.createdAt) ?? Date.now(),
+  };
+}
+
+// Socket delta helpers — replace the one changed record in place (upsert),
+// never triggering a refetch.
+function upsertById<T extends {id: any}>(list: T[], item: T): T[] {
+  return list.some(x => x.id === item.id)
+    ? list.map(x => (x.id === item.id ? item : x))
+    : [item, ...list];
 }
 
 function mapNotification(n: any): Notification {
@@ -171,13 +220,15 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
   const [slots, setSlots]             = useState<ParkingSlot[]>([]);
   const [visitors, setVisitors]       = useState<Visitor[]>([]);
   const [notifications, setNotifs]    = useState<Notification[]>([]);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [driverLocations, setDriverLocations] = useState<Record<number, DriverLocation>>({});
+  const [onlineDriverIds, setOnlineDriverIds] = useState<number[]>([]);
+  const [reassignPrompt, setReassignPrompt]   = useState<ReassignPrompt | null>(null);
 
   // Only valet/admin screens ever read the full `drivers` roster
   // (assign-driver picker, driver status pills, admin dashboard) — for
   // every other role skip that query entirely on every ~4s poll.
   const needsOpsData = user?.role === 'valet' || user?.role === 'admin';
-  // `visitors` is also needed by drivers themselves — DriverHomeScreen's
+  // `visitors` is also needed by drivers themselves — DriverJobsScreen's
   // "Visitor Pickups" section filters this list down to the ones assigned
   // to them (v.driverId === myDriverId). Without this, a driver's own app
   // never even fetches visitor data, so an assignment never shows up there
@@ -199,60 +250,155 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     if (v) setVisitors(v.map(mapVisitor));
   }, [needsOpsData, needsVisitors]);
 
-  // Fetch on login, poll while logged in, clear everything on logout.
-  // Polling fully stops while the app is backgrounded — every logged-in
-  // phone otherwise keeps hitting the server every 4s indefinitely (e.g.
-  // sitting in someone's pocket for their whole shift), which is pure waste
-  // that compounds directly with headcount. One immediate refresh happens
-  // when the app returns to the foreground instead of waiting for the next
-  // tick, so nothing feels stale after resuming.
+  // Some socket handlers need the current user without re-subscribing the
+  // whole socket on every profile change.
+  const userRef = useRef(user);
+  userRef.current = user;
+
+  const clearReassignPrompt = useCallback(() => setReassignPrompt(null), []);
+
+  // ── True-WebSocket sync ─────────────────────────────────────────────────
+  // One socket per session. Full fetch happens exactly twice per connection
+  // lifecycle: on login and on reconnect (to fill whatever was missed while
+  // offline). Every change after that arrives as a delta event carrying the
+  // changed data itself, and only that record is patched — never a refetch
+  // because an emit came in.
   useEffect(() => {
     if (!user) {
       setDrivers([]); setTasks([]); setSlots([]); setVisitors([]); setNotifs([]);
-      if (pollRef.current) clearInterval(pollRef.current);
+      setDriverLocations({}); setOnlineDriverIds([]); setReassignPrompt(null);
+      disconnectSocket();
       return;
     }
 
-    const startPolling = () => {
-      if (pollRef.current) return;
-      pollRef.current = setInterval(() => { fetchAll().catch(() => {}); }, POLL_INTERVAL_MS);
-    };
-    const stopPolling = () => {
-      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
-    };
+    const token = getAuthToken();
+    if (!token) return;
+    const socket = connectSocket(token);
 
-    fetchAll().catch(() => {});
-    startPolling();
+    socket.on('connect', () => { fetchAll().catch(() => {}); });
 
-    const sub = RNAppState.addEventListener('change', nextState => {
-      if (nextState === 'active') {
-        fetchAll().catch(() => {});
-        startPolling();
-      } else {
-        stopPolling();
+    socket.on('task:upsert', (raw: any) => {
+      const task = mapTask(raw);
+      setTasks(p => upsertById(p, task));
+      // My assignment just resolved (accepted elsewhere / reassigned /
+      // moved on) — stop a still-ringing alarm.
+      const me = userRef.current;
+      const myDrvId = me?.linkedDriverId ?? me?.id;
+      if (me?.role === 'driver' && task.driverId !== myDrvId) {
+        // it may have been mine a moment ago — harmless if not ringing
+        stopAssignmentAlarm().catch(() => {});
       }
     });
 
-    return () => { stopPolling(); sub.remove(); };
-  }, [user, fetchAll]);
+    socket.on('visitor:upsert', (raw: any) => {
+      setVisitors(p => upsertById(p, mapVisitor(raw)));
+    });
+
+    socket.on('slot:patch', (slot: ParkingSlot) => {
+      setSlots(p => upsertById(p, slot));
+    });
+
+    // Partial driver delta — merge onto what we have (full roster only
+    // exists on valet/admin clients; others just ignore unknown ids).
+    socket.on('driver:patch', (patch: Partial<Driver> & {id: number}) => {
+      setDrivers(p => p.map(d => (d.id === patch.id ? {...d, ...patch} : d)));
+    });
+
+    socket.on('notification:new', (raw: any) => {
+      const n = mapNotification(raw);
+      setNotifs(p => (p.some(x => x.id === n.id) ? p : [n, ...p]));
+      const me = userRef.current;
+      const isForMe =
+        n.targetId === me?.id ||
+        (me?.linkedDriverId != null && n.targetId === me.linkedDriverId) ||
+        n.targetRole === me?.role ||
+        n.targetRole === `driver:${me?.linkedDriverId}` ||
+        n.targetRole === 'all';
+      if (!isForMe) return;
+      // Alarm-grade notifications (driver assignment, valet reassign
+      // warning) ring loud: native alarm-channel notification + vibration
+      // loop. Everything else is a normal tray notification.
+      if (n.type === 'alarm') {
+        ringAssignmentAlarm(n.title, n.body).catch(() => {});
+      } else {
+        displayNotification(n.title, n.body, n.type);
+      }
+    });
+
+    // ── live map feeds ──
+    socket.on('presence:snapshot', ({driverIds}: {driverIds: number[]}) => {
+      setOnlineDriverIds(driverIds);
+      // Drop positions of drivers that are no longer connected.
+      setDriverLocations(p => Object.fromEntries(Object.entries(p).filter(([id]) => driverIds.some(d => String(d) === id))));
+    });
+
+    socket.on('presence:driver', ({driverId, online}: {driverId: number; online: boolean}) => {
+      setOnlineDriverIds(p => (online ? [...p.filter(id => id !== driverId), driverId] : p.filter(id => id !== driverId)));
+      if (!online) {
+        setDriverLocations(p => {
+          const next = {...p};
+          delete next[driverId];
+          return next;
+        });
+      }
+    });
+
+    socket.on('driver:location', (loc: DriverLocation) => {
+      setDriverLocations(p => ({...p, [loc.driverId]: loc}));
+    });
+
+    // ── accept-timeout / reject prompts (valet + admin rooms only) ──
+    socket.on('task:needs-reassign', ({task, driverName, rejected}: any) => {
+      setReassignPrompt({kind: 'task', task: mapTask(task), driverName, rejected});
+    });
+    socket.on('visitor:needs-reassign', ({visitor, driverName, rejected}: any) => {
+      setReassignPrompt({kind: 'visitor', visitor: mapVisitor(visitor), driverName, rejected});
+    });
+
+    // FCM device registration + foreground push handling (no-op until
+    // google-services.json is in place — sockets already cover foreground).
+    let cleanupPush: (() => void) | undefined;
+    initPushMessaging().then(fn => { cleanupPush = fn; }).catch(() => {});
+
+    return () => {
+      cleanupPush?.();
+      disconnectSocket();
+    };
+  }, [user?.id, fetchAll]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Sweep stale GPS markers (socket still open but no pings — e.g. GPS off).
+  useEffect(() => {
+    const sweep = setInterval(() => {
+      setDriverLocations(p => {
+        const cutoff = Date.now() - LOCATION_STALE_MS;
+        const entries = Object.entries(p).filter(([, loc]) => loc.at >= cutoff);
+        return entries.length === Object.keys(p).length ? p : Object.fromEntries(entries);
+      });
+    }, 15000);
+    return () => clearInterval(sweep);
+  }, []);
 
   const reportLocation = useCallback(async (taskId: number, lat: number, lng: number) => {
     const updated = mapTask(await tasksApi.updateLocation(taskId, lat, lng));
     setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
   }, []);
 
-  // Single, centralized GPS watcher for the whole app — whichever screen is
-  // on-screen (driver's task list, driver's Track tab, or nothing at all)
-  // reads the same `tasks` state this writes into, so there's exactly one
-  // location subscription active at a time instead of one per screen.
+  // Single, centralized GPS watcher for the whole app. For drivers it runs
+  // for the entire logged-in session (not just during a task): every fix is
+  // pushed over the socket so the valet's live map shows ALL reachable
+  // drivers; during an active trip the same fix additionally goes through
+  // the REST location endpoint, which persists it on the task and emits the
+  // task:upsert delta that live-tracking screens render.
   const myDriverId = user?.linkedDriverId ?? user?.id;
   const activeDriverTask = user?.role === 'driver'
     ? tasks.find(t => t.driverId === myDriverId && (t.status === 'key_collected' || t.status === 'in_transit'))
     : undefined;
   const activeDriverTaskId = activeDriverTask?.id;
+  const activeDriverTaskIdRef = useRef(activeDriverTaskId);
+  activeDriverTaskIdRef.current = activeDriverTaskId;
 
   useEffect(() => {
-    if (!activeDriverTaskId) return;
+    if (user?.role !== 'driver') return;
 
     let cancelled = false;
     const watch = async () => {
@@ -264,7 +410,13 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
         if (granted !== PermissionsAndroid.RESULTS.GRANTED || cancelled) return;
       }
       Geolocation.watchPosition(
-        pos => { if (!cancelled) reportLocation(activeDriverTaskId, pos.coords.latitude, pos.coords.longitude).catch(() => {}); },
+        pos => {
+          if (cancelled) return;
+          const {latitude, longitude} = pos.coords;
+          emitDriverLocation(latitude, longitude);
+          const taskId = activeDriverTaskIdRef.current;
+          if (taskId) reportLocation(taskId, latitude, longitude).catch(() => {});
+        },
         () => {},
         {enableHighAccuracy: true, distanceFilter: 5, interval: 3000, fastestInterval: 2000},
       );
@@ -272,7 +424,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
 
     watch();
     return () => { cancelled = true; Geolocation.stopObserving(); };
-  }, [activeDriverTaskId, reportLocation]);
+  }, [user?.role, user?.id, reportLocation]);
 
   const addTask = useCallback(async (task: Omit<ParkingTask, 'id'>) => {
     const created = await tasksApi.create({
@@ -315,17 +467,36 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
   }, []);
 
   const assignDriver = useCallback(async (taskId: number, driverId: number) => {
+    await stopAssignmentAlarm().catch(() => {});
     const updated = mapTask(await tasksApi.assignDriver(taskId, driverId));
     setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
     setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'busy', currentTaskId: taskId} : d)));
   }, []);
 
+  // Driver: explicit accept/decline of an assignment (stops the ringing
+  // alarm either way; a decline immediately frees this driver and prompts
+  // the valet to reassign via the socket needs-reassign event).
+  const acceptTask = useCallback(async (taskId: number) => {
+    await stopAssignmentAlarm().catch(() => {});
+    const updated = mapTask(await tasksApi.accept(taskId));
+    setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
+  }, []);
+
+  const rejectTask = useCallback(async (taskId: number) => {
+    await stopAssignmentAlarm().catch(() => {});
+    const updated = mapTask(await tasksApi.reject(taskId));
+    setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
+    if (myDriverId) setDrivers(p => p.map(d => (d.id === myDriverId ? {...d, status: 'available', currentTaskId: undefined} : d)));
+  }, [myDriverId]);
+
   const markKeyCollected = useCallback(async (taskId: number) => {
+    await stopAssignmentAlarm().catch(() => {});
     const updated = mapTask(await tasksApi.keyCollected(taskId));
     setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
   }, []);
 
   const markParked = useCallback(async (taskId: number, slotId: string) => {
+    await stopAssignmentAlarm().catch(() => {});
     const updated = mapTask(await tasksApi.park(taskId, slotId));
     setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
     setSlots(p => p.map(s => (s.id === slotId
@@ -337,6 +508,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
   }, []);
 
   const markRetrieved = useCallback(async (taskId: number) => {
+    await stopAssignmentAlarm().catch(() => {});
     const existing = tasks.find(t => t.id === taskId);
     const updated = mapTask(await tasksApi.retrieve(taskId));
     setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
@@ -351,29 +523,40 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     }
   }, [tasks]);
 
+  // Valet: confirms the doctor/staff member actually took the car —
+  // finally closes out a retrieval that's been sitting at the counter.
+  const confirmTaskDelivered = useCallback(async (taskId: number) => {
+    await stopAssignmentAlarm().catch(() => {});
+    const updated = mapTask(await tasksApi.confirmDelivered(taskId));
+    setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
+  }, []);
+
   const setDriverStatus = useCallback(async (driverId: number, status: DriverStatus) => {
     const updated = await driversApi.setStatus(driverId, status);
     setDrivers(p => p.map(d => (d.id === driverId ? updated : d)));
   }, []);
 
-  const addVisitor = useCallback(async (v: {name: string; carNumber?: string; mobile: string; vehicleType?: 'car' | 'bike'; purpose?: string}) => {
+  const addVisitor = useCallback(async (v: {name: string; carNumber?: string; mobile: string; vehicleType?: 'car' | 'bike'}) => {
     const created = mapVisitor(await visitorsApi.create(v));
     setVisitors(p => [...p, created]);
     return created;
   }, []);
 
   const assignVisitorDriver = useCallback(async (visitorId: number, driverId: number) => {
+    await stopAssignmentAlarm().catch(() => {});
     const updated = mapVisitor(await visitorsApi.assignDriver(visitorId, driverId));
     setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
     setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'busy', currentTaskId: visitorId} : d)));
   }, []);
 
   const acceptVisitorTask = useCallback(async (visitorId: number) => {
+    await stopAssignmentAlarm().catch(() => {});
     const updated = mapVisitor(await visitorsApi.acceptTask(visitorId));
     setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
   }, []);
 
   const rejectVisitorTask = useCallback(async (visitorId: number) => {
+    await stopAssignmentAlarm().catch(() => {});
     const existing = visitors.find(v => v.id === visitorId);
     const updated = mapVisitor(await visitorsApi.rejectTask(visitorId));
     setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
@@ -390,6 +573,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
   }, [visitors]);
 
   const markVisitorPickedUp = useCallback(async (visitorId: number) => {
+    await stopAssignmentAlarm().catch(() => {});
     const updated = mapVisitor(await visitorsApi.pickUp(visitorId));
     setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
   }, []);
@@ -397,6 +581,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
   // No slotId param — the backend auto-assigns the next free slot and
   // returns it on `updated.slotId`.
   const markVisitorParked = useCallback(async (visitorId: number) => {
+    await stopAssignmentAlarm().catch(() => {});
     const existing = visitors.find(v => v.id === visitorId);
     const updated = mapVisitor(await visitorsApi.park(visitorId));
     setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
@@ -408,12 +593,14 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
   }, [visitors]);
 
   const assignRetrievalDriver = useCallback(async (visitorId: number, driverId: number) => {
+    await stopAssignmentAlarm().catch(() => {});
     const updated = mapVisitor(await visitorsApi.assignRetrievalDriver(visitorId, driverId));
     setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
     setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'busy', currentTaskId: visitorId} : d)));
   }, []);
 
   const markVisitorRetrieved = useCallback(async (visitorId: number) => {
+    await stopAssignmentAlarm().catch(() => {});
     const existing = visitors.find(v => v.id === visitorId);
     const updated = mapVisitor(await visitorsApi.retrieve(visitorId));
     setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
@@ -423,23 +610,24 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     if (driverId) setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'available', currentTaskId: undefined} : d)));
   }, [visitors]);
 
+  // Valet: confirms the visitor actually took the car — mirrors
+  // confirmTaskDelivered above for the staff/doctor flow.
+  const confirmVisitorDelivered = useCallback(async (visitorId: number) => {
+    await stopAssignmentAlarm().catch(() => {});
+    const updated = mapVisitor(await visitorsApi.confirmDelivered(visitorId));
+    setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
+  }, []);
+
   const pushNotification = useCallback(async (n: Omit<Notification, 'id' | 'createdAt' | 'read'>) => {
     const created = mapNotification(
       await notificationsApi.push({targetRole: n.targetRole, targetId: n.targetId, title: n.title, body: n.body, type: n.type}),
     );
-    setNotifs(p => [created, ...p]);
-    // Fire the OS-level tray notification only on a device this notification
-    // is actually FOR — same match rules as NotificationBanner. This used to
-    // fire unconditionally, which meant the SENDER's own phone buzzed for
-    // every notification they sent (a doctor requesting retrieval got
-    // buzzed by their own request meant for the valet, etc.).
-    const isForMe =
-      created.targetId === user?.id ||
-      (user?.linkedDriverId != null && created.targetId === user.linkedDriverId) ||
-      created.targetRole === user?.role ||
-      created.targetRole === 'all';
-    if (isForMe) displayNotification(n.title, n.body, n.type);
-  }, [user?.id, user?.linkedDriverId, user?.role]);
+    // The socket delivers this same notification to every targeted client —
+    // including this device when it's a recipient, where the notification:new
+    // handler shows/rings it. Only pre-seed local state (deduped by id
+    // there), never display here, or recipients-who-sent would get doubles.
+    setNotifs(p => (p.some(x => x.id === created.id) ? p : [created, ...p]));
+  }, []);
 
   const markNotificationRead = useCallback(async (id: number) => {
     const updated = mapNotification(await notificationsApi.markRead(id));
@@ -451,10 +639,11 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
   return (
     <Ctx.Provider value={{
       drivers, tasks, slots, visitors, notifications,
-      addTask, requestRetrieval, updateTask, assignDriver, markKeyCollected, markParked, markRetrieved, reportLocation,
+      driverLocations, onlineDriverIds, reassignPrompt, clearReassignPrompt,
+      addTask, requestRetrieval, updateTask, assignDriver, acceptTask, rejectTask, markKeyCollected, markParked, markRetrieved, confirmTaskDelivered, reportLocation,
       setDriverStatus, addVisitor,
       assignVisitorDriver, acceptVisitorTask, rejectVisitorTask, cancelVisitor,
-      markVisitorPickedUp, markVisitorParked, assignRetrievalDriver, markVisitorRetrieved,
+      markVisitorPickedUp, markVisitorParked, assignRetrievalDriver, markVisitorRetrieved, confirmVisitorDelivered,
       pushNotification, markNotificationRead, clearNotifications,
     }}>
       {children}

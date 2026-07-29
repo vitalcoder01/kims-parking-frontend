@@ -1,7 +1,9 @@
 import React, {useEffect, useState} from 'react';
-import {Modal, View, Text, StyleSheet, TouchableOpacity, Linking} from 'react-native';
+import {Modal, View, Text, StyleSheet, Linking} from 'react-native';
+import {PressableScale} from './PressableScale';
 import {useTheme} from '../context/ThemeContext';
 import {appApi} from '../services/api';
+import {Icon} from './Icon';
 import {APP_VERSION_CODE, APP_VERSION_NAME} from '../config/version';
 
 export function UpdateModal() {
@@ -25,7 +27,9 @@ export function UpdateModal() {
     <Modal transparent animationType="fade" visible statusBarTranslucent>
       <View style={s.overlay}>
         <View style={[s.card, {backgroundColor: colors.card, borderColor: colors.border}]}>
-          <Text style={s.icon}>🚀</Text>
+          <View style={[s.iconWrap, {backgroundColor: colors.primaryLight}]}>
+            <Icon name="rocket" size={26} color={colors.primary} />
+          </View>
           <Text style={[s.title, {color: colors.textPrimary}]}>Update Available</Text>
           <Text style={[s.sub, {color: colors.textSecondary}]}>
             Version {info.latestVersionName} is ready — you're on {APP_VERSION_NAME}.
@@ -33,15 +37,14 @@ export function UpdateModal() {
           {info.notes ? (
             <Text style={[s.notes, {color: colors.textMuted, backgroundColor: colors.cardAlt}]}>{info.notes}</Text>
           ) : null}
-          <TouchableOpacity
-            activeOpacity={0.85}
+          <PressableScale
             style={[s.cta, {backgroundColor: colors.primary, shadowColor: colors.primary}]}
             onPress={() => Linking.openURL(info.apkUrl)}>
             <Text style={s.ctaTxt}>Download & Install</Text>
-          </TouchableOpacity>
-          <TouchableOpacity activeOpacity={0.7} style={s.later} onPress={() => setInfo(null)}>
+          </PressableScale>
+          <PressableScale style={s.later} onPress={() => setInfo(null)}>
             <Text style={[s.laterTxt, {color: colors.textMuted}]}>Later</Text>
-          </TouchableOpacity>
+          </PressableScale>
         </View>
       </View>
     </Modal>
@@ -51,7 +54,7 @@ export function UpdateModal() {
 const s = StyleSheet.create({
   overlay: {flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center', padding: 24},
   card: {width: '100%', maxWidth: 360, borderRadius: 22, borderWidth: 1, padding: 24, alignItems: 'center'},
-  icon: {fontSize: 36, marginBottom: 8},
+  iconWrap: {width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center', marginBottom: 10},
   title: {fontSize: 19, fontWeight: '900'},
   sub: {fontSize: 13, textAlign: 'center', marginTop: 6, lineHeight: 19},
   notes: {fontSize: 12, borderRadius: 12, padding: 12, marginTop: 14, lineHeight: 17, alignSelf: 'stretch'},

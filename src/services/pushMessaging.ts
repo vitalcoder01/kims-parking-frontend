@@ -1,0 +1,84 @@
+// FCM push wiring — the delivery path that still works when the app is
+// killed or the phone has been rebooted (Android redelivers high-priority
+// pushes after boot and wakes the background handler, which raises the full
+// native alarm notification).
+//
+// Everything is guarded: until google-services.json is added to
+// android/app/, @react-native-firebase's native module is absent and every
+// function here silently no-ops — sockets + notifee still cover the
+// foreground/background (not killed) cases.
+import {notificationsApi} from './api';
+import {ringAssignmentAlarm, displayNotification} from './notifications';
+
+type MessagingModule = any;
+
+let messagingFn: MessagingModule | null | undefined;
+
+function getMessaging(): MessagingModule | null {
+  if (messagingFn !== undefined) return messagingFn;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    messagingFn = require('@react-native-firebase/messaging').default;
+    // Throws if the native Firebase app isn't configured (no google-services.json).
+    messagingFn();
+  } catch {
+    messagingFn = null;
+  }
+  return messagingFn;
+}
+
+/** Show the right notification for an incoming FCM data message. */
+export async function handleRemoteMessage(remoteMessage: any): Promise<void> {
+  const data = remoteMessage?.data ?? {};
+  const title = data.title ?? remoteMessage?.notification?.title ?? 'KIMS Parking';
+  const body = data.body ?? remoteMessage?.notification?.body ?? '';
+  if (data.type === 'alarm') {
+    await ringAssignmentAlarm(title, body);
+  } else {
+    await displayNotification(title, body, (data.type as any) ?? 'info');
+  }
+}
+
+/**
+ * Registered from index.js — MUST happen outside any component so Android
+ * can invoke it with the app killed (and re-arm after reboot).
+ */
+export function registerBackgroundPushHandler(): void {
+  const messaging = getMessaging();
+  if (!messaging) return;
+  messaging().setBackgroundMessageHandler(async (remoteMessage: any) => {
+    await handleRemoteMessage(remoteMessage);
+  });
+}
+
+/**
+ * Called after login: get this device's FCM token, register it with the
+ * backend, keep it fresh on rotation, and ring on foreground pushes too
+ * (socket usually beats FCM in the foreground — the alarm notification id is
+ * stable, so double delivery just refreshes the same alarm instead of
+ * stacking two).
+ */
+export async function initPushMessaging(): Promise<() => void> {
+  const messaging = getMessaging();
+  if (!messaging) return () => {};
+
+  try {
+    await messaging().requestPermission();
+    const token = await messaging().getToken();
+    if (token) await notificationsApi.registerDevice(token).catch(() => {});
+  } catch {
+    return () => {};
+  }
+
+  const unsubToken = messaging().onTokenRefresh((token: string) => {
+    notificationsApi.registerDevice(token).catch(() => {});
+  });
+  const unsubMessage = messaging().onMessage(async (remoteMessage: any) => {
+    await handleRemoteMessage(remoteMessage);
+  });
+
+  return () => {
+    unsubToken();
+    unsubMessage();
+  };
+}

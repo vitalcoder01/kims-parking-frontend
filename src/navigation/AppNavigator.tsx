@@ -10,15 +10,18 @@ import {Icon, IconName} from '../components/Icon';
 import {LoginScreen}             from '../screens/auth/LoginScreen';
 import {DoctorHomeScreen}        from '../screens/doctor/DoctorHomeScreen';
 import {VirtualCardScreen}       from '../screens/doctor/VirtualCardScreen';
+import {VehicleSetupScreen}      from '../screens/doctor/VehicleSetupScreen';
 import {ParkingScreen}           from '../screens/ParkingScreen';
 import {ParkingMapScreen}        from '../screens/ParkingMapScreen';
 import {ValetHomeScreen}         from '../screens/valet/ValetHomeScreen';
-import {DriverHomeScreen}        from '../screens/driver/DriverHomeScreen';
+import {ValetRecordsScreen}      from '../screens/valet/ValetRecordsScreen';
+import {ValetMapScreen}          from '../screens/valet/ValetMapScreen';
+import {DriverDashboardScreen}   from '../screens/driver/DriverDashboardScreen';
+import {DriverJobsScreen}        from '../screens/driver/DriverJobsScreen';
 import {AdminDashboardScreen}    from '../screens/admin/AdminDashboardScreen';
 import {AdminStaffScreen}        from '../screens/admin/AdminStaffScreen';
 import {AdminAttendanceScreen}   from '../screens/admin/AdminAttendanceScreen';
 import {SharedSettingsScreen}    from '../screens/shared/SharedSettingsScreen';
-import {LiveTrackingScreen}      from '../screens/shared/LiveTrackingScreen';
 
 const Tab   = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -49,9 +52,10 @@ function DoctorNavigator() {
   return (
     <Tab.Navigator screenOptions={tabOpts(colors)}>
       <Tab.Screen name="Home"     component={DoctorHomeScreen}  options={{title:'KIMS Doctor',   tabBarLabel:'Home',    tabBarIcon:({size,color})=>ic('home',size,color)}} />
-      <Tab.Screen name="Card"     component={VirtualCardScreen} options={{title:'My Valet Card', tabBarLabel:'My Card', tabBarIcon:({size,color})=>ic('userCard',size,color)}} />
+      {/* Reachable only from the valet-code card on Home — not a bottom tab. */}
+      <Tab.Screen name="Card"     component={VirtualCardScreen} options={{headerShown:false, tabBarButton: () => null}} />
       <Tab.Screen name="Parking"  component={ParkingScreen}     options={{title:'My Parking',    tabBarLabel:'Parking', tabBarIcon:({size,color})=>ic('parking',size,color)}} />
-      <Tab.Screen name="Map"      component={ParkingMapScreen}  options={{title:'Live Map',      tabBarLabel:'Map',     tabBarIcon:({size,color})=>ic('map',size,color)}} />
+      <Tab.Screen name="Setup"    component={VehicleSetupScreen} options={{headerShown:false,     tabBarLabel:'Setup',   tabBarIcon:({size,color})=>ic('car',size,color)}} />
       <Tab.Screen name="Settings" component={SharedSettingsScreen} options={{title:'Settings',   tabBarLabel:'Settings',tabBarIcon:({size,color})=>ic('settings',size,color)}} />
     </Tab.Navigator>
   );
@@ -62,8 +66,9 @@ function StaffNavigator() {
   return (
     <Tab.Navigator screenOptions={tabOpts(colors)}>
       <Tab.Screen name="Home"     component={DoctorHomeScreen}  options={{title:'KIMS Staff',    tabBarLabel:'Home',    tabBarIcon:({size,color})=>ic('home',size,color)}} />
-      <Tab.Screen name="Card"     component={VirtualCardScreen} options={{title:'My Valet Card', tabBarLabel:'My Card', tabBarIcon:({size,color})=>ic('userCard',size,color)}} />
-      <Tab.Screen name="Map"      component={ParkingMapScreen}  options={{title:'Live Map',      tabBarLabel:'Map',     tabBarIcon:({size,color})=>ic('map',size,color)}} />
+      {/* Reachable only from the valet-code card on Home — not a bottom tab. */}
+      <Tab.Screen name="Card"     component={VirtualCardScreen} options={{headerShown:false, tabBarButton: () => null}} />
+      <Tab.Screen name="Setup"    component={VehicleSetupScreen} options={{headerShown:false,     tabBarLabel:'Setup',   tabBarIcon:({size,color})=>ic('car',size,color)}} />
       <Tab.Screen name="Settings" component={SharedSettingsScreen} options={{title:'Settings',   tabBarLabel:'Settings',tabBarIcon:({size,color})=>ic('settings',size,color)}} />
     </Tab.Navigator>
   );
@@ -73,8 +78,9 @@ function ValetNavigator() {
   const {colors} = useTheme();
   return (
     <Tab.Navigator screenOptions={tabOpts(colors)}>
-      <Tab.Screen name="Queue"    component={ValetHomeScreen}      options={{title:'Valet Station', tabBarLabel:'Queue',   tabBarIcon:({size,color})=>ic('key',size,color)}} />
-      <Tab.Screen name="Map"      component={ParkingMapScreen}     options={{title:'Parking Map',   tabBarLabel:'Map',     tabBarIcon:({size,color})=>ic('map',size,color)}} />
+      <Tab.Screen name="Queue"    component={ValetHomeScreen}      options={{headerShown:false, tabBarLabel:'Queue',    tabBarIcon:({size,color})=>ic('key',size,color)}} />
+      <Tab.Screen name="Records"  component={ValetRecordsScreen}   options={{headerShown:false, tabBarLabel:'Records',  tabBarIcon:({size,color})=>ic('clipboard',size,color)}} />
+      <Tab.Screen name="Map"      component={ValetMapScreen}       options={{headerShown:false, tabBarLabel:'Map',      tabBarIcon:({size,color})=>ic('map',size,color)}} />
       <Tab.Screen name="Settings" component={SharedSettingsScreen} options={{title:'Settings',      tabBarLabel:'Settings',tabBarIcon:({size,color})=>ic('settings',size,color)}} />
     </Tab.Navigator>
   );
@@ -83,10 +89,10 @@ function ValetNavigator() {
 function DriverNavigator() {
   const {colors} = useTheme();
   return (
-    <Tab.Navigator screenOptions={tabOpts(colors)}>
-      <Tab.Screen name="Tasks"    component={DriverHomeScreen}     options={{title:'My Tasks',    tabBarLabel:'Tasks',   tabBarIcon:({size,color})=>ic('tasks',size,color)}} />
-      <Tab.Screen name="Track"    component={LiveTrackingScreen}   options={{title:'Live Track',  tabBarLabel:'Track',   tabBarIcon:({size,color})=>ic('track',size,color)}} />
-      <Tab.Screen name="Settings" component={SharedSettingsScreen} options={{title:'Settings',    tabBarLabel:'Settings',tabBarIcon:({size,color})=>ic('settings',size,color)}} />
+    <Tab.Navigator screenOptions={{...tabOpts(colors), headerShown: false}}>
+      <Tab.Screen name="Dashboard" component={DriverDashboardScreen} options={{tabBarLabel:'Dashboard', tabBarIcon:({size,color})=>ic('dashboard',size,color)}} />
+      <Tab.Screen name="Jobs"      component={DriverJobsScreen}      options={{tabBarLabel:'My Jobs',   tabBarIcon:({size,color})=>ic('tasks',size,color)}} />
+      <Tab.Screen name="Settings"  component={SharedSettingsScreen}  options={{headerShown:true, title:'Settings', tabBarLabel:'Settings',tabBarIcon:({size,color})=>ic('settings',size,color)}} />
     </Tab.Navigator>
   );
 }

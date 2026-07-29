@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "453815875444",
+    "project_id": "cloud-messaging-a085d",
+    "storage_bucket": "cloud-messaging-a085d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:453815875444:android:a9bae36e0fdfde3eeb5e21",
+        "android_client_info": {
+          "package_name": "com.bedflow.hod"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAdAFdvH3-ALx1LaKc2t6kiDD0f3-NXcSw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:453815875444:android:a065f557e88816fceb5e21",
+        "android_client_info": {
+          "package_name": "com.kimsparking"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAdAFdvH3-ALx1LaKc2t6kiDD0f3-NXcSw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

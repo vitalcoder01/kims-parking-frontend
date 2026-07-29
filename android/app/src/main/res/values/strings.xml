@@ -1,3 +1,7 @@
 <resources>
     <string name="app_name">KIMSParking</string>
+    <!-- Google Maps SDK key for react-native-maps (valet Live Map).
+         Get one free at https://console.cloud.google.com (enable "Maps SDK
+         for Android") and paste it here. -->
+    <string name="google_maps_api_key" translatable="false">YOUR_GOOGLE_MAPS_API_KEY</string>
 </resources>

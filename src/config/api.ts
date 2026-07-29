@@ -1,10 +1,25 @@
-// Backend base URL — production deployment on Render.
+// Backend base URL — flip ACTIVE_BACKEND to switch every screen + the socket
+// connection (see services/socket.ts, which derives SOCKET_URL from this) at
+// once. No other file should hardcode a backend URL.
 //
-// For local dev instead, temporarily swap this back to either:
-//  1. USB: 'http://127.0.0.1:4000/api' with `adb reverse tcp:4000 tcp:4000`
-//  2. WiFi: 'http://<this-machine's-LAN-IP>:4000/api', same network as the phone
-export const API_BASE_URL = 'https://kims-parking-backend-2.onrender.com/api';
+// 'render' — the deployed production backend.
+// 'local'  — your own computer. Since the phone usually isn't on the same
+//   network as your computer, LOCAL_BASE_URL should point at a tunnel
+//   (cloudflared/ngrok) fronting your local `npm run development` server,
+//   not a bare LAN IP. To start one:
+//     cloudflared tunnel --url http://localhost:4000
+//   then paste the https://<random>.trycloudflare.com URL it prints below.
+//   Quick tunnels are randomly generated per run — update LOCAL_BASE_URL
+//   every time you restart cloudflared.
+const ACTIVE_BACKEND: 'render' | 'local' = 'local';
+
+const RENDER_BASE_URL = 'https://kims-parking-backend-2.onrender.com'; // backend
+// const LOCAL_BASE_URL = 'https://jackie-villa-watts-alfred.trycloudflare.com'; // localhost
+
+const ROOT_URL = ACTIVE_BACKEND === 'local' ? LOCAL_BASE_URL : RENDER_BASE_URL;
+
+export const API_BASE_URL = `${ROOT_URL}/api`;
 
 // Root of the same deployment, without the /api suffix — used to build the
 // public visitor tracking link sent over WhatsApp (GET /track/:id).
-export const PUBLIC_BASE_URL = 'https://kims-parking-backend-2.onrender.com';
+export const PUBLIC_BASE_URL = ROOT_URL;

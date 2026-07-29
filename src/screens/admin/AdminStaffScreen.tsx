@@ -1,5 +1,7 @@
-import React, {useState, useEffect, useCallback} from 'react';
-import {View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator} from 'react-native';
+import React, {useState, useEffect, useCallback, useRef} from 'react';
+import {View, Text, StyleSheet, ScrollView, TextInput, Alert, ActivityIndicator} from 'react-native';
+import {PressableScale} from '../../components/PressableScale';
+import {SafeAreaView} from 'react-native-safe-area-context';
 import {useTheme} from '../../context/ThemeContext';
 import {adminApi} from '../../services/api';
 import {Badge} from '../../components/Badge';
@@ -61,6 +63,15 @@ export function AdminStaffScreen() {
   const [cardCode, setCardCode] = useState('');
   const [phone, setPhone] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  // Return-key chaining — role-dependent fields aren't always mounted, so
+  // "next" focuses the first ref in the candidate list that actually exists.
+  const empIdRef = useRef<TextInput | null>(null);
+  const deptRef = useRef<TextInput | null>(null);
+  const cardCodeRef = useRef<TextInput | null>(null);
+  const phoneRef = useRef<TextInput | null>(null);
+  const focusFirst = (...refs: React.MutableRefObject<TextInput | null>[]) => {
+    for (const r of refs) if (r.current) { r.current.focus(); return; }
+  };
 
   const loadUsers = useCallback(async () => {
     try {
@@ -221,11 +232,11 @@ export function AdminStaffScreen() {
     const slug = (name.trim() || 'full name').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
     const previewUsername = `${usernamePrefix[role]}${slug || 'full_name'}`;
     return (
-      <SafeAreaView style={[s.safe, {backgroundColor: colors.background}]}>
+      <SafeAreaView edges={['bottom','left','right']} style={[s.safe, {backgroundColor: colors.background}]}>
         <View style={s.formHeader}>
-          <TouchableOpacity onPress={closeForm} style={[s.backBtn, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+          <PressableScale onPress={closeForm} style={[s.backBtn, {backgroundColor: colors.surface, borderColor: colors.border}]}>
             <Text style={[s.backTxt, {color: colors.textPrimary}]}>← Back</Text>
-          </TouchableOpacity>
+          </PressableScale>
           <Text style={[s.formTitle, {color: colors.textPrimary}]}>{isEdit ? 'Edit Staff' : 'Add Staff'}</Text>
           <View style={{width: 70}} />
         </View>
@@ -233,20 +244,22 @@ export function AdminStaffScreen() {
           <Text style={[s.fieldLabel, {color: colors.textMuted}]}>ROLE {isEdit ? '(TRANSFER)' : ''}</Text>
           <View style={s.roleRow}>
             {ROLE_OPTIONS.map(r => (
-              <TouchableOpacity
+              <PressableScale
                 key={r.key}
                 style={[s.roleChip, {borderColor: role === r.key ? colors.primary : colors.border, backgroundColor: role === r.key ? colors.primary + '15' : colors.surface}]}
-                onPress={() => setRole(r.key)} activeOpacity={0.7}
+                onPress={() => setRole(r.key)}
               >
                 <Icon name={r.icon} size={18} color={role === r.key ? colors.primary : colors.textMuted} />
                 <Text style={[s.roleChipTxt, {color: role === r.key ? colors.primary : colors.textSecondary}]}>{r.label}</Text>
-              </TouchableOpacity>
+              </PressableScale>
             ))}
           </View>
 
           <Text style={[s.fieldLabel, {color: colors.textMuted}]}>FULL NAME</Text>
           <TextInput style={[s.input, {borderColor: colors.border, backgroundColor: colors.surface, color: colors.textPrimary}]}
-            value={name} onChangeText={setName} placeholder="e.g. Kavita Reddy" placeholderTextColor={colors.textMuted} />
+            value={name} onChangeText={setName} placeholder="e.g. Kavita Reddy" placeholderTextColor={colors.textMuted}
+            returnKeyType="next" blurOnSubmit={false}
+            onSubmitEditing={() => focusFirst(empIdRef, deptRef, phoneRef)} />
 
           {isEdit && editingUser && (
             <View style={[s.usernameBanner, {backgroundColor: colors.primary + '10', borderColor: colors.primary + '30'}]}>
@@ -262,20 +275,28 @@ export function AdminStaffScreen() {
 
           <Text style={[s.fieldLabel, {color: colors.textMuted}]}>EMPLOYEE ID{isEdit ? ' (FIXED)' : ''} — internal reference only</Text>
           <TextInput
+            ref={r => { empIdRef.current = isEdit ? null : r; }}
             style={[s.input, {borderColor: colors.border, backgroundColor: isEdit ? colors.background : colors.surface, color: isEdit ? colors.textMuted : colors.textPrimary}]}
             value={employeeId} onChangeText={t => setEmployeeId(t.toUpperCase())} placeholder="e.g. DOC010" autoCapitalize="characters" placeholderTextColor={colors.textMuted}
             editable={!isEdit}
+            returnKeyType="next" blurOnSubmit={false}
+            onSubmitEditing={() => focusFirst(deptRef, phoneRef)}
           />
 
           {(role === 'doctor' || role === 'staff') && (
             <>
               <Text style={[s.fieldLabel, {color: colors.textMuted}]}>DEPARTMENT (OPTIONAL)</Text>
               <TextInput style={[s.input, {borderColor: colors.border, backgroundColor: colors.surface, color: colors.textPrimary}]}
-                value={department} onChangeText={setDepartment} placeholder="e.g. Cardiology" placeholderTextColor={colors.textMuted} />
+                ref={deptRef}
+                value={department} onChangeText={setDepartment} placeholder="e.g. Cardiology" placeholderTextColor={colors.textMuted}
+                returnKeyType="next" blurOnSubmit={false}
+                onSubmitEditing={() => focusFirst(cardCodeRef)} />
 
               <Text style={[s.fieldLabel, {color: colors.textMuted}]}>VALET CARD CODE (OPTIONAL, 3 DIGITS)</Text>
               <TextInput style={[s.input, {borderColor: colors.border, backgroundColor: colors.surface, color: colors.textPrimary}]}
-                value={cardCode} onChangeText={t => setCardCode(t.replace(/\D/g, '').slice(0, 3))} placeholder="e.g. 472" keyboardType="numeric" placeholderTextColor={colors.textMuted} />
+                ref={cardCodeRef}
+                value={cardCode} onChangeText={t => setCardCode(t.replace(/\D/g, '').slice(0, 3))} placeholder="e.g. 472" keyboardType="numeric" placeholderTextColor={colors.textMuted}
+                returnKeyType="done" />
             </>
           )}
 
@@ -283,7 +304,9 @@ export function AdminStaffScreen() {
             <>
               <Text style={[s.fieldLabel, {color: colors.textMuted}]}>PHONE (OPTIONAL)</Text>
               <TextInput style={[s.input, {borderColor: colors.border, backgroundColor: colors.surface, color: colors.textPrimary}]}
-                value={phone} onChangeText={setPhone} placeholder="10-digit number" keyboardType="numeric" placeholderTextColor={colors.textMuted} />
+                ref={phoneRef}
+                value={phone} onChangeText={setPhone} placeholder="10-digit number" keyboardType="numeric" placeholderTextColor={colors.textMuted}
+                returnKeyType="done" />
             </>
           )}
 
@@ -292,9 +315,9 @@ export function AdminStaffScreen() {
               <Text style={[s.fieldLabel, {color: colors.textMuted}]}>PASSWORD</Text>
               <View style={[s.passwordRow, {borderColor: colors.border, backgroundColor: colors.surface}]}>
                 <TextInput style={[s.passwordInput, {color: colors.textPrimary}]} value={password} onChangeText={setPassword} />
-                <TouchableOpacity onPress={() => setPassword(genPassword())} style={s.regenBtn}>
+                <PressableScale onPress={() => setPassword(genPassword())} style={s.regenBtn}>
                   <Text style={[s.regenTxt, {color: colors.primary}]}>Regenerate</Text>
-                </TouchableOpacity>
+                </PressableScale>
               </View>
               <Text style={[s.passwordHint, {color: colors.textMuted}]}>
                 {password.length > 0 && password.length < 8
@@ -304,22 +327,22 @@ export function AdminStaffScreen() {
             </>
           )}
 
-          <TouchableOpacity
+          <PressableScale
             style={[s.submitBtn, {backgroundColor: colors.primary, opacity: (name.trim() && employeeId.trim() && (isEdit || password.trim()) && !submitting) ? 1 : 0.4}]}
             onPress={isEdit ? handleSaveEdit : handleCreate}
             disabled={!name.trim() || !employeeId.trim() || (!isEdit && !password.trim()) || submitting}
           >
             {submitting ? <ActivityIndicator color="#fff" /> : <Text style={s.submitBtnTxt}>{isEdit ? 'Save Changes' : 'Create Account'}</Text>}
-          </TouchableOpacity>
+          </PressableScale>
 
           {isEdit && (
             <>
-              <TouchableOpacity style={[s.secondaryBtn, {borderColor: colors.warning + '50', backgroundColor: colors.warning + '10'}]} onPress={handleResetPassword}>
+              <PressableScale style={[s.secondaryBtn, {borderColor: colors.warning + '50', backgroundColor: colors.warning + '10'}]} onPress={handleResetPassword}>
                 <Text style={[s.secondaryBtnTxt, {color: colors.warning}]}>Reset Password</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[s.secondaryBtn, {borderColor: colors.error + '50', backgroundColor: colors.error + '10'}]} onPress={handleDelete}>
+              </PressableScale>
+              <PressableScale style={[s.secondaryBtn, {borderColor: colors.error + '50', backgroundColor: colors.error + '10'}]} onPress={handleDelete}>
                 <Text style={[s.secondaryBtnTxt, {color: colors.error}]}>Delete Account</Text>
-              </TouchableOpacity>
+              </PressableScale>
             </>
           )}
         </ScrollView>
@@ -329,13 +352,13 @@ export function AdminStaffScreen() {
 
   // ── Staff list ───────────────────────────────────────────────────────────
   return (
-    <SafeAreaView style={[s.safe, {backgroundColor: colors.background}]}>
+    <SafeAreaView edges={['bottom','left','right']} style={[s.safe, {backgroundColor: colors.background}]}>
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
 
-        <TouchableOpacity style={[s.addBtn, {backgroundColor: colors.primary}]} onPress={() => setShowAdd(true)} activeOpacity={0.85}>
+        <PressableScale style={[s.addBtn, {backgroundColor: colors.primary}]} onPress={() => setShowAdd(true)}>
           <Icon name="user" size={18} color="#fff" />
           <Text style={s.addBtnTxt}>+ Add Staff</Text>
-        </TouchableOpacity>
+        </PressableScale>
 
         {/* Driver summary */}
         <View style={s.statsRow}>
@@ -354,11 +377,11 @@ export function AdminStaffScreen() {
         {/* Filter tabs */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.filterRow}>
           {FILTER_TABS.map(tab => (
-            <TouchableOpacity
-              key={tab.key} activeOpacity={0.7} onPress={() => setFilter(tab.key)}
+            <PressableScale
+              key={tab.key} onPress={() => setFilter(tab.key)}
               style={[s.filterChip, {backgroundColor: filter === tab.key ? colors.primary : colors.surface, borderColor: filter === tab.key ? colors.primary : colors.border}]}>
               <Text style={[s.filterLabel, {color: filter === tab.key ? '#fff' : colors.textSecondary}]}>{tab.label}</Text>
-            </TouchableOpacity>
+            </PressableScale>
           ))}
         </ScrollView>
 
@@ -372,7 +395,7 @@ export function AdminStaffScreen() {
         ) : (
           <View style={[s.listCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
             {filtered.map((u, i) => (
-              <TouchableOpacity key={u.id} onPress={() => openEdit(u)} activeOpacity={0.7}
+              <PressableScale key={u.id} onPress={() => openEdit(u)}
                 style={[s.staffRow, {borderBottomColor: colors.border}, i === filtered.length - 1 && {borderBottomWidth: 0}]}>
                 <View style={[s.avatar, {backgroundColor: colors.primary + '15'}]}>
                   <Text style={[s.avatarText, {color: colors.primary}]}>
@@ -392,7 +415,7 @@ export function AdminStaffScreen() {
                   {statusBadge(u)}
                   <Icon name="arrowRight" size={14} color={colors.textMuted} />
                 </View>
-              </TouchableOpacity>
+              </PressableScale>
             ))}
           </View>
         )}

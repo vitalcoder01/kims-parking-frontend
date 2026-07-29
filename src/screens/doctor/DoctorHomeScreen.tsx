@@ -1,6 +1,9 @@
 import React, {useState, useEffect, useRef} from 'react';
-import {View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Animated, Alert} from 'react-native';
+import {View, Text, StyleSheet, ScrollView, Animated, Alert} from 'react-native';
+import {PressableScale} from '../../components/PressableScale';
+import {SafeAreaView} from 'react-native-safe-area-context';
 import LinearGradient from 'react-native-linear-gradient';
+import {useNavigation} from '@react-navigation/native';
 import {useAuth} from '../../context/AuthContext';
 import {useAppState} from '../../context/AppStateContext';
 import {useTheme} from '../../context/ThemeContext';
@@ -9,18 +12,15 @@ import {useRetrievalRequest} from '../../hooks/useRetrievalRequest';
 import {BRAND_GRADIENT, BRAND_GRADIENT_DARK} from '../../theme/colors';
 import {Icon} from '../../components/Icon';
 
-const ETA_OPTIONS = [
-  {label: '10', sub: 'min', value: 10, grad: ['#4338CA','#4F46E5'] as [string,string]},
-  {label: '20', sub: 'min', value: 20, grad: ['#4F46E5','#6366F1'] as [string,string]},
-  {label: '30', sub: 'min', value: 30, grad: ['#4F46E5','#22D3EE'] as [string,string]},
-  {label: '40', sub: 'min', value: 40, grad: ['#06B6D4','#22D3EE'] as [string,string]},
-];
+const ETA_OPTIONS = [10, 20, 30, 40];
 
 export function DoctorHomeScreen() {
-  const {user, logout} = useAuth();
+  const {user} = useAuth();
   const {tasks} = useAppState();
   const {colors, isDark} = useTheme();
+  const navigation = useNavigation<any>();
   const {activeRetrieve, remainingSeconds, requestRetrieval} = useRetrievalRequest();
+  const [selectedEta, setSelectedEta]     = useState<number | null>(null);
   const [requesting, setRequesting]       = useState(false);
   const [showTracking, setShowTracking]   = useState(false);
   const pulse = useRef(new Animated.Value(1)).current;
@@ -35,7 +35,10 @@ export function DoctorHomeScreen() {
   const latestTask = myTasks[0];
   const displayTask = activeTask ?? latestTask;
   const carIsParked = displayTask?.type === 'park' && displayTask.status === 'completed';
-  const carJustRetrieved = displayTask?.type === 'retrieve' && displayTask.status === 'completed';
+  // 'delivered' — driver's brought the car back to the valet counter, but
+  // the valet hasn't confirmed handover yet. That's still "come get it",
+  // not "already done" — the task only becomes 'completed' once confirmed.
+  const carJustRetrieved = displayTask?.type === 'retrieve' && displayTask.status === 'delivered';
 
   useEffect(() => {
     Animated.loop(Animated.sequence([
@@ -44,10 +47,11 @@ export function DoctorHomeScreen() {
     ])).start();
   }, []);
 
-  const handleDeparture = async (eta: number) => {
+  const handleDeparture = async () => {
+    if (!selectedEta) return;
     setRequesting(true);
     try {
-      await requestRetrieval(eta);
+      await requestRetrieval(selectedEta);
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Could not request retrieval');
     } finally {
@@ -56,21 +60,31 @@ export function DoctorHomeScreen() {
   };
 
   const fmt = (s: number) => `${Math.floor(s/60).toString().padStart(2,'0')}:${(s%60).toString().padStart(2,'0')}`;
+  const fmtClock = (ms: number) => new Date(ms).toLocaleTimeString(undefined, {hour: 'numeric', minute: '2-digit'});
 
+  // 'assigned' is the task's status from the moment it's *created* — it does
+  // NOT mean a driver has been picked yet. Whether one has is driverId
+  // being set, not the status string, so that has to gate the label
+  // separately instead of folding it into the status map below.
   const statusMap: Record<string,{label:string;color:string}> = {
     assigned:      {label: 'Driver Assigned',      color: colors.warning},
     key_collected: {label: 'Key Collected',         color: colors.info},
-    in_transit:    {label: 'En Route to Parking',   color: colors.primary},
+    in_transit:    {label: activeTask?.type === 'retrieve' ? 'En Route to You' : 'En Route to Parking', color: colors.primary},
+    delivered:     {label: 'Car Arrived — Confirm at Counter', color: colors.success},
     completed:     {label: 'Safely Parked',         color: colors.success},
   };
-  const statusInfo = activeTask ? statusMap[activeTask.status] : null;
+  const statusInfo = activeTask
+    ? (activeTask.status === 'assigned' && !activeTask.driverId
+        ? {label: 'Awaiting Driver', color: colors.textMuted}
+        : statusMap[activeTask.status])
+    : null;
 
   if (showTracking && displayTask) {
     return <LiveTrackingScreen task={displayTask} onBack={() => setShowTracking(false)} />;
   }
 
   return (
-    <SafeAreaView style={[s.safe, {backgroundColor: colors.background}]}>
+    <SafeAreaView edges={['bottom','left','right']} style={[s.safe, {backgroundColor: colors.background}]}>
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
 
         {/* Gradient header */}
@@ -82,13 +96,13 @@ export function DoctorHomeScreen() {
               <Text style={s.headerDept}>{user?.department}</Text>
             </View>
             <View style={{alignItems: 'flex-end', gap: 10}}>
-              <TouchableOpacity style={s.logoutBtn} onPress={logout} activeOpacity={0.8}>
-                <Icon name="logout" size={18} color="#fff" />
-              </TouchableOpacity>
-              <View style={s.cardCodeBox}>
+              <PressableScale style={s.cardCodeBox} onPress={() => navigation.navigate('Card')}>
                 <Text style={s.cardCodeNum}>{user?.cardCode ?? '---'}</Text>
-                <Text style={s.cardCodeLbl}>VALET CODE</Text>
-              </View>
+                <View style={s.cardCodeLblRow}>
+                  <Text style={s.cardCodeLbl}>VALET CODE</Text>
+                  <Icon name="chevronRight" size={11} color="rgba(255,255,255,0.7)" />
+                </View>
+              </PressableScale>
             </View>
           </View>
         </LinearGradient>
@@ -116,7 +130,10 @@ export function DoctorHomeScreen() {
                 )}
                 {carJustRetrieved && (
                   <LinearGradient colors={isDark ? ['#0D2A1C', '#0F3323'] : ['#ECFDF5', '#D1FAE5']} style={s.slotBanner} start={{x:0,y:0}} end={{x:1,y:0}}>
-                    <Text style={[s.slotLabel, {color: colors.success}]}>🚗 CAR READY AT ENTRANCE</Text>
+                    <View style={s.slotLabelRow}>
+                      <Icon name="car" size={13} color={colors.success} />
+                      <Text style={[s.slotLabel, {color: colors.success}]}>CAR READY AT ENTRANCE</Text>
+                    </View>
                     <Text style={[s.slotValue, {color: colors.success, fontSize: 22}]}>Please collect at the gate</Text>
                   </LinearGradient>
                 )}
@@ -132,12 +149,12 @@ export function DoctorHomeScreen() {
                   ))}
                 </View>
                 {!carJustRetrieved && (
-                  <TouchableOpacity style={[s.trackBtn, {backgroundColor: colors.primary + '10', borderColor: colors.primary + '30'}]}
-                    onPress={() => setShowTracking(true)} activeOpacity={0.8}>
+                  <PressableScale style={[s.trackBtn, {backgroundColor: colors.primary + '10', borderColor: colors.primary + '30'}]}
+                    onPress={() => setShowTracking(true)}>
                     <Icon name="map" size={18} color={colors.primary} />
                     <Text style={[s.trackBtnTxt, {color: colors.primary}]}>View Live Tracking Map</Text>
                     <Icon name="arrowRight" size={18} color={colors.primary} />
-                  </TouchableOpacity>
+                  </PressableScale>
                 )}
               </>
             ) : (
@@ -153,40 +170,86 @@ export function DoctorHomeScreen() {
               more to ask for. */}
           {carIsParked && !activeRetrieve && (
             <View style={[s.departureCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
-              <LinearGradient colors={BRAND_GRADIENT} style={s.departureHeader} start={{x:0,y:0}} end={{x:1,y:0}}>
+              <LinearGradient colors={isDark ? BRAND_GRADIENT_DARK : BRAND_GRADIENT} style={s.departureHeader} start={{x:0,y:0}} end={{x:1,y:0}}>
                 <Text style={s.departureHeaderTxt}>Ready to Leave?</Text>
                 <Text style={s.departureHeaderSub}>Valet will assign a driver to bring your car to you</Text>
               </LinearGradient>
-              <View style={s.etaGrid}>
-                {ETA_OPTIONS.map(opt => (
-                  <TouchableOpacity key={opt.value} onPress={() => handleDeparture(opt.value)} activeOpacity={0.8} disabled={requesting}>
-                    <LinearGradient colors={opt.grad} style={[s.etaBtn, requesting && {opacity: 0.5}]} start={{x:0,y:0}} end={{x:0,y:1}}>
-                      <Text style={s.etaBtnNum}>{opt.label}</Text>
-                      <Text style={s.etaBtnSub}>{opt.sub}</Text>
-                    </LinearGradient>
-                  </TouchableOpacity>
-                ))}
+              <View style={s.etaBody}>
+                <Text style={[s.etaQuestion, {color: colors.textMuted}]}>WHEN DO YOU NEED YOUR CAR?</Text>
+                <View style={s.etaGrid}>
+                  {ETA_OPTIONS.map(opt => {
+                    const on = selectedEta === opt;
+                    return (
+                      <PressableScale
+                        key={opt}
+                        onPress={() => setSelectedEta(opt)}
+                        disabled={requesting}
+                        style={[
+                          s.etaBtn,
+                          {
+                            backgroundColor: on ? colors.textPrimary : colors.cardAlt,
+                            borderColor: on ? colors.textPrimary : colors.border,
+                          },
+                        ]}>
+                        <Text style={[s.etaBtnNum, {color: on ? colors.background : colors.textPrimary}]}>{opt}</Text>
+                        <Text style={[s.etaBtnSub, {color: on ? colors.background + 'AA' : colors.textMuted}]}>min</Text>
+                      </PressableScale>
+                    );
+                  })}
+                </View>
+
+                {selectedEta != null && (
+                  <View style={[s.etaReadyRow, {backgroundColor: colors.success + '10', borderColor: colors.success + '30'}]}>
+                    <View>
+                      <Text style={[s.etaReadyLbl, {color: colors.textMuted}]}>Car ready by</Text>
+                      <Text style={[s.etaReadyVal, {color: colors.success}]}>{fmtClock(Date.now() + selectedEta * 60000)}</Text>
+                    </View>
+                    <Icon name="car" size={24} color={colors.success} />
+                  </View>
+                )}
+
+                <PressableScale
+                  onPress={handleDeparture}
+                  disabled={!selectedEta || requesting}
+                  style={[
+                    s.etaConfirmBtn,
+                    {backgroundColor: selectedEta ? colors.primary : colors.border, opacity: requesting ? 0.6 : 1},
+                  ]}>
+                  <Text style={[s.etaConfirmTxt, {color: selectedEta ? colors.textOnPrimary : colors.textMuted}]}>
+                    {requesting ? 'Requesting…' : selectedEta ? `Confirm — Leaving in ${selectedEta} min` : 'Select a time above'}
+                  </Text>
+                  {selectedEta && !requesting && <Icon name="arrowRight" size={15} color={colors.textOnPrimary} />}
+                </PressableScale>
               </View>
             </View>
           )}
 
           {/* Countdown — real backend-tracked retrieval state, shared with
               the "My Parking" tab via useRetrievalRequest so it's identical
-              no matter which screen the doctor is looking at. */}
-          {activeRetrieve && (
+              no matter which screen the doctor is looking at. Hidden once
+              'delivered' — the CAR READY AT ENTRANCE banner above already
+              covers that, so both wouldn't need to say it at once. */}
+          {activeRetrieve && activeRetrieve.status !== 'delivered' && (
             <Animated.View style={{transform: [{scale: pulse}]}}>
-              <LinearGradient colors={BRAND_GRADIENT} style={s.countdownCard} start={{x:0,y:0}} end={{x:1,y:1}}>
-                <Text style={s.countdownLabel}>
-                  {activeRetrieve.status === 'requested' && 'Waiting for Valet ⏳'}
-                  {activeRetrieve.status === 'assigned' && `${activeRetrieve.driverName ?? 'Driver'} Assigned 🔔`}
-                  {activeRetrieve.status === 'in_transit' && `${activeRetrieve.driverName ?? 'Driver'} On The Way 🚗`}
-                </Text>
+              <LinearGradient colors={isDark ? BRAND_GRADIENT_DARK : BRAND_GRADIENT} style={s.countdownCard} start={{x:0,y:0}} end={{x:1,y:1}}>
+                <View style={s.countdownLabelRow}>
+                  <Icon
+                    name={activeRetrieve.status === 'requested' ? 'timer' : activeRetrieve.status === 'assigned' ? 'bell' : 'car'}
+                    size={13} color="rgba(255,255,255,0.8)"
+                  />
+                  <Text style={s.countdownLabel}>
+                    {activeRetrieve.status === 'requested' && 'Waiting for Valet'}
+                    {activeRetrieve.status === 'assigned' && `${activeRetrieve.driverName ?? 'Driver'} Assigned`}
+                    {activeRetrieve.status === 'in_transit' && `${activeRetrieve.driverName ?? 'Driver'} On The Way`}
+                  </Text>
+                </View>
                 {remainingSeconds != null && <Text style={s.countdownTimer}>{fmt(remainingSeconds)}</Text>}
                 <Text style={s.countdownSub}>Your car is being retrieved</Text>
                 {activeRetrieve.status === 'in_transit' && (
-                  <TouchableOpacity style={s.countdownTrackBtn} onPress={() => setShowTracking(true)} activeOpacity={0.85}>
-                    <Text style={s.countdownTrackBtnTxt}>🗺️ View Live Tracking Map</Text>
-                  </TouchableOpacity>
+                  <PressableScale style={s.countdownTrackBtn} onPress={() => setShowTracking(true)}>
+                    <Icon name="map" size={15} color="#fff" />
+                    <Text style={s.countdownTrackBtnTxt}>View Live Tracking Map</Text>
+                  </PressableScale>
                 )}
               </LinearGradient>
             </Animated.View>
@@ -204,12 +267,12 @@ const s = StyleSheet.create({
   headerGreet:{color:'rgba(255,255,255,0.75)',fontSize:13,fontWeight:'500'},
   headerName:{color:'#fff',fontSize:22,fontWeight:'900',marginTop:2},
   headerDept:{color:'rgba(255,255,255,0.65)',fontSize:12,marginTop:2},
-  logoutBtn:{width:38,height:38,borderRadius:12,backgroundColor:'rgba(255,255,255,0.18)',alignItems:'center',justifyContent:'center',borderWidth:1,borderColor:'rgba(255,255,255,0.25)'},
   cardCodeBox:{backgroundColor:'rgba(255,255,255,0.2)',borderRadius:16,paddingHorizontal:16,paddingVertical:10,alignItems:'center',borderWidth:1,borderColor:'rgba(255,255,255,0.25)'},
   cardCodeNum:{color:'#fff',fontSize:28,fontWeight:'900',letterSpacing:6},
-  cardCodeLbl:{color:'rgba(255,255,255,0.7)',fontSize:8,fontWeight:'700',letterSpacing:1.5,marginTop:2},
+  cardCodeLblRow:{flexDirection:'row',alignItems:'center',gap:2,marginTop:2},
+  cardCodeLbl:{color:'rgba(255,255,255,0.7)',fontSize:8,fontWeight:'700',letterSpacing:1.5},
 
-  body:{padding:16,marginTop:-16,gap:12},
+  body:{padding:16,paddingTop:20,gap:12},
   statusCard:{borderRadius:20,borderWidth:1,overflow:'hidden'},
   statusTop:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',padding:16,paddingBottom:12},
   statusCardTitle:{fontSize:15,fontWeight:'800'},
@@ -217,6 +280,7 @@ const s = StyleSheet.create({
   statusDot:{width:7,height:7,borderRadius:4},
   statusPillTxt:{fontSize:11,fontWeight:'700'},
   slotBanner:{padding:16,alignItems:'center',marginHorizontal:16,marginBottom:12,borderRadius:14},
+  slotLabelRow:{flexDirection:'row',alignItems:'center',gap:6},
   slotLabel:{fontSize:9,fontWeight:'700',letterSpacing:1.5},
   slotValue:{fontSize:36,fontWeight:'900',marginTop:2},
   metaRow:{flexDirection:'row',borderTopWidth:1,borderTopColor:'rgba(0,0,0,0.05)'},
@@ -235,16 +299,26 @@ const s = StyleSheet.create({
   departureHeader:{padding:18},
   departureHeaderTxt:{color:'#fff',fontSize:17,fontWeight:'900'},
   departureHeaderSub:{color:'rgba(255,255,255,0.75)',fontSize:12,marginTop:3},
-  etaGrid:{flexDirection:'row',gap:10,padding:16},
-  etaBtn:{flex:1,borderRadius:14,paddingVertical:16,alignItems:'center'},
-  etaBtnNum:{color:'#fff',fontSize:22,fontWeight:'900'},
-  etaBtnSub:{color:'rgba(255,255,255,0.75)',fontSize:10,fontWeight:'600',marginTop:2},
+  etaBody:{padding:16},
+  etaQuestion:{fontSize:10,fontWeight:'700',letterSpacing:1,marginBottom:12},
+  etaGrid:{flexDirection:'row',gap:10},
+  etaBtn:{flex:1,borderRadius:14,paddingVertical:16,alignItems:'center',borderWidth:1.5},
+  etaBtnNum:{fontSize:22,fontWeight:'900',lineHeight:26},
+  etaBtnSub:{fontSize:9,fontWeight:'800',letterSpacing:1,textTransform:'uppercase',marginTop:3},
+
+  etaReadyRow:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',borderRadius:14,borderWidth:1,padding:14,marginTop:14},
+  etaReadyLbl:{fontSize:10,fontWeight:'600'},
+  etaReadyVal:{fontSize:22,fontWeight:'900',marginTop:2},
+
+  etaConfirmBtn:{flexDirection:'row',alignItems:'center',justifyContent:'center',gap:8,borderRadius:14,paddingVertical:15,marginTop:14},
+  etaConfirmTxt:{fontSize:14,fontWeight:'900'},
 
   countdownCard:{borderRadius:20,padding:28,alignItems:'center'},
+  countdownLabelRow:{flexDirection:'row',alignItems:'center',gap:6},
   countdownLabel:{color:'rgba(255,255,255,0.8)',fontSize:12,fontWeight:'700'},
   countdownTimer:{color:'#fff',fontSize:56,fontWeight:'900',fontVariant:['tabular-nums'],marginVertical:6},
   countdownSub:{color:'rgba(255,255,255,0.7)',fontSize:12},
-  countdownTrackBtn:{marginTop:16,backgroundColor:'rgba(255,255,255,0.2)',borderRadius:12,paddingVertical:12,paddingHorizontal:20,borderWidth:1,borderColor:'rgba(255,255,255,0.3)'},
+  countdownTrackBtn:{flexDirection:'row',alignItems:'center',gap:8,marginTop:16,backgroundColor:'rgba(255,255,255,0.2)',borderRadius:12,paddingVertical:12,paddingHorizontal:20,borderWidth:1,borderColor:'rgba(255,255,255,0.3)'},
   countdownTrackBtnTxt:{color:'#fff',fontSize:13,fontWeight:'800'},
 
 });
