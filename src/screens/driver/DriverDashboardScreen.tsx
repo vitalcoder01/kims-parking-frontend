@@ -1,4 +1,4 @@
-import React from 'react';
+import React, {useEffect, useState} from 'react';
 import {View, Text, StyleSheet, ScrollView, StatusBar} from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useAuth} from '../../context/AuthContext';
@@ -29,9 +29,16 @@ function weekStrip() {
   });
 }
 
+function isToday(ms?: number) {
+  if (!ms) return false;
+  const d = new Date(ms);
+  const now = new Date();
+  return d.toDateString() === now.toDateString();
+}
+
 export function DriverDashboardScreen() {
   const {user} = useAuth();
-  const {tasks, visitors} = useAppState();
+  const {tasks, visitors, fetchTaskHistory} = useAppState();
   const {colors: c, isDark} = useTheme();
   const navigation = useNavigation<any>();
   const g = greeting();
@@ -42,15 +49,26 @@ export function DriverDashboardScreen() {
   // 'delivered' is already off this driver's plate — awaiting valet
   // confirmation only, not something to keep showing as their active job.
   const activeTask = myTasks.find(t => t.status !== 'completed' && t.status !== 'delivered' && t.status !== 'cancelled') ?? null;
-  const completedToday = myTasks.filter(t => t.status === 'completed');
   const pendingVisitors = visitors.filter(v => v.driverId === myDriverId
     && (v.status === 'pending' || (v.status === 'parked' && v.retrievalRequested)));
   const openCount = (activeTask ? 1 : 0) + pendingVisitors.length;
 
+  // "Completed"/"Total jobs" need real history, not the live `tasks` array —
+  // that's deliberately bounded to "at most one row per doctor" now, so a
+  // job retired the moment a doctor's next car comes in would otherwise
+  // vanish from these stats even though it genuinely happened today.
+  const [history, setHistory] = useState<typeof tasks>([]);
+  useEffect(() => {
+    if (!myDriverId) return;
+    fetchTaskHistory({driverId: myDriverId}).then(setHistory).catch(() => {});
+  }, [myDriverId, fetchTaskHistory, tasks.length]);
+
+  const completedToday = history.filter(t => t.status === 'completed' && isToday(t.completedAt));
+
   const stats = [
     {label: 'Completed', value: completedToday.length, icon: 'flag' as const},
     {label: 'Open now', value: openCount, icon: 'inbox' as const},
-    {label: 'Total jobs', value: myTasks.length, icon: 'history' as const},
+    {label: 'Total jobs', value: history.length, icon: 'history' as const},
   ];
 
   return (

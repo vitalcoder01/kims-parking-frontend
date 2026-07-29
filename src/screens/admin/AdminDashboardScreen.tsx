@@ -1,4 +1,4 @@
-import React from 'react';
+import React, {useEffect, useState} from 'react';
 import {View, Text, StyleSheet, ScrollView} from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useTheme} from '../../context/ThemeContext';
@@ -12,7 +12,15 @@ type ActivityType = 'success' | 'info' | 'primary' | 'warning';
 export function AdminDashboardScreen() {
   const {colors, isDark} = useTheme();
   const {user} = useAuth();
-  const {tasks, drivers, slots} = useAppState();
+  const {tasks, drivers, slots, fetchTaskHistory} = useAppState();
+
+  // The live `tasks` array is bounded to "at most one row per doctor" now,
+  // so a completed job disappears from it the moment that doctor's next car
+  // comes in — this feed needs the real history to stay populated over time.
+  const [history, setHistory] = useState<typeof tasks>([]);
+  useEffect(() => {
+    fetchTaskHistory().then(setHistory).catch(() => {});
+  }, [fetchTaskHistory, tasks.length]);
 
   const liveTasks    = tasks.filter(t => t.status !== 'completed');
   const busyDrivers  = drivers.filter(d => d.status === 'busy').length;
@@ -48,7 +56,7 @@ export function AdminDashboardScreen() {
     warning: colors.warning,
   };
 
-  const liveActivity = tasks.slice(0, 5).map(t => ({
+  const liveActivity = history.slice(0, 5).map(t => ({
     icon: (t.status === 'completed' ? 'check' : t.type === 'park' ? 'car' : 'refresh') as IconName,
     text: `${t.carNumber} — ${t.type === 'park' ? 'parked' : 'retrieved'}${t.slotId ? ` at ${t.slotId}` : ''}`,
     sub: `${t.doctorName} · ${t.driverName ?? 'Unassigned'}`,

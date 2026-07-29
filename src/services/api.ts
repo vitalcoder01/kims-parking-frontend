@@ -117,10 +117,11 @@ export const tasksApi = {
     client.get('/tasks', {params}).then(r => r.data.tasks),
   // Full past-sessions log — bypasses the isCurrent filter the live-board
   // `list()` call uses, so this returns everything ever, not just whatever's
-  // currently active. Pass doctorId for one doctor's history, or omit it
-  // for the valet/admin "every staff record" log (capped server-side).
-  history: (doctorId?: number) =>
-    client.get('/tasks', {params: {doctorId, history: true}}).then(r => r.data.tasks),
+  // currently active. Pass doctorId for one doctor's history, driverId for
+  // one driver's completed/cancelled jobs, or neither for the valet/admin
+  // "every staff record" log (capped server-side).
+  history: (params?: {doctorId?: number; driverId?: number}) =>
+    client.get('/tasks', {params: {...params, history: true}}).then(r => r.data.tasks),
   get: (id: number) => client.get(`/tasks/${id}`).then(r => r.data.task),
   create: (data: {type: 'park' | 'retrieve'; doctorId: number; carNumber: string; slotId?: string; destinationLat?: number; destinationLng?: number}) =>
     client.post('/tasks', data).then(r => r.data.task),

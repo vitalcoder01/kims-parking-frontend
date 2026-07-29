@@ -11,7 +11,7 @@ import {PressableScale} from '../../components/PressableScale';
 export function DriverJobsScreen() {
   const {user} = useAuth();
   const {tasks, slots, visitors, markParked, markRetrieved, updateTask, pushNotification,
-    acceptTask, rejectTask,
+    acceptTask, rejectTask, fetchTaskHistory,
     acceptVisitorTask, rejectVisitorTask, markVisitorPickedUp, markVisitorParked, markVisitorRetrieved} = useAppState();
   const {colors: c, isDark} = useTheme();
 
@@ -24,9 +24,19 @@ export function DriverJobsScreen() {
   // so it shouldn't keep sitting here as this driver's "current job".
   const myTasks = tasks.filter(t => t.driverId === myDriverId && t.status !== 'completed' && t.status !== 'delivered' && t.status !== 'cancelled');
   const activeTask = myTasks[0] ?? null;
-  const completedToday = tasks.filter(t => t.driverId === myDriverId && t.status === 'completed');
   const myVisitors = visitors.filter(v => v.driverId === myDriverId
     && (v.status === 'pending' || (v.status === 'parked' && v.retrievalRequested)));
+
+  // The live `tasks` array is bounded to "at most one row per doctor" now —
+  // a completed job vanishes from it the moment that doctor's next car comes
+  // in, so "completed today" needs the real history, not this list.
+  const [history, setHistory] = useState<typeof tasks>([]);
+  useEffect(() => {
+    if (!myDriverId) return;
+    fetchTaskHistory({driverId: myDriverId}).then(setHistory).catch(() => {});
+  }, [myDriverId, fetchTaskHistory, tasks.length]);
+  const today = new Date().toDateString();
+  const completedToday = history.filter(t => t.status === 'completed' && t.completedAt && new Date(t.completedAt).toDateString() === today);
 
   const trip = computeTrip({
     startLat: activeTask?.driverStartLat, startLng: activeTask?.driverStartLng,

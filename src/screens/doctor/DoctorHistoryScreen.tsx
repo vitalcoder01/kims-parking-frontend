@@ -33,7 +33,7 @@ export function DoctorHistoryScreen() {
   const load = useCallback(() => {
     if (!user?.id) return;
     setLoading(true);
-    fetchTaskHistory(user.id).then(setRows).catch(() => {}).finally(() => setLoading(false));
+    fetchTaskHistory({doctorId: user.id}).then(setRows).catch(() => {}).finally(() => setLoading(false));
   }, [user?.id, fetchTaskHistory]);
 
   useEffect(() => { load(); }, [load]);

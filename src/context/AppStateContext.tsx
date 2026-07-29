@@ -147,7 +147,7 @@ interface AppState {
   markRetrieved: (taskId: number) => Promise<void>;
   confirmTaskDelivered: (taskId: number) => Promise<void>;
   cancelTask: (taskId: number) => Promise<void>;
-  fetchTaskHistory: (doctorId?: number) => Promise<ParkingTask[]>;
+  fetchTaskHistory: (params?: {doctorId?: number; driverId?: number}) => Promise<ParkingTask[]>;
   reportLocation: (taskId: number, lat: number, lng: number) => Promise<void>;
   setDriverStatus: (driverId: number, status: DriverStatus) => Promise<void>;
   addVisitor: (v: {name: string; carNumber?: string; mobile: string; vehicleType?: 'car' | 'bike'}) => Promise<Visitor>;
@@ -556,12 +556,12 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
   }, []);
 
-  // On-demand only — a full past-sessions log (one doctor's, or every
-  // staff record if doctorId is omitted), not part of the constantly-
+  // On-demand only — a full past-sessions log (one doctor's, one driver's,
+  // or every staff record if both are omitted), not part of the constantly-
   // polled/socket-fed live `tasks` array (that stays bounded to "at most one
   // row per doctor" by design; history can be years of rows).
-  const fetchTaskHistory = useCallback(async (doctorId?: number) => {
-    const rows = await tasksApi.history(doctorId);
+  const fetchTaskHistory = useCallback(async (params?: {doctorId?: number; driverId?: number}) => {
+    const rows = await tasksApi.history(params);
     return rows.map(mapTask);
   }, []);
 
