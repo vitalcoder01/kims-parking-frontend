@@ -11,10 +11,10 @@
 //   then paste the https://<random>.trycloudflare.com URL it prints below.
 //   Quick tunnels are randomly generated per run — update LOCAL_BASE_URL
 //   every time you restart cloudflared.
-const ACTIVE_BACKEND: 'render' | 'local' = 'local';
+const ACTIVE_BACKEND: 'render' | 'local' = 'render';
 
 const RENDER_BASE_URL = 'https://kims-parking-backend-2.onrender.com'; // backend
-// const LOCAL_BASE_URL = 'https://jackie-villa-watts-alfred.trycloudflare.com'; // localhost
+const LOCAL_BASE_URL = ''; // localhost tunnel — set this before flipping ACTIVE_BACKEND to 'local'
 
 const ROOT_URL = ACTIVE_BACKEND === 'local' ? LOCAL_BASE_URL : RENDER_BASE_URL;
 
