@@ -20,6 +20,17 @@ const client: AxiosInstance = axios.create({
 // generic HTTP clients on React Native don't do it for you.
 const etagCache = new Map<string, {etag: string; data: unknown}>();
 
+// Keyed only by URL+params, with no per-session component — switching
+// accounts on one device (Quick Login) without killing the app means a
+// stale cached body from the PREVIOUS account can get reused via a
+// legitimate-looking 304 on the new account's very first fetch, showing
+// empty/wrong data until something actually changes server-side. Must be
+// cleared on every login and logout so a new session always gets a real
+// 200 at least once.
+export function clearConditionalGetCache() {
+  etagCache.clear();
+}
+
 function conditionalGetKey(config: {method?: string; url?: string; params?: unknown}): string | null {
   if ((config.method ?? 'get').toLowerCase() !== 'get') return null;
   return `${config.url ?? ''}?${JSON.stringify(config.params ?? {})}`;

@@ -1,6 +1,6 @@
 import React, {createContext, useCallback, useContext, useState, useEffect, useRef} from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {authApi, setAuthToken, setUnauthorizedHandler} from '../services/api';
+import {authApi, setAuthToken, setUnauthorizedHandler, clearConditionalGetCache} from '../services/api';
 import {unregisterCurrentDevice} from '../services/pushMessaging';
 import {stopAssignmentAlarm} from '../services/notifications';
 
@@ -62,6 +62,7 @@ export function AuthProvider({children}: {children: React.ReactNode}) {
     setUser(null);
     tokenRef.current = null;
     setAuthToken(null);
+    clearConditionalGetCache();
     AsyncStorage.removeItem(SESSION_KEY);
   }, []);
 
@@ -103,6 +104,7 @@ export function AuthProvider({children}: {children: React.ReactNode}) {
     const withTime: CurrentUser = {...loggedInUser, loginTime: Date.now()};
     tokenRef.current = token;
     setAuthToken(token);
+    clearConditionalGetCache();
     setUser(withTime);
     await AsyncStorage.setItem(SESSION_KEY, JSON.stringify({user: withTime, token, loginTime: Date.now()}));
     return withTime;
