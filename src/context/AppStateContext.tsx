@@ -5,7 +5,6 @@ import {displayNotification, ringAssignmentAlarm, stopAssignmentAlarm} from '../
 import {tasksApi, driversApi, slotsApi, visitorsApi, notificationsApi, arrivalsApi, getAuthToken} from '../services/api';
 import {connectSocket, disconnectSocket, emitDriverLocation} from '../services/socket';
 import {initPushMessaging} from '../services/pushMessaging';
-import {getCurrentPositionSafe} from '../utils/location';
 import {useAuth} from './AuthContext';
 
 export type DriverStatus = 'available' | 'busy' | 'off';
@@ -495,12 +494,14 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     return mapped.id;
   }, []);
 
-  // Doctor/staff only — the real destination is wherever THIS phone is right
-  // now, i.e. the person's own location, since that's who the driver is
-  // actually bringing the car back to (not the valet counter).
+  // Destination is the admin-set fixed valet gate (backend fallback), not
+  // this phone's own GPS — the car is always handed back at the same fixed
+  // entrance regardless of exactly where the doctor is standing when they
+  // tap the button (see "CAR READY AT ENTRANCE — please collect at the
+  // gate"), and capturing live GPS here was exactly as fragile as an
+  // emulator's default location was for parking.
   const requestRetrieval = useCallback(async (eta: number) => {
-    const here = await getCurrentPositionSafe();
-    const created = mapTask(await tasksApi.requestRetrieval({eta, destinationLat: here?.lat, destinationLng: here?.lng}));
+    const created = mapTask(await tasksApi.requestRetrieval({eta}));
     setTasks(p => [created, ...p]);
     await pushNotification({
       targetRole: 'valet',

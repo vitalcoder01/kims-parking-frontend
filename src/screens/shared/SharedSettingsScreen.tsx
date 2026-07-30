@@ -17,7 +17,7 @@ import {adminApi} from '../../services/api';
 // (there's no per-task destination to derive it from the way a retrieval
 // has the doctor's live location), which is what makes the ETA/progress bar
 // on the live tracking screen work for parking jobs at all.
-function ParkingLotMapPicker({lat, lng, isDark, onPick}: {lat: number; lng: number; isDark: boolean; onPick: (lat: number, lng: number) => void}) {
+function LocationMapPicker({lat, lng, isDark, onPick}: {lat: number; lng: number; isDark: boolean; onPick: (lat: number, lng: number) => void}) {
   const html = `<!DOCTYPE html>
 <html><head>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
@@ -66,8 +66,8 @@ const ROLE_LABELS: Record<string, string> = {
   parking_driver: 'Parking Driver', retrieval_driver: 'Retrieval Driver', admin: 'Admin',
 };
 
-const DEFAULT_LOT_LAT = 20.5937;
-const DEFAULT_LOT_LNG = 78.9629;
+const DEFAULT_LAT = 20.5937;
+const DEFAULT_LNG = 78.9629;
 
 export function SharedSettingsScreen() {
   const {colors, mode, setMode, isDark} = useTheme();
@@ -83,17 +83,28 @@ export function SharedSettingsScreen() {
   const [lotPin, setLotPin] = React.useState<{lat: number; lng: number} | null>(null);
   const [savingLot, setSavingLot] = React.useState(false);
   const [lotSaved, setLotSaved] = React.useState(false);
+  // Admin-only: the valet gate/entrance — a retrieval's real "destination"
+  // is this fixed pickup point, not the doctor's own live GPS at the moment
+  // they request the car (see task.service.js requestRetrieval).
+  const [gatePin, setGatePin] = React.useState<{lat: number; lng: number} | null>(null);
+  const [savingGate, setSavingGate] = React.useState(false);
+  const [gateSaved, setGateSaved] = React.useState(false);
 
   React.useEffect(() => {
     if (user?.role !== 'admin') return;
     adminApi.getSettings()
       .then(s => {
         setAcceptTimeout(Number(s.driverAcceptTimeoutSeconds) || 60);
-        const lat = Number(s.parkingLotLat);
-        const lng = Number(s.parkingLotLng);
-        setLotPin(Number.isFinite(lat) && Number.isFinite(lng) && s.parkingLotLat && s.parkingLotLng
-          ? {lat, lng}
-          : {lat: DEFAULT_LOT_LAT, lng: DEFAULT_LOT_LNG});
+        const lotLat = Number(s.parkingLotLat);
+        const lotLng = Number(s.parkingLotLng);
+        setLotPin(Number.isFinite(lotLat) && Number.isFinite(lotLng) && s.parkingLotLat && s.parkingLotLng
+          ? {lat: lotLat, lng: lotLng}
+          : {lat: DEFAULT_LAT, lng: DEFAULT_LNG});
+        const gateLat = Number(s.valetGateLat);
+        const gateLng = Number(s.valetGateLng);
+        setGatePin(Number.isFinite(gateLat) && Number.isFinite(gateLng) && s.valetGateLat && s.valetGateLng
+          ? {lat: gateLat, lng: gateLng}
+          : {lat: DEFAULT_LAT, lng: DEFAULT_LNG});
       })
       .catch(() => {});
   }, [user?.role]);
@@ -117,6 +128,20 @@ export function SharedSettingsScreen() {
       Alert.alert('Error', err.message || 'Could not save parking lot location');
     } finally {
       setSavingLot(false);
+    }
+  };
+
+  const saveGatePin = async () => {
+    if (!gatePin) return;
+    setSavingGate(true);
+    try {
+      await adminApi.updateSettings({valetGateLat: gatePin.lat, valetGateLng: gatePin.lng});
+      setGateSaved(true);
+      setTimeout(() => setGateSaved(false), 2000);
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not save valet gate location');
+    } finally {
+      setSavingGate(false);
     }
   };
 
@@ -215,7 +240,7 @@ export function SharedSettingsScreen() {
                 Tap the map (or drag the pin) to set where the parking lot actually is — this is what powers the ETA and live route on parking jobs.
               </Text>
               {lotPin && (
-                <ParkingLotMapPicker
+                <LocationMapPicker
                   lat={lotPin.lat}
                   lng={lotPin.lng}
                   isDark={isDark}
@@ -228,6 +253,29 @@ export function SharedSettingsScreen() {
                 style={[styles.stepperBtn, {marginTop: spacing.sm, alignSelf: 'flex-start', backgroundColor: lotSaved ? colors.successLight : colors.primary, borderColor: 'transparent', opacity: savingLot ? 0.6 : 1}]}>
                 <Text style={[styles.stepperBtnTxt, {color: lotSaved ? colors.success : colors.textOnPrimary}]}>
                   {savingLot ? 'Saving…' : lotSaved ? 'Saved ✓' : 'Save Location'}
+                </Text>
+              </PressableScale>
+            </Card>
+
+            <Card>
+              <Text style={[styles.cardTitle, {color: colors.textSecondary}]}>Valet Gate / Pickup Point</Text>
+              <Text style={[styles.infoLabel, {color: colors.textSecondary, marginBottom: spacing.sm}]}>
+                Where a retrieved car is actually handed back to the doctor — this is what powers the ETA and live route on retrieval jobs, instead of the doctor's own phone GPS.
+              </Text>
+              {gatePin && (
+                <LocationMapPicker
+                  lat={gatePin.lat}
+                  lng={gatePin.lng}
+                  isDark={isDark}
+                  onPick={(lat, lng) => { setGatePin({lat, lng}); setGateSaved(false); }}
+                />
+              )}
+              <PressableScale
+                onPress={saveGatePin}
+                disabled={savingGate}
+                style={[styles.stepperBtn, {marginTop: spacing.sm, alignSelf: 'flex-start', backgroundColor: gateSaved ? colors.successLight : colors.primary, borderColor: 'transparent', opacity: savingGate ? 0.6 : 1}]}>
+                <Text style={[styles.stepperBtnTxt, {color: gateSaved ? colors.success : colors.textOnPrimary}]}>
+                  {savingGate ? 'Saving…' : gateSaved ? 'Saved ✓' : 'Save Location'}
                 </Text>
               </PressableScale>
             </Card>
