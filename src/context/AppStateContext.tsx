@@ -2,7 +2,7 @@ import React, {createContext, useContext, useState, useCallback, useEffect, useR
 import {Platform, PermissionsAndroid} from 'react-native';
 import Geolocation from 'react-native-geolocation-service';
 import {displayNotification, ringAssignmentAlarm, stopAssignmentAlarm} from '../services/notifications';
-import {tasksApi, driversApi, slotsApi, visitorsApi, notificationsApi, getAuthToken} from '../services/api';
+import {tasksApi, driversApi, slotsApi, visitorsApi, notificationsApi, arrivalsApi, getAuthToken} from '../services/api';
 import {connectSocket, disconnectSocket, emitDriverLocation} from '../services/socket';
 import {initPushMessaging} from '../services/pushMessaging';
 import {getCurrentPositionSafe} from '../utils/location';
@@ -92,6 +92,16 @@ export interface Visitor {
   trackingProgress?: number;
 }
 
+// Doctor/staff "I'm on my way" notice — valet-facing only (see
+// arrivalNotice.service.js on the backend for why this isn't a ParkingTask).
+export interface ArrivalNotice {
+  id: number;
+  doctorId: number;
+  doctorName: string;
+  eta: number;
+  createdAt: number;
+}
+
 export interface Notification {
   id: number;
   targetRole: string;
@@ -129,6 +139,7 @@ interface AppState {
   tasks: ParkingTask[];
   slots: ParkingSlot[];
   visitors: Visitor[];
+  arrivalNotices: ArrivalNotice[];
   notifications: Notification[];
   driverLocations: Record<number, DriverLocation>;
   onlineDriverIds: number[];
@@ -138,6 +149,11 @@ interface AppState {
   // Actions — all backed by the API now, so all return Promises.
   addTask: (task: Omit<ParkingTask, 'id'>) => Promise<number>;
   requestRetrieval: (eta: number) => Promise<number>;
+  // Doctor/staff: "I'm on my way" — before any car/key exists yet, so this
+  // has no task id to hand back, just fires the valet-facing notice + push.
+  sendArrivalNotice: (eta: number) => Promise<void>;
+  // Valet: manually clear a no-show/mistaken arrival notice.
+  dismissArrivalNotice: (id: number) => Promise<void>;
   updateTask: (id: number, patch: Partial<ParkingTask>) => Promise<void>;
   assignDriver: (taskId: number, driverId: number) => Promise<void>;
   acceptTask: (taskId: number) => Promise<void>;
@@ -215,12 +231,17 @@ function mapNotification(n: any): Notification {
   return {...n, createdAt: toEpoch(n.createdAt) ?? Date.now()};
 }
 
+function mapArrival(a: any): ArrivalNotice {
+  return {...a, createdAt: toEpoch(a.createdAt) ?? Date.now()};
+}
+
 export function AppStateProvider({children}: {children: React.ReactNode}) {
   const {user} = useAuth();
   const [drivers, setDrivers]         = useState<Driver[]>([]);
   const [tasks, setTasks]             = useState<ParkingTask[]>([]);
   const [slots, setSlots]             = useState<ParkingSlot[]>([]);
   const [visitors, setVisitors]       = useState<Visitor[]>([]);
+  const [arrivalNotices, setArrivals] = useState<ArrivalNotice[]>([]);
   const [notifications, setNotifs]    = useState<Notification[]>([]);
   const [driverLocations, setDriverLocations] = useState<Record<number, DriverLocation>>({});
   const [onlineDriverIds, setOnlineDriverIds] = useState<number[]>([]);
@@ -238,18 +259,21 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
   const needsVisitors = needsOpsData || user?.role === 'driver';
 
   const fetchAll = useCallback(async () => {
-    const [t, s, n, d, v] = await Promise.all([
+    const [t, s, n, d, v, a] = await Promise.all([
       tasksApi.list(),
       slotsApi.list(),
       notificationsApi.list(),
       needsOpsData ? driversApi.list() : Promise.resolve(null),
       needsVisitors ? visitorsApi.list() : Promise.resolve(null),
+      // Only the valet/admin queue needs the "expected arrivals" list.
+      needsOpsData ? arrivalsApi.list() : Promise.resolve(null),
     ]);
     setTasks(t.map(mapTask));
     setSlots(s);
     setNotifs(n.map(mapNotification));
     if (d) setDrivers(d);
     if (v) setVisitors(v.map(mapVisitor));
+    if (a) setArrivals(a.map(mapArrival));
   }, [needsOpsData, needsVisitors]);
 
   // Some socket handlers need the current user without re-subscribing the
@@ -267,7 +291,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
   // because an emit came in.
   useEffect(() => {
     if (!user) {
-      setDrivers([]); setTasks([]); setSlots([]); setVisitors([]); setNotifs([]);
+      setDrivers([]); setTasks([]); setSlots([]); setVisitors([]); setNotifs([]); setArrivals([]);
       setDriverLocations({}); setOnlineDriverIds([]); setReassignPrompt(null);
       disconnectSocket();
       return;
@@ -347,6 +371,13 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
 
     socket.on('driver:location', (loc: DriverLocation) => {
       setDriverLocations(p => ({...p, [loc.driverId]: loc}));
+    });
+
+    socket.on('arrival:upsert', (raw: any) => {
+      setArrivals(p => upsertById(p, mapArrival(raw)));
+    });
+    socket.on('arrival:remove', ({id}: {id: number}) => {
+      setArrivals(p => p.filter(a => a.id !== id));
     });
 
     // ── accept-timeout / reject prompts (valet + admin rooms only) ──
@@ -470,6 +501,25 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
       type: 'alarm',
     }).catch(() => {});
     return created.id;
+  }, []);
+
+  // Doctor/staff: "I'm on my way" — no car/key involved yet, just a
+  // heads-up ETA for the valet queue. The backend auto-clears this the
+  // moment a real park task is created for the same doctor.
+  const sendArrivalNotice = useCallback(async (eta: number) => {
+    const created = mapArrival(await arrivalsApi.create(eta));
+    await pushNotification({
+      targetRole: 'valet',
+      title: `🚶 ${created.doctorName ?? 'Someone'} is on the way`,
+      body: `Arriving in ${eta} min. Have a driver ready at the entrance.`,
+      type: 'alarm',
+    }).catch(() => {});
+  }, []);
+
+  // Valet: dismiss a stale/no-show/mistaken arrival notice by hand.
+  const dismissArrivalNotice = useCallback(async (id: number) => {
+    await arrivalsApi.dismiss(id);
+    setArrivals(p => p.filter(a => a.id !== id));
   }, []);
 
   const updateTask = useCallback(async (id: number, patch: Partial<ParkingTask>) => {
@@ -672,9 +722,9 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
 
   return (
     <Ctx.Provider value={{
-      drivers, tasks, slots, visitors, notifications,
+      drivers, tasks, slots, visitors, arrivalNotices, notifications,
       driverLocations, onlineDriverIds, reassignPrompt, clearReassignPrompt,
-      addTask, requestRetrieval, updateTask, assignDriver, acceptTask, rejectTask, markKeyCollected, markParked, markRetrieved, confirmTaskDelivered, cancelTask, fetchTaskHistory, reportLocation,
+      addTask, requestRetrieval, sendArrivalNotice, dismissArrivalNotice, updateTask, assignDriver, acceptTask, rejectTask, markKeyCollected, markParked, markRetrieved, confirmTaskDelivered, cancelTask, fetchTaskHistory, reportLocation,
       setDriverStatus, addVisitor,
       assignVisitorDriver, acceptVisitorTask, rejectVisitorTask, cancelVisitor,
       markVisitorPickedUp, markVisitorParked, assignRetrievalDriver, markVisitorRetrieved, confirmVisitorDelivered,

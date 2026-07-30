@@ -14,15 +14,24 @@ import {Icon} from '../../components/Icon';
 
 const ETA_OPTIONS = [10, 20, 30, 40];
 
+// Same launcher-card pattern as the valet's Staff/Visitor buttons — two
+// square cards, always both visible, one per intent — rather than an
+// inline form that appears/disappears depending on state.
+type Screen = 'home' | 'arrival' | 'departure';
+
 export function DoctorHomeScreen() {
   const {user} = useAuth();
-  const {tasks} = useAppState();
+  const {tasks, sendArrivalNotice} = useAppState();
   const {colors, isDark} = useTheme();
   const navigation = useNavigation<any>();
   const {activeRetrieve, remainingSeconds, requestRetrieval} = useRetrievalRequest();
+  const [screen, setScreen]               = useState<Screen>('home');
   const [selectedEta, setSelectedEta]     = useState<number | null>(null);
   const [requesting, setRequesting]       = useState(false);
   const [showTracking, setShowTracking]   = useState(false);
+  const [arrivalEta, setArrivalEta]       = useState<number | null>(null);
+  const [sendingArrival, setSendingArrival] = useState(false);
+  const [arrivalSent, setArrivalSent]     = useState<number | null>(null); // eta minutes, once confirmed
   const pulse = useRef(new Animated.Value(1)).current;
 
   // `tasks` only ever contains each doctor's single current session (the
@@ -37,8 +46,13 @@ export function DoctorHomeScreen() {
   // not "already done" — the task only becomes 'completed' once confirmed.
   const carJustRetrieved = displayTask?.type === 'retrieve' && displayTask.status === 'delivered';
   // A cancelled session (e.g. staff retired a stuck "no driver ever showed
-  // up" job) is over, same as completed — nothing to show for it.
-  const showEmptyState = !displayTask || displayTask.status === 'cancelled';
+  // up" job) is over, same as completed — nothing to show for it. A
+  // completed RETRIEVE is also over — the car's already back with the
+  // doctor, there's no "vehicle status" left worth showing until the next
+  // park request. A completed PARK is different: the car is still sitting
+  // in the lot, so that one legitimately stays displayed.
+  const showEmptyState = !displayTask || displayTask.status === 'cancelled'
+    || (displayTask.status === 'completed' && displayTask.type === 'retrieve');
   // Nothing to actually track without a driver on the move yet — showing
   // this button for e.g. "Awaiting Driver" just opens a map with nothing on it.
   const canTrack = !!displayTask?.driverId && !carJustRetrieved
@@ -51,11 +65,33 @@ export function DoctorHomeScreen() {
     ])).start();
   }, []);
 
+  // A real session showing up (key handed over) means the arrival notice
+  // did its job — drop back to the plain empty state instead of still
+  // showing "arriving in X min" once the car's actually here.
+  useEffect(() => {
+    if (!showEmptyState) { setArrivalSent(null); setArrivalEta(null); }
+  }, [showEmptyState]);
+
+  const handleArrival = async () => {
+    if (!arrivalEta) return;
+    setSendingArrival(true);
+    try {
+      await sendArrivalNotice(arrivalEta);
+      setArrivalSent(arrivalEta);
+      setScreen('home');
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not notify the valet');
+    } finally {
+      setSendingArrival(false);
+    }
+  };
+
   const handleDeparture = async () => {
     if (!selectedEta) return;
     setRequesting(true);
     try {
       await requestRetrieval(selectedEta);
+      setScreen('home');
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Could not request retrieval');
     } finally {
@@ -83,8 +119,145 @@ export function DoctorHomeScreen() {
         : statusMap[activeTask.status])
     : null;
 
+  // Arrival only makes sense with no session already running; departure
+  // only once the car is actually parked and waiting. Both cards always
+  // show — whichever doesn't apply right now is just blocked, not hidden.
+  const arrivalBlocked = !showEmptyState;
+  const departureBlocked = !(carIsParked && !activeRetrieve);
+
   if (showTracking && displayTask) {
     return <LiveTrackingScreen task={displayTask} onBack={() => setShowTracking(false)} />;
+  }
+
+  if (screen === 'arrival') {
+    return (
+      <SafeAreaView edges={['top','bottom','left','right']} style={[s.safe, {backgroundColor: colors.background}]}>
+        <View style={s.headerCompact}>
+          <PressableScale onPress={() => setScreen('home')} style={[s.circleBack, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+            <Icon name="back" size={18} color={colors.textPrimary} />
+          </PressableScale>
+          <Text style={[s.headerCompactTitle, {color: colors.textPrimary}]}>On Your Way?</Text>
+        </View>
+        <ScrollView contentContainerStyle={s.subContent}>
+          <View style={[s.departureCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+            <LinearGradient colors={isDark ? BRAND_GRADIENT_DARK : BRAND_GRADIENT} style={s.departureHeader} start={{x:0,y:0}} end={{x:1,y:0}}>
+              <Text style={s.departureHeaderTxt}>{arrivalSent ? 'Valet Notified' : 'On Your Way?'}</Text>
+              <Text style={s.departureHeaderSub}>
+                {arrivalSent
+                  ? `We told the valet you'll arrive in ~${arrivalSent} min`
+                  : 'Let the valet know before you get here so a driver is ready'}
+              </Text>
+            </LinearGradient>
+            {!arrivalSent && (
+              <View style={s.etaBody}>
+                <Text style={[s.etaQuestion, {color: colors.textMuted}]}>WHEN WILL YOU ARRIVE?</Text>
+                <View style={s.etaGrid}>
+                  {ETA_OPTIONS.map(opt => {
+                    const on = arrivalEta === opt;
+                    return (
+                      <PressableScale
+                        key={opt}
+                        onPress={() => setArrivalEta(opt)}
+                        disabled={sendingArrival}
+                        style={[
+                          s.etaBtn,
+                          {
+                            backgroundColor: on ? colors.textPrimary : colors.cardAlt,
+                            borderColor: on ? colors.textPrimary : colors.border,
+                          },
+                        ]}>
+                        <Text style={[s.etaBtnNum, {color: on ? colors.background : colors.textPrimary}]}>{opt}</Text>
+                        <Text style={[s.etaBtnSub, {color: on ? colors.background + 'AA' : colors.textMuted}]}>min</Text>
+                      </PressableScale>
+                    );
+                  })}
+                </View>
+                <PressableScale
+                  onPress={handleArrival}
+                  disabled={!arrivalEta || sendingArrival}
+                  style={[
+                    s.etaConfirmBtn,
+                    {backgroundColor: arrivalEta ? colors.primary : colors.border, opacity: sendingArrival ? 0.6 : 1},
+                  ]}>
+                  <Text style={[s.etaConfirmTxt, {color: arrivalEta ? colors.textOnPrimary : colors.textMuted}]}>
+                    {sendingArrival ? 'Notifying…' : arrivalEta ? `Notify Valet — Arriving in ${arrivalEta} min` : 'Select a time above'}
+                  </Text>
+                  {arrivalEta && !sendingArrival && <Icon name="arrowRight" size={15} color={colors.textOnPrimary} />}
+                </PressableScale>
+              </View>
+            )}
+          </View>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  if (screen === 'departure') {
+    return (
+      <SafeAreaView edges={['top','bottom','left','right']} style={[s.safe, {backgroundColor: colors.background}]}>
+        <View style={s.headerCompact}>
+          <PressableScale onPress={() => setScreen('home')} style={[s.circleBack, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+            <Icon name="back" size={18} color={colors.textPrimary} />
+          </PressableScale>
+          <Text style={[s.headerCompactTitle, {color: colors.textPrimary}]}>Ready to Leave?</Text>
+        </View>
+        <ScrollView contentContainerStyle={s.subContent}>
+          <View style={[s.departureCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+            <LinearGradient colors={isDark ? BRAND_GRADIENT_DARK : BRAND_GRADIENT} style={s.departureHeader} start={{x:0,y:0}} end={{x:1,y:0}}>
+              <Text style={s.departureHeaderTxt}>Ready to Leave?</Text>
+              <Text style={s.departureHeaderSub}>Valet will assign a driver to bring your car to you</Text>
+            </LinearGradient>
+            <View style={s.etaBody}>
+              <Text style={[s.etaQuestion, {color: colors.textMuted}]}>WHEN DO YOU NEED YOUR CAR?</Text>
+              <View style={s.etaGrid}>
+                {ETA_OPTIONS.map(opt => {
+                  const on = selectedEta === opt;
+                  return (
+                    <PressableScale
+                      key={opt}
+                      onPress={() => setSelectedEta(opt)}
+                      disabled={requesting}
+                      style={[
+                        s.etaBtn,
+                        {
+                          backgroundColor: on ? colors.textPrimary : colors.cardAlt,
+                          borderColor: on ? colors.textPrimary : colors.border,
+                        },
+                      ]}>
+                      <Text style={[s.etaBtnNum, {color: on ? colors.background : colors.textPrimary}]}>{opt}</Text>
+                      <Text style={[s.etaBtnSub, {color: on ? colors.background + 'AA' : colors.textMuted}]}>min</Text>
+                    </PressableScale>
+                  );
+                })}
+              </View>
+
+              {selectedEta != null && (
+                <View style={[s.etaReadyRow, {backgroundColor: colors.success + '10', borderColor: colors.success + '30'}]}>
+                  <View>
+                    <Text style={[s.etaReadyLbl, {color: colors.textMuted}]}>Car ready by</Text>
+                    <Text style={[s.etaReadyVal, {color: colors.success}]}>{fmtClock(Date.now() + selectedEta * 60000)}</Text>
+                  </View>
+                  <Icon name="car" size={24} color={colors.success} />
+                </View>
+              )}
+
+              <PressableScale
+                onPress={handleDeparture}
+                disabled={!selectedEta || requesting}
+                style={[
+                  s.etaConfirmBtn,
+                  {backgroundColor: selectedEta ? colors.primary : colors.border, opacity: requesting ? 0.6 : 1},
+                ]}>
+                <Text style={[s.etaConfirmTxt, {color: selectedEta ? colors.textOnPrimary : colors.textMuted}]}>
+                  {requesting ? 'Requesting…' : selectedEta ? `Confirm — Leaving in ${selectedEta} min` : 'Select a time above'}
+                </Text>
+                {selectedEta && !requesting && <Icon name="arrowRight" size={15} color={colors.textOnPrimary} />}
+              </PressableScale>
+            </View>
+          </View>
+        </ScrollView>
+      </SafeAreaView>
+    );
   }
 
   return (
@@ -112,6 +285,43 @@ export function DoctorHomeScreen() {
         </LinearGradient>
 
         <View style={s.body}>
+          {/* Arrival / Departure — same launcher-card pair as the valet's
+              Staff/Visitor buttons: both always visible, side by side.
+              Whichever doesn't apply to the current state is blocked
+              (dimmed, untappable) rather than disappearing — the doctor
+              always sees both options exist, just not always usable. */}
+          <View style={s.primaryRow}>
+            <PressableScale
+              disabled={arrivalBlocked}
+              onPress={() => setScreen('arrival')}
+              style={[s.primaryBtn, {backgroundColor: colors.primary, opacity: arrivalBlocked ? 0.4 : 1}]}>
+              <View style={s.primaryIconWrap}><Icon name="bellAlert" size={26} color="#fff" /></View>
+              <Text style={s.primaryBtnTxt}>Arrival</Text>
+              <Text style={s.primaryBtnSub} numberOfLines={2}>
+                {arrivalBlocked ? 'Session already active' : "Let valet know you're coming"}
+              </Text>
+            </PressableScale>
+            <PressableScale
+              disabled={departureBlocked}
+              onPress={() => setScreen('departure')}
+              style={[s.primaryBtn, {backgroundColor: colors.accent, opacity: departureBlocked ? 0.4 : 1}]}>
+              <View style={s.primaryIconWrap}><Icon name="car" size={26} color="#fff" /></View>
+              <Text style={s.primaryBtnTxt}>Departure</Text>
+              <Text style={s.primaryBtnSub} numberOfLines={2}>
+                {departureBlocked ? 'No parked car yet' : 'Request your car back'}
+              </Text>
+            </PressableScale>
+          </View>
+
+          {arrivalSent && showEmptyState && (
+            <View style={[s.noticeBanner, {backgroundColor: colors.success + '10', borderColor: colors.success + '30'}]}>
+              <Icon name="bellAlert" size={16} color={colors.success} />
+              <Text style={[s.noticeBannerTxt, {color: colors.success}]}>
+                Valet notified — arriving in ~{arrivalSent} min
+              </Text>
+            </View>
+          )}
+
           {/* Car Status Card */}
           <View style={[s.statusCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
             <View style={s.statusTop}>
@@ -177,65 +387,6 @@ export function DoctorHomeScreen() {
             <Text style={[s.historyLinkTxt, {color: colors.textPrimary}]}>View Parking History</Text>
             <Icon name="arrowRight" size={16} color={colors.textMuted} />
           </PressableScale>
-
-          {/* Departure — only offered while the car is actually parked and
-              waiting; once a retrieval is already requested there's nothing
-              more to ask for. */}
-          {carIsParked && !activeRetrieve && (
-            <View style={[s.departureCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
-              <LinearGradient colors={isDark ? BRAND_GRADIENT_DARK : BRAND_GRADIENT} style={s.departureHeader} start={{x:0,y:0}} end={{x:1,y:0}}>
-                <Text style={s.departureHeaderTxt}>Ready to Leave?</Text>
-                <Text style={s.departureHeaderSub}>Valet will assign a driver to bring your car to you</Text>
-              </LinearGradient>
-              <View style={s.etaBody}>
-                <Text style={[s.etaQuestion, {color: colors.textMuted}]}>WHEN DO YOU NEED YOUR CAR?</Text>
-                <View style={s.etaGrid}>
-                  {ETA_OPTIONS.map(opt => {
-                    const on = selectedEta === opt;
-                    return (
-                      <PressableScale
-                        key={opt}
-                        onPress={() => setSelectedEta(opt)}
-                        disabled={requesting}
-                        style={[
-                          s.etaBtn,
-                          {
-                            backgroundColor: on ? colors.textPrimary : colors.cardAlt,
-                            borderColor: on ? colors.textPrimary : colors.border,
-                          },
-                        ]}>
-                        <Text style={[s.etaBtnNum, {color: on ? colors.background : colors.textPrimary}]}>{opt}</Text>
-                        <Text style={[s.etaBtnSub, {color: on ? colors.background + 'AA' : colors.textMuted}]}>min</Text>
-                      </PressableScale>
-                    );
-                  })}
-                </View>
-
-                {selectedEta != null && (
-                  <View style={[s.etaReadyRow, {backgroundColor: colors.success + '10', borderColor: colors.success + '30'}]}>
-                    <View>
-                      <Text style={[s.etaReadyLbl, {color: colors.textMuted}]}>Car ready by</Text>
-                      <Text style={[s.etaReadyVal, {color: colors.success}]}>{fmtClock(Date.now() + selectedEta * 60000)}</Text>
-                    </View>
-                    <Icon name="car" size={24} color={colors.success} />
-                  </View>
-                )}
-
-                <PressableScale
-                  onPress={handleDeparture}
-                  disabled={!selectedEta || requesting}
-                  style={[
-                    s.etaConfirmBtn,
-                    {backgroundColor: selectedEta ? colors.primary : colors.border, opacity: requesting ? 0.6 : 1},
-                  ]}>
-                  <Text style={[s.etaConfirmTxt, {color: selectedEta ? colors.textOnPrimary : colors.textMuted}]}>
-                    {requesting ? 'Requesting…' : selectedEta ? `Confirm — Leaving in ${selectedEta} min` : 'Select a time above'}
-                  </Text>
-                  {selectedEta && !requesting && <Icon name="arrowRight" size={15} color={colors.textOnPrimary} />}
-                </PressableScale>
-              </View>
-            </View>
-          )}
 
           {/* Countdown — real backend-tracked retrieval state, shared with
               the "My Parking" tab via useRetrievalRequest so it's identical
@@ -309,6 +460,20 @@ const s = StyleSheet.create({
   emptyTxt:{fontSize:13,textAlign:'center',lineHeight:19},
   historyLink:{flexDirection:'row',alignItems:'center',gap:10,borderRadius:16,borderWidth:1,padding:14},
   historyLinkTxt:{flex:1,fontSize:13,fontWeight:'700'},
+
+  primaryRow:{flexDirection:'row',gap:12},
+  primaryBtn:{flex:1,borderRadius:18,padding:20,alignItems:'center'},
+  primaryIconWrap:{width:52,height:52,borderRadius:16,backgroundColor:'rgba(255,255,255,0.18)',alignItems:'center',justifyContent:'center',marginBottom:8},
+  primaryBtnTxt:{color:'#fff',fontSize:15,fontWeight:'800'},
+  primaryBtnSub:{color:'rgba(255,255,255,0.7)',fontSize:11,lineHeight:14,marginTop:4,height:28,textAlign:'center'},
+
+  noticeBanner:{flexDirection:'row',alignItems:'center',gap:8,borderRadius:14,borderWidth:1,padding:12},
+  noticeBannerTxt:{flex:1,fontSize:12,fontWeight:'700'},
+
+  headerCompact:{flexDirection:'row',alignItems:'center',gap:12,paddingHorizontal:20,paddingTop:12,paddingBottom:16},
+  circleBack:{width:38,height:38,borderRadius:19,borderWidth:1,alignItems:'center',justifyContent:'center'},
+  headerCompactTitle:{fontSize:18,fontWeight:'900'},
+  subContent:{padding:16,paddingTop:4,gap:12},
 
   departureCard:{borderRadius:20,borderWidth:1,overflow:'hidden'},
   departureHeader:{padding:18},

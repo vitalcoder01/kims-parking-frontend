@@ -190,6 +190,16 @@ export const visitorsApi = {
     client.patch(`/visitors/${id}/confirm-delivered`).then(r => r.data.visitor),
 };
 
+// ── Arrival notices ──────────────────────────────────────────────────────
+// Doctor/staff "I'm on my way" — separate from tasksApi because there's no
+// ParkingTask yet at this point (that only exists once the valet takes the
+// key), just an ETA the valet should know about ahead of time.
+export const arrivalsApi = {
+  create: (eta: number) => client.post('/arrivals', {eta}).then(r => r.data.arrival),
+  list: () => client.get('/arrivals').then(r => r.data.arrivals),
+  dismiss: (id: number) => client.patch(`/arrivals/${id}/dismiss`).then(r => r.data.arrival),
+};
+
 // ── Notifications ────────────────────────────────────────────────────────
 export const notificationsApi = {
   list: () => client.get('/notifications').then(r => r.data.notifications),

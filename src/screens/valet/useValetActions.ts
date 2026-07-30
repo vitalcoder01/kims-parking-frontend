@@ -4,7 +4,7 @@ import {useAppState, Visitor} from '../../context/AppStateContext';
 // screens (three separate bottom tabs) so none of them re-derive the same
 // filters or duplicate the assign/notify logic.
 export function useValetActions() {
-  const {drivers, tasks, visitors, addTask, assignDriver, markKeyCollected, pushNotification, addVisitor,
+  const {drivers, tasks, visitors, arrivalNotices, dismissArrivalNotice, addTask, assignDriver, markKeyCollected, pushNotification, addVisitor,
     assignVisitorDriver, assignRetrievalDriver, cancelVisitor,
     confirmTaskDelivered, confirmVisitorDelivered, cancelTask, fetchTaskHistory} = useAppState();
 
@@ -70,7 +70,7 @@ export function useValetActions() {
   };
 
   return {
-    drivers, tasks, visitors, addTask, addVisitor, pushNotification, markKeyCollected, cancelVisitor,
+    drivers, tasks, visitors, arrivalNotices, dismissArrivalNotice, addTask, addVisitor, pushNotification, markKeyCollected, cancelVisitor,
     activeTasks, availableDrivers, retrievalRequests, activeVisitors, hasActiveRetrievalDriver,
     assignTaskDriver, assignVisitorPickupDriver, assignVisitorRetrievalDriver,
     confirmTaskDelivered, confirmVisitorDelivered, cancelTask, fetchTaskHistory,

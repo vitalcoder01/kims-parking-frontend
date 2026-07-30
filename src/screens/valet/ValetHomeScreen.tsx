@@ -34,7 +34,7 @@ export function ValetHomeScreen() {
   const {user} = useAuth();
   const {drivers, tasks, visitors, addTask, addVisitor, markKeyCollected,
     activeTasks, availableDrivers, retrievalRequests, assignTaskDriver, assignVisitorPickupDriver,
-    confirmTaskDelivered, cancelTask} = useValetActions();
+    confirmTaskDelivered, cancelTask, arrivalNotices, dismissArrivalNotice} = useValetActions();
   const {colors, isDark} = useTheme();
 
   const [screen, setScreen] = useState<Screen>('home');
@@ -558,6 +558,33 @@ export function ValetHomeScreen() {
             );
           })}
         </ScrollView>
+
+        {/* Expected Arrivals — doctors/staff who tapped "On Your Way?"
+            before handing over a key, so there's no ParkingTask for these
+            yet. Purely a heads-up: entering the 3-digit code still works
+            exactly as before whether or not someone appears here. */}
+        {arrivalNotices.length > 0 && (
+          <>
+            <Text style={[s.sectionTitle, {color: colors.textPrimary}]}>Expected Arrivals ({arrivalNotices.length})</Text>
+            {arrivalNotices.map(a => (
+              <View key={a.id} style={[s.taskCard, {backgroundColor: colors.surface, borderColor: colors.border, borderLeftColor: colors.accent}]}>
+                <View style={s.taskTop}>
+                  <View style={[s.typePill, {backgroundColor: colors.accent + '15'}]}>
+                    <Icon name="bellAlert" size={11} color={colors.accent} />
+                    <Text style={[s.typePillTxt, {color: colors.accent}]}>ARRIVING</Text>
+                  </View>
+                  <Text style={[s.taskStatusTxt, {color: colors.accent}]}>~{a.eta} min</Text>
+                </View>
+                <Text style={[s.taskDoctor, {color: colors.textPrimary}]}>{a.doctorName}</Text>
+                <PressableScale style={[s.taskActionBtn, {borderColor: colors.border, backgroundColor: colors.cardAlt}]}
+                  onPress={() => dismissArrivalNotice(a.id)}>
+                  <Icon name="close" size={13} color={colors.textSecondary} />
+                  <Text style={[s.taskActionTxt, {color: colors.textSecondary}]}>Dismiss</Text>
+                </PressableScale>
+              </View>
+            ))}
+          </>
+        )}
 
         {/* Job Queue — every task from assignment through to the valet's
             final confirmation that the owner actually took the car back.
