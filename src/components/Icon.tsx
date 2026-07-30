@@ -75,6 +75,7 @@ export const ICONS = {
   chat:        'chat-outline',
   info:        'information-outline',
   search:      'magnify',
+  filter:      'tune-variant',
   palette:     'palette-outline',
   plus:        'plus',
   help:        'help',

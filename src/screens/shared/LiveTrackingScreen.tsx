@@ -1,4 +1,4 @@
-import React, {useEffect, useRef, useState} from 'react';
+import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {View, Text, StyleSheet, Animated, Dimensions} from 'react-native';
 import {PressableScale} from '../../components/PressableScale';
 import {WebView} from 'react-native-webview';
@@ -121,6 +121,26 @@ export function LiveTrackingScreen({task: taskProp, onBack}: Props) {
   const realLat = task?.driverLat ?? null;
   const realLng = task?.driverLng ?? null;
 
+  // Frozen the first time a real fix arrives, and never touched again for
+  // the rest of this trip — this (not the live realLat/realLng, which
+  // change on every GPS tick) is what the map's HTML gets built from, so
+  // the WebView's `source` stays stable and only ever loads the page once.
+  // Every position update after that goes exclusively through postMessage
+  // below, which is what actually lets the marker glide instead of the
+  // whole page reloading and flashing back into existence on every tick.
+  const [initialCenter, setInitialCenter] = useState<{lat: number; lng: number} | null>(null);
+  useEffect(() => {
+    if (initialCenter == null && realLat != null && realLng != null) {
+      setInitialCenter({lat: realLat, lng: realLng});
+    }
+  }, [initialCenter, realLat, realLng]);
+
+  const mapHTML = useMemo(() => {
+    const c = initialCenter ?? {lat: 20.5937, lng: 78.9629};
+    return buildMapHTML(c.lat, c.lng, task?.destinationLat ?? null, task?.destinationLng ?? null, isDark);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialCenter, task?.id, isDark]);
+
   // GPS collection itself is centralized in AppStateContext (one watcher for
   // the whole app, driver-only) — this screen, on any role's phone, just
   // renders whatever `task.driverLat/driverLng` the last poll delivered.
@@ -157,12 +177,26 @@ export function LiveTrackingScreen({task: taskProp, onBack}: Props) {
     );
   }
 
-  // Center on whatever real position we actually know — current GPS first,
-  // then the destination, then a neutral fallback (never a fixed demo
-  // coordinate unrelated to where this device really is).
-  const centerLat = realLat ?? task.destinationLat ?? 20.5937;
-  const centerLng = realLng ?? task.destinationLng ?? 78.9629;
-  const mapHTML = buildMapHTML(centerLat, centerLng, task.destinationLat ?? null, task.destinationLng ?? null, isDark);
+  // Don't render the map at all until a real GPS fix actually exists — it
+  // used to fall back to a hardcoded coordinate (India's geographic center)
+  // the instant this screen opened, which looked like a real, wrong
+  // location for the car rather than "no fix yet". Once arrived, the last
+  // known real fix is always already in hand, so this only ever gates the
+  // brief window before the driver's first ping comes in.
+  if (!arrived && (realLat == null || realLng == null)) {
+    return (
+      <View style={[s.root, s.emptyRoot, {backgroundColor: colors.background}]}>
+        {onBack && (
+          <PressableScale style={[s.backBtn, {backgroundColor: colors.surface, position: 'relative', top: 0, left: 0, marginBottom: 20}]} onPress={onBack}>
+            <Icon name="back" size={20} color={colors.textPrimary} />
+          </PressableScale>
+        )}
+        <Icon name="car" size={40} color={colors.textMuted} style={{marginBottom: 8}} />
+        <Text style={[s.emptyTitle, {color: colors.textPrimary}]}>Waiting for driver's location…</Text>
+        <Text style={[s.emptyDesc, {color: colors.textMuted}]}>The map will appear as soon as the driver's live position comes in.</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={[s.root, {backgroundColor: colors.background}]}>

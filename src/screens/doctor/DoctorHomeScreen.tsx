@@ -103,10 +103,12 @@ export function DoctorHomeScreen() {
   // in the lot, so that one legitimately stays displayed.
   const showEmptyState = !displayTask || displayTask.status === 'cancelled'
     || (displayTask.status === 'completed' && displayTask.type === 'retrieve');
-  // Nothing to actually track without a driver on the move yet — showing
-  // this button for e.g. "Awaiting Driver" just opens a map with nothing on it.
-  const canTrack = !!displayTask?.driverId && !carJustRetrieved
-    && displayTask.status !== 'completed' && displayTask.status !== 'cancelled';
+  // Only once the key's actually collected (park) or the driver's genuinely
+  // en route (retrieve) does the driver's phone start reporting real GPS —
+  // showing the map any earlier (e.g. right after "Driver Assigned", before
+  // they've even taken the key) had nothing real to plot, so it fell back to
+  // a hardcoded placeholder coordinate that looked like a real, wrong location.
+  const canTrack = displayTask?.status === 'key_collected' || displayTask?.status === 'in_transit';
 
   useEffect(() => {
     Animated.loop(Animated.sequence([

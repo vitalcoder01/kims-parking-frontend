@@ -8,12 +8,24 @@ import {Driver} from '../context/AppStateContext';
 interface Props {
   drivers: Driver[];
   onAssign: (driverId: number) => void;
+  // True when the list is under an explicit alphabetical sort rather than
+  // the default least-busy-first order — "Suggested" on the top row would
+  // be misleading once the valet has deliberately reordered the list.
+  sorted?: boolean;
+  // Set to the driver id being assigned while that call is in flight —
+  // disables every row (not just that one) so a second tap, on the same or
+  // a different driver, can't fire a second assignDriver call before the
+  // first has even resolved. Without this, a fast double-tap could notify
+  // one driver and then immediately bump them for another with no
+  // confirmation in between.
+  assigningId?: number | null;
 }
 
 // Shared "pick an available driver" list — same interaction whether it's
 // for a fresh park task, a retrieval request, or a visitor pickup.
-export function DriverPickerList({drivers, onAssign}: Props) {
+export function DriverPickerList({drivers, onAssign, sorted, assigningId}: Props) {
   const {colors} = useTheme();
+  const disabled = assigningId != null;
 
   if (drivers.length === 0) {
     return (
@@ -26,28 +38,35 @@ export function DriverPickerList({drivers, onAssign}: Props) {
 
   return (
     <>
-      {drivers.map((d, i) => (
-        <PressableScale key={d.id} style={[s.driverCard, {backgroundColor: colors.surface, borderColor: i === 0 ? colors.primary + '80' : colors.success + '44'}]}
-          onPress={() => onAssign(d.id)}>
-          <View style={[s.driverStripe, {backgroundColor: i === 0 ? colors.primary : colors.success}]} />
-          <View style={[s.avatar, {backgroundColor: colors.primary + '18'}]}>
-            <Text style={[s.avatarTxt, {color: colors.primary}]}>{d.name[0]}</Text>
-          </View>
-          <View style={{flex: 1}}>
-            <Text style={[s.driverName, {color: colors.textPrimary}]}>{d.name}</Text>
-            <View style={s.suggestedRow}>
-              {i === 0 && <Icon name="sparkle" size={12} color={colors.success} />}
-              <Text style={[s.driverStatusTxt, {color: colors.success}]}>
-                {i === 0 ? 'Suggested · ' : ''}{d.completedToday ?? 0} done today
-              </Text>
+      {drivers.map((d, i) => {
+        const isSuggested = i === 0 && !sorted;
+        return (
+          <PressableScale key={d.id}
+            style={[s.driverCard, {backgroundColor: colors.surface, borderColor: isSuggested ? colors.primary + '80' : colors.border, opacity: disabled ? 0.5 : 1}]}
+            onPress={() => { if (!disabled) onAssign(d.id); }}
+            disabled={disabled}>
+            {isSuggested && <View style={[s.driverStripe, {backgroundColor: colors.primary}]} />}
+            <View style={[s.avatar, {backgroundColor: colors.primary + '18'}]}>
+              <Text style={[s.avatarTxt, {color: colors.primary}]}>{d.name[0]}</Text>
             </View>
-          </View>
-          <View style={s.assignRow}>
-            <Text style={[s.assignArrow, {color: colors.primary}]}>Assign</Text>
-            <Icon name="arrowRight" size={14} color={colors.primary} />
-          </View>
-        </PressableScale>
-      ))}
+            <View style={{flex: 1}}>
+              <Text style={[s.driverName, {color: colors.textPrimary}]}>{d.name}</Text>
+              <View style={s.suggestedRow}>
+                {isSuggested && <Icon name="sparkle" size={12} color={colors.primary} />}
+                <Text style={[s.driverStatusTxt, {color: isSuggested ? colors.primary : colors.textSecondary}]}>
+                  {isSuggested ? 'Suggested · ' : ''}{d.completedToday ?? 0} done today
+                </Text>
+              </View>
+            </View>
+            <View style={[s.assignBtn, {backgroundColor: isSuggested ? colors.primary : colors.cardAlt}]}>
+              <Text style={[s.assignArrow, {color: isSuggested ? colors.textOnPrimary : colors.primary}]}>
+                {assigningId === d.id ? 'Assigning…' : 'Assign'}
+              </Text>
+              {assigningId !== d.id && <Icon name="arrowRight" size={14} color={isSuggested ? colors.textOnPrimary : colors.primary} />}
+            </View>
+          </PressableScale>
+        );
+      })}
     </>
   );
 }
@@ -62,6 +81,6 @@ const s = StyleSheet.create({
   driverName: {fontSize: 14, fontWeight: '800'},
   suggestedRow: {flexDirection: 'row', alignItems: 'center', gap: 4},
   driverStatusTxt: {fontSize: 12, fontWeight: '600'},
-  assignRow: {flexDirection: 'row', alignItems: 'center', gap: 4},
+  assignBtn: {flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10},
   assignArrow: {fontSize: 13, fontWeight: '700'},
 });

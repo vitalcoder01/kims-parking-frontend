@@ -470,13 +470,37 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
           if (taskId) reportLocation(taskId, latitude, longitude).catch(() => {});
         },
         () => {},
-        {enableHighAccuracy: true, distanceFilter: 5, interval: 3000, fastestInterval: 2000},
+        // distanceFilter was 5 (meters) — the OS only fires a callback once
+        // the phone has physically moved that far, so a driver still
+        // standing at the counter (just took the key, hasn't walked off
+        // yet) produced NO update at all until they actually started moving.
+        // 0 reports every fix the provider delivers, movement or not.
+        {enableHighAccuracy: true, distanceFilter: 0, interval: 3000, fastestInterval: 2000},
       );
     };
 
     watch();
     return () => { cancelled = true; Geolocation.stopObserving(); };
   }, [user?.role, user?.id, reportLocation]);
+
+  // The ambient watch above only reports whenever the OS *happens* to next
+  // deliver a fix — if the driver was stationary right when a task became
+  // trackable, that could be a real wait. Firing one immediate one-shot fix
+  // the moment tracking starts (rather than waiting for the ambient loop's
+  // next callback) is what actually closes "the gap" the doctor's live
+  // tracking screen sits in "Waiting for driver's location…" for.
+  useEffect(() => {
+    if (user?.role !== 'driver' || !activeDriverTaskId) return;
+    Geolocation.getCurrentPosition(
+      pos => {
+        const {latitude, longitude} = pos.coords;
+        emitDriverLocation(latitude, longitude);
+        reportLocation(activeDriverTaskId, latitude, longitude).catch(() => {});
+      },
+      () => {},
+      {enableHighAccuracy: true, timeout: 8000, maximumAge: 0},
+    );
+  }, [user?.role, activeDriverTaskId, reportLocation]);
 
   const addTask = useCallback(async (task: Omit<ParkingTask, 'id'>) => {
     const created = await tasksApi.create({

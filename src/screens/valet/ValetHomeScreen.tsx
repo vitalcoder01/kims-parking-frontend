@@ -55,6 +55,13 @@ export function ValetHomeScreen() {
   // Which input currently has the keyboard — drives the focus ring so the
   // active field visibly "wakes up" instead of looking like a static box.
   const [focused, setFocused] = useState<string | null>(null);
+  // Assign-driver screen: search box + a real (not decorative) sort toggle —
+  // 'suggested' keeps the least-busy-first order useValetActions already
+  // computes; 'name' re-sorts alphabetically for a valet who knows exactly
+  // who they want and would rather scan a fixed order than a shifting one.
+  const [driverSearch, setDriverSearch] = useState('');
+  const [driverSort, setDriverSort] = useState<'suggested' | 'name'>('suggested');
+  const [assigningDriverId, setAssigningDriverId] = useState<number | null>(null);
   // Return-key chaining: enter on one field jumps to the next.
   const fieldRefs = useRef<Record<string, TextInput | null>>({});
 
@@ -149,6 +156,12 @@ export function ValetHomeScreen() {
   };
 
   const handleAssignDriver = async (driverId: number) => {
+    // Blocks a fast double-tap (same or a different driver) from firing a
+    // second assignDriver call before the first has resolved — that could
+    // otherwise notify one driver and immediately bump them for another
+    // with no confirmation in between.
+    if (assigningDriverId != null) return;
+    setAssigningDriverId(driverId);
     try {
       if (pendingVisitorId) {
         await assignVisitorPickupDriver(pendingVisitorId, driverId);
@@ -162,6 +175,8 @@ export function ValetHomeScreen() {
       setScreen('home');
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Something went wrong');
+    } finally {
+      setAssigningDriverId(null);
     }
   };
 
@@ -318,15 +333,27 @@ export function ValetHomeScreen() {
 
   // ── ASSIGN DRIVER ──────────────────────────────────────────────────────
   if (screen === 'assign') {
+    const closeAssign = () => {
+      setScreen('home'); setPendingVisitorId(null); setPendingTaskId(null);
+      setDriverSearch(''); setDriverSort('suggested');
+    };
+    const isRetrieve = pendingTask?.type === 'retrieve';
+    const visibleDrivers = availableDrivers
+      .filter(d => d.name.toLowerCase().includes(driverSearch.trim().toLowerCase()))
+      .slice()
+      .sort((a, b) => (driverSort === 'name' ? a.name.localeCompare(b.name) : 0));
+
     return (
       <SafeAreaView style={[s.safe, {backgroundColor: colors.background}]}>
         <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={colors.background} />
         <View style={s.header}>
-          <PressableScale onPress={() => { setScreen('home'); setPendingVisitorId(null); }} style={[s.backBtn, {backgroundColor: colors.surface, borderColor: colors.border}]}>
-            <Text style={[s.backTxt, {color: colors.textPrimary}]}>Skip</Text>
+          <PressableScale onPress={closeAssign} style={[s.circleBack, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+            <Icon name="back" size={18} color={colors.textPrimary} />
           </PressableScale>
           <Text style={[s.headerTitle, {color: colors.textPrimary}]}>Assign Driver</Text>
-          <View style={{width: 70}} />
+          <PressableScale onPress={closeAssign} style={[s.skipBtn, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+            <Text style={[s.skipBtnTxt, {color: colors.primary}]}>Skip</Text>
+          </PressableScale>
         </View>
         <ScrollView contentContainerStyle={s.subContent}>
           {/* Who this actually is — shown before picking a driver so a
@@ -335,36 +362,73 @@ export function ValetHomeScreen() {
           {(pendingVisitor || pendingTask) && (
             <View style={[s.confirmCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
               <View style={[s.confirmAvatar, {backgroundColor: colors.primaryLight}]}>
-                <Text style={[s.confirmAvatarTxt, {color: colors.primary}]}>
-                  {(pendingVisitor?.name ?? pendingTask?.doctorName ?? '?')[0]?.toUpperCase()}
-                </Text>
+                <Icon name={isRetrieve ? 'car' : 'carKey'} size={20} color={colors.primary} />
               </View>
               <View style={{flex: 1}}>
-                <Text style={[s.confirmName, {color: colors.textPrimary}]}>{pendingVisitor?.name ?? pendingTask?.doctorName}</Text>
+                <Text style={[s.confirmName, {color: colors.textPrimary}]}>
+                  {pendingVisitor?.carNumber ?? pendingTask?.carNumber ?? 'No plate'}
+                </Text>
                 <View style={s.confirmMetaRow}>
-                  <Icon name="car" size={12} color={colors.textSecondary} />
+                  <Icon name="pin" size={12} color={colors.textSecondary} />
                   <Text style={[s.confirmMeta, {color: colors.textSecondary}]}>
-                    {pendingVisitor?.carNumber ?? pendingTask?.carNumber ?? 'No plate'}
+                    {pendingVisitor?.name ?? pendingTask?.doctorName}
                     {pendingTask?.slotId ? ` · Slot ${pendingTask.slotId}` : ''}
                   </Text>
                 </View>
+                <View style={[s.confirmStatusPill, {backgroundColor: colors.cardAlt, alignSelf: 'flex-start', marginTop: 6}]}>
+                  <Text style={[s.confirmStatusTxt, {color: colors.textMuted}]}>
+                    {isRetrieve ? 'Pickup required' : 'Key handover required'}
+                  </Text>
+                </View>
               </View>
-              <View style={[s.confirmTypePill, {backgroundColor: colors.cardAlt}]}>
-                <Text style={[s.confirmTypeTxt, {color: colors.textMuted}]}>
-                  {pendingTask?.type === 'retrieve' ? 'RETRIEVE' : 'PARK'}
+              <View style={[s.confirmTypePill, {backgroundColor: isRetrieve ? colors.warning + '18' : colors.primary + '18'}]}>
+                <Icon name={isRetrieve ? 'arrowUp' : 'arrowDown'} size={11} color={isRetrieve ? colors.warning : colors.primary} />
+                <Text style={[s.confirmTypeTxt, {color: isRetrieve ? colors.warning : colors.primary}]}>
+                  {isRetrieve ? 'RETRIEVE' : 'PARK'}
                 </Text>
               </View>
             </View>
           )}
+
           <Text style={[s.stepLabel, {color: colors.textMuted}]}>SELECT DRIVER</Text>
           <Text style={[s.stepDesc, {color: colors.textPrimary}]}>
             {pendingVisitor
-              ? `Tap a driver to collect the key and park ${pendingVisitor.name}'s car (${pendingVisitor.carNumber})`
-              : pendingTask?.type === 'retrieve'
-              ? `Assign a driver to retrieve ${pendingTask.carNumber} from slot ${pendingTask.slotId}`
-              : 'Tap a driver to assign this parking task'}
+              ? `Assign a driver to collect the key and park ${pendingVisitor.name}'s car (${pendingVisitor.carNumber})`
+              : isRetrieve
+              ? `Assign a driver to retrieve ${pendingTask?.carNumber} from slot ${pendingTask?.slotId}`
+              : 'Assign a driver to collect the key and park this car'}
           </Text>
-          <DriverPickerList drivers={availableDrivers} onAssign={handleAssignDriver} />
+
+          <View style={s.driverSearchRow}>
+            <View style={[s.driverSearchBox, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+              <Icon name="search" size={16} color={colors.textMuted} />
+              <TextInput
+                style={[s.driverSearchInput, {color: colors.textPrimary}]}
+                value={driverSearch}
+                onChangeText={setDriverSearch}
+                placeholder="Search drivers…"
+                placeholderTextColor={colors.textMuted}
+                returnKeyType="search"
+              />
+            </View>
+            <PressableScale
+              onPress={() => setDriverSort(p => (p === 'suggested' ? 'name' : 'suggested'))}
+              style={[s.driverFilterBtn, {backgroundColor: driverSort === 'name' ? colors.primary : colors.surface, borderColor: driverSort === 'name' ? colors.primary : colors.border}]}>
+              <Icon name="filter" size={18} color={driverSort === 'name' ? colors.textOnPrimary : colors.textPrimary} />
+            </PressableScale>
+          </View>
+
+          <DriverPickerList drivers={visibleDrivers} onAssign={handleAssignDriver} sorted={driverSort === 'name'} assigningId={assigningDriverId} />
+
+          <View style={[s.assignNoteCard, {backgroundColor: colors.cardAlt, borderColor: colors.border}]}>
+            <View style={[s.assignNoteIconWrap, {backgroundColor: colors.successLight}]}>
+              <Icon name="shield" size={16} color={colors.success} />
+            </View>
+            <Text style={[s.assignNoteTxt, {color: colors.textSecondary}]}>
+              This assignment will notify the driver and update in real-time.
+            </Text>
+            <Icon name="info" size={16} color={colors.textMuted} />
+          </View>
         </ScrollView>
       </SafeAreaView>
     );
@@ -755,16 +819,27 @@ const s = StyleSheet.create({
   emptyBox:{borderRadius:14,borderWidth:1,borderStyle:'dashed',padding:24,alignItems:'center',marginBottom:16},
   emptyTxt:{fontSize:13,fontWeight:'600'},
   subContent:{padding:20,paddingBottom:40},
-  confirmCard:{flexDirection:'row',alignItems:'center',gap:12,borderRadius:16,borderWidth:1,padding:14,marginBottom:18},
+  confirmCard:{flexDirection:'row',alignItems:'flex-start',gap:12,borderRadius:16,borderWidth:1,padding:14,marginBottom:18},
   confirmAvatar:{width:44,height:44,borderRadius:14,alignItems:'center',justifyContent:'center'},
   confirmAvatarTxt:{fontSize:18,fontWeight:'900'},
-  confirmName:{fontSize:15,fontWeight:'800'},
+  confirmName:{fontSize:16,fontWeight:'900'},
   confirmMetaRow:{flexDirection:'row',alignItems:'center',gap:5,marginTop:3},
   confirmMeta:{fontSize:12,fontWeight:'600'},
-  confirmTypePill:{borderRadius:8,paddingHorizontal:8,paddingVertical:4},
+  confirmStatusPill:{borderRadius:8,paddingHorizontal:8,paddingVertical:4},
+  confirmStatusTxt:{fontSize:10,fontWeight:'700'},
+  confirmTypePill:{flexDirection:'row',alignItems:'center',gap:4,borderRadius:8,paddingHorizontal:8,paddingVertical:5},
   confirmTypeTxt:{fontSize:9,fontWeight:'800',letterSpacing:0.5},
   stepLabel:{fontSize:10,fontWeight:'800',letterSpacing:1.5,marginBottom:8},
-  stepDesc:{fontSize:16,fontWeight:'700',marginBottom:24},
+  stepDesc:{fontSize:16,fontWeight:'700',marginBottom:18},
+  driverSearchRow:{flexDirection:'row',gap:10,marginBottom:16},
+  driverSearchBox:{flex:1,flexDirection:'row',alignItems:'center',gap:8,borderRadius:14,borderWidth:1,paddingHorizontal:14,height:48},
+  driverSearchInput:{flex:1,fontSize:14,fontWeight:'600',height:48},
+  driverFilterBtn:{width:48,height:48,borderRadius:14,borderWidth:1,alignItems:'center',justifyContent:'center'},
+  assignNoteCard:{flexDirection:'row',alignItems:'center',gap:10,borderRadius:14,borderWidth:1,padding:14,marginTop:8},
+  assignNoteIconWrap:{width:32,height:32,borderRadius:10,alignItems:'center',justifyContent:'center'},
+  assignNoteTxt:{flex:1,fontSize:12,fontWeight:'600',lineHeight:17},
+  skipBtn:{borderRadius:10,borderWidth:1,paddingHorizontal:14,paddingVertical:9},
+  skipBtnTxt:{fontSize:13,fontWeight:'800'},
   codeBox:{borderRadius:20,borderWidth:1,padding:32,alignItems:'center',gap:20},
   otpRow:{flexDirection:'row',gap:14},
   otpCell:{width:60,height:72,borderRadius:16,alignItems:'center',justifyContent:'center'},
