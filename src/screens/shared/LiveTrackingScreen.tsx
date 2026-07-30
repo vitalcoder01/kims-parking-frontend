@@ -245,15 +245,23 @@ export function LiveTrackingScreen({task: taskProp, onBack}: Props) {
                   {task?.carNumber ?? 'Vehicle'} · {task?.driverName ?? 'Driver en route'}
                 </Text>
               </View>
-              {trip ? (
-                <View style={[s.etaBox, {backgroundColor: colors.primary}]}>
-                  <Text style={s.etaNum}>{trip.etaMinutes}</Text>
-                  <Text style={s.etaUnit}>min</Text>
-                </View>
-              ) : (
-                <View style={[s.etaBox, {backgroundColor: colors.textMuted}]}>
-                  <Text style={s.etaUnit}>Waiting{'\n'}for GPS</Text>
-                </View>
+              {/* A park job has no destination — the driver just drives
+                  with the key to whichever free slot they pick, so there's
+                  nothing to estimate an ETA against (that used to show
+                  "Waiting for GPS" forever for exactly that reason). Only a
+                  retrieve job has a real destination (the assigning valet's
+                  own location, captured at assignment time). */}
+              {task?.type === 'retrieve' && (
+                trip ? (
+                  <View style={[s.etaBox, {backgroundColor: colors.primary}]}>
+                    <Text style={s.etaNum}>{trip.etaMinutes}</Text>
+                    <Text style={s.etaUnit}>min</Text>
+                  </View>
+                ) : (
+                  <View style={[s.etaBox, {backgroundColor: colors.textMuted}]}>
+                    <Text style={s.etaUnit}>Waiting{'\n'}for GPS</Text>
+                  </View>
+                )
               )}
             </View>
 

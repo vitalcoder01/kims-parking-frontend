@@ -123,12 +123,16 @@ export const tasksApi = {
   history: (params?: {doctorId?: number; driverId?: number}) =>
     client.get('/tasks', {params: {...params, history: true}}).then(r => r.data.tasks),
   get: (id: number) => client.get(`/tasks/${id}`).then(r => r.data.task),
-  create: (data: {type: 'park' | 'retrieve'; doctorId: number; carNumber: string; slotId?: string; destinationLat?: number; destinationLng?: number}) =>
+  create: (data: {type: 'park' | 'retrieve'; doctorId: number; carNumber: string; slotId?: string}) =>
     client.post('/tasks', data).then(r => r.data.task),
-  requestRetrieval: (data: {eta?: number; destinationLat?: number; destinationLng?: number}) =>
+  requestRetrieval: (data: {eta?: number}) =>
     client.post('/tasks/request-retrieval', data).then(r => r.data.task),
-  assignDriver: (id: number, driverId: number) =>
-    client.patch(`/tasks/${id}/assign`, {driverId}).then(r => r.data.task),
+  // lat/lng (optional): the valet's own live location at the moment of
+  // assignment — for a retrieve task this becomes its destination (the real
+  // physical handover point), captured fresh per-assignment rather than a
+  // fixed point, so it naturally works whichever valet does the assigning.
+  assignDriver: (id: number, driverId: number, coords?: {lat: number; lng: number}) =>
+    client.patch(`/tasks/${id}/assign`, {driverId, lat: coords?.lat, lng: coords?.lng}).then(r => r.data.task),
   accept: (id: number) =>
     client.patch(`/tasks/${id}/accept`).then(r => r.data.task),
   reject: (id: number) =>
@@ -241,16 +245,9 @@ export const adminApi = {
     client.patch(`/admin/users/${id}/password`, {password}).then(r => r.data),
   deleteUser: (id: number) => client.delete(`/admin/users/${id}`).then(() => undefined),
   // Operational settings (driver accept timeout etc.)
-  getSettings: () => client.get('/admin/settings').then(r => r.data.settings as {
-    driverAcceptTimeoutSeconds: string;
-    parkingLotLat: string; parkingLotLng: string;
-    valetGateLat: string; valetGateLng: string;
-  }),
-  updateSettings: (patch: {
-    driverAcceptTimeoutSeconds?: number | string;
-    parkingLotLat?: number | string; parkingLotLng?: number | string;
-    valetGateLat?: number | string; valetGateLng?: number | string;
-  }) => client.patch('/admin/settings', patch).then(r => r.data.settings),
+  getSettings: () => client.get('/admin/settings').then(r => r.data.settings as {driverAcceptTimeoutSeconds: string}),
+  updateSettings: (patch: {driverAcceptTimeoutSeconds?: number | string}) =>
+    client.patch('/admin/settings', patch).then(r => r.data.settings),
   attendanceToday: () => client.get('/admin/attendance/today').then(r => r.data.attendance),
   attendanceMonthly: (month: string) =>
     client.get('/admin/attendance/monthly', {params: {month}}).then(r => r.data as {

@@ -253,7 +253,14 @@ export function DriverJobsScreen() {
                 </View>
               )}
 
-              {(activeTask.status === 'key_collected' || activeTask.status === 'in_transit') && (
+              {/* A park job has no destination at all — the driver just
+                  drives with the key to whichever free slot they pick, so
+                  there's nothing to route/ETA against (this used to show
+                  "Waiting for GPS…" forever for exactly that reason). A
+                  retrieve job does have a real destination (the assigning
+                  valet's location, captured in task.service.js
+                  assignDriver), so the route/ETA panel stays for that. */}
+              {activeTask.type === 'retrieve' && (activeTask.status === 'key_collected' || activeTask.status === 'in_transit') && (
                 <View style={[s.trackWrap, {borderColor: c.border}]}>
                   <View style={s.trackHeadRow}>
                     <Text style={[s.trackTitle, {color: c.textSecondary}]}>LIVE ROUTE</Text>

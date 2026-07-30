@@ -5,6 +5,7 @@ import {displayNotification, ringAssignmentAlarm, stopAssignmentAlarm} from '../
 import {tasksApi, driversApi, slotsApi, visitorsApi, notificationsApi, arrivalsApi, getAuthToken} from '../services/api';
 import {connectSocket, disconnectSocket, emitDriverLocation} from '../services/socket';
 import {initPushMessaging} from '../services/pushMessaging';
+import {getCurrentPositionSafe} from '../utils/location';
 import {useAuth} from './AuthContext';
 
 export type DriverStatus = 'available' | 'busy' | 'off';
@@ -483,8 +484,6 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
       doctorId: task.doctorId,
       carNumber: task.carNumber,
       slotId: task.slotId,
-      destinationLat: task.destinationLat,
-      destinationLng: task.destinationLng,
     });
     const mapped = mapTask(created);
     // The backend returns the existing task instead of a duplicate on a
@@ -543,10 +542,16 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
 
   const assignDriver = useCallback(async (taskId: number, driverId: number) => {
     await stopAssignmentAlarm().catch(() => {});
-    const updated = mapTask(await tasksApi.assignDriver(taskId, driverId));
+    // Only a retrieval needs a destination at all — that's the valet's own
+    // location right now, the actual physical handover point, captured
+    // fresh on every assignment (so it naturally works for whichever valet
+    // happens to be doing the assigning, not one fixed shared point).
+    const task = tasks.find(t => t.id === taskId);
+    const coords = task?.type === 'retrieve' ? await getCurrentPositionSafe() : null;
+    const updated = mapTask(await tasksApi.assignDriver(taskId, driverId, coords ? {lat: coords.lat, lng: coords.lng} : undefined));
     setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
     setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'busy', currentTaskId: taskId} : d)));
-  }, []);
+  }, [tasks]);
 
   // Driver: explicit accept/decline of an assignment (stops the ringing
   // alarm either way; a decline immediately frees this driver and prompts
