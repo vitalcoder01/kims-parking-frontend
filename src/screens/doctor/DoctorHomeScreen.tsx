@@ -1,5 +1,5 @@
 import React, {useState, useEffect, useRef} from 'react';
-import {View, Text, StyleSheet, ScrollView, Animated, Alert} from 'react-native';
+import {View, Text, StyleSheet, ScrollView, Animated, Alert, Modal, Pressable, Easing} from 'react-native';
 import {PressableScale} from '../../components/PressableScale';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import LinearGradient from 'react-native-linear-gradient';
@@ -14,10 +14,57 @@ import {Icon} from '../../components/Icon';
 
 const ETA_OPTIONS = [10, 20, 30, 40];
 
-// Same launcher-card pattern as the valet's Staff/Visitor buttons — two
-// square cards, always both visible, one per intent — rather than an
-// inline form that appears/disappears depending on state.
-type Screen = 'home' | 'arrival' | 'departure';
+// Modal's own `animationType="fade"` just snaps opacity 0→1 on the whole
+// overlay in one flat step — no easing, no motion — which is why it read as
+// abrupt next to the card's own press-scale. This drives the slide+fade
+// itself instead, and stays mounted a beat past `visible` turning false so
+// the exit animation can actually play instead of the view just vanishing.
+function BottomSheetModal({visible, onClose, children}: {visible: boolean; onClose: () => void; children: React.ReactNode}) {
+  const translateY = useRef(new Animated.Value(400)).current;
+  const backdropOpacity = useRef(new Animated.Value(0)).current;
+  const [rendered, setRendered] = useState(visible);
+
+  useEffect(() => {
+    if (visible) {
+      setRendered(true);
+      // Starting .start() here, in the same tick as the setRendered(true)
+      // that mounts the sheet, lets the (native-driven) animation begin
+      // running before the Modal/Animated.View has actually attached at its
+      // off-screen starting position — so it can finish, or nearly finish,
+      // before there's anything on screen to show it happening. Waiting a
+      // frame guarantees the mount has actually committed first.
+      const raf = requestAnimationFrame(() => {
+        translateY.setValue(400);
+        backdropOpacity.setValue(0);
+        Animated.parallel([
+          Animated.timing(backdropOpacity, {toValue: 1, duration: 220, easing: Easing.out(Easing.quad), useNativeDriver: true}),
+          Animated.timing(translateY, {toValue: 0, duration: 320, easing: Easing.out(Easing.cubic), useNativeDriver: true}),
+        ]).start();
+      });
+      return () => cancelAnimationFrame(raf);
+    } else {
+      Animated.parallel([
+        Animated.timing(backdropOpacity, {toValue: 0, duration: 180, easing: Easing.in(Easing.quad), useNativeDriver: true}),
+        Animated.timing(translateY, {toValue: 400, duration: 220, easing: Easing.in(Easing.cubic), useNativeDriver: true}),
+      ]).start(() => setRendered(false));
+    }
+  }, [visible]);
+
+  if (!rendered) return null;
+
+  return (
+    <Modal visible transparent animationType="none" onRequestClose={onClose}>
+      <Animated.View style={[s.modalBackdrop, {opacity: backdropOpacity}]}>
+        <Pressable style={{flex: 1}} onPress={onClose} />
+      </Animated.View>
+      <View style={s.modalWrap} pointerEvents="box-none">
+        <Animated.View style={{width: '100%', transform: [{translateY}]}}>
+          {children}
+        </Animated.View>
+      </View>
+    </Modal>
+  );
+}
 
 export function DoctorHomeScreen() {
   const {user} = useAuth();
@@ -25,7 +72,10 @@ export function DoctorHomeScreen() {
   const {colors, isDark} = useTheme();
   const navigation = useNavigation<any>();
   const {activeRetrieve, remainingSeconds, requestRetrieval} = useRetrievalRequest();
-  const [screen, setScreen]               = useState<Screen>('home');
+  // Popups over the home screen, not separate full-screen views — the
+  // doctor never leaves Home, Vehicle Status etc. stay visible underneath.
+  const [showArrivalModal, setShowArrivalModal] = useState(false);
+  const [showDepartureModal, setShowDepartureModal] = useState(false);
   const [selectedEta, setSelectedEta]     = useState<number | null>(null);
   const [requesting, setRequesting]       = useState(false);
   const [showTracking, setShowTracking]   = useState(false);
@@ -78,7 +128,7 @@ export function DoctorHomeScreen() {
     try {
       await sendArrivalNotice(arrivalEta);
       setArrivalSent(arrivalEta);
-      setScreen('home');
+      setShowArrivalModal(false);
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Could not notify the valet');
     } finally {
@@ -91,7 +141,7 @@ export function DoctorHomeScreen() {
     setRequesting(true);
     try {
       await requestRetrieval(selectedEta);
-      setScreen('home');
+      setShowDepartureModal(false);
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Could not request retrieval');
     } finally {
@@ -121,137 +171,6 @@ export function DoctorHomeScreen() {
 
   if (showTracking && displayTask) {
     return <LiveTrackingScreen task={displayTask} onBack={() => setShowTracking(false)} />;
-  }
-
-  if (screen === 'arrival') {
-    return (
-      <SafeAreaView edges={['top','bottom','left','right']} style={[s.safe, {backgroundColor: colors.background}]}>
-        <View style={s.headerCompact}>
-          <PressableScale onPress={() => setScreen('home')} style={[s.circleBack, {backgroundColor: colors.surface, borderColor: colors.border}]}>
-            <Icon name="back" size={18} color={colors.textPrimary} />
-          </PressableScale>
-          <Text style={[s.headerCompactTitle, {color: colors.textPrimary}]}>On Your Way?</Text>
-        </View>
-        <ScrollView contentContainerStyle={s.subContent}>
-          <View style={[s.departureCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
-            <LinearGradient colors={isDark ? BRAND_GRADIENT_DARK : BRAND_GRADIENT} style={s.departureHeader} start={{x:0,y:0}} end={{x:1,y:0}}>
-              <Text style={s.departureHeaderTxt}>{arrivalSent ? 'Valet Notified' : 'On Your Way?'}</Text>
-              <Text style={s.departureHeaderSub}>
-                {arrivalSent
-                  ? `We told the valet you'll arrive in ~${arrivalSent} min`
-                  : 'Let the valet know before you get here so a driver is ready'}
-              </Text>
-            </LinearGradient>
-            {!arrivalSent && (
-              <View style={s.etaBody}>
-                <Text style={[s.etaQuestion, {color: colors.textMuted}]}>WHEN WILL YOU ARRIVE?</Text>
-                <View style={s.etaGrid}>
-                  {ETA_OPTIONS.map(opt => {
-                    const on = arrivalEta === opt;
-                    return (
-                      <PressableScale
-                        key={opt}
-                        onPress={() => setArrivalEta(opt)}
-                        disabled={sendingArrival}
-                        style={[
-                          s.etaBtn,
-                          {
-                            backgroundColor: on ? colors.textPrimary : colors.cardAlt,
-                            borderColor: on ? colors.textPrimary : colors.border,
-                          },
-                        ]}>
-                        <Text style={[s.etaBtnNum, {color: on ? colors.background : colors.textPrimary}]}>{opt}</Text>
-                        <Text style={[s.etaBtnSub, {color: on ? colors.background + 'AA' : colors.textMuted}]}>min</Text>
-                      </PressableScale>
-                    );
-                  })}
-                </View>
-                <PressableScale
-                  onPress={handleArrival}
-                  disabled={!arrivalEta || sendingArrival}
-                  style={[
-                    s.etaConfirmBtn,
-                    {backgroundColor: arrivalEta ? colors.primary : colors.border, opacity: sendingArrival ? 0.6 : 1},
-                  ]}>
-                  <Text style={[s.etaConfirmTxt, {color: arrivalEta ? colors.textOnPrimary : colors.textMuted}]}>
-                    {sendingArrival ? 'Notifying…' : arrivalEta ? `Notify Valet — Arriving in ${arrivalEta} min` : 'Select a time above'}
-                  </Text>
-                  {arrivalEta && !sendingArrival && <Icon name="arrowRight" size={15} color={colors.textOnPrimary} />}
-                </PressableScale>
-              </View>
-            )}
-          </View>
-        </ScrollView>
-      </SafeAreaView>
-    );
-  }
-
-  if (screen === 'departure') {
-    return (
-      <SafeAreaView edges={['top','bottom','left','right']} style={[s.safe, {backgroundColor: colors.background}]}>
-        <View style={s.headerCompact}>
-          <PressableScale onPress={() => setScreen('home')} style={[s.circleBack, {backgroundColor: colors.surface, borderColor: colors.border}]}>
-            <Icon name="back" size={18} color={colors.textPrimary} />
-          </PressableScale>
-          <Text style={[s.headerCompactTitle, {color: colors.textPrimary}]}>Ready to Leave?</Text>
-        </View>
-        <ScrollView contentContainerStyle={s.subContent}>
-          <View style={[s.departureCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
-            <LinearGradient colors={isDark ? BRAND_GRADIENT_DARK : BRAND_GRADIENT} style={s.departureHeader} start={{x:0,y:0}} end={{x:1,y:0}}>
-              <Text style={s.departureHeaderTxt}>Ready to Leave?</Text>
-              <Text style={s.departureHeaderSub}>Valet will assign a driver to bring your car to you</Text>
-            </LinearGradient>
-            <View style={s.etaBody}>
-              <Text style={[s.etaQuestion, {color: colors.textMuted}]}>WHEN DO YOU NEED YOUR CAR?</Text>
-              <View style={s.etaGrid}>
-                {ETA_OPTIONS.map(opt => {
-                  const on = selectedEta === opt;
-                  return (
-                    <PressableScale
-                      key={opt}
-                      onPress={() => setSelectedEta(opt)}
-                      disabled={requesting}
-                      style={[
-                        s.etaBtn,
-                        {
-                          backgroundColor: on ? colors.textPrimary : colors.cardAlt,
-                          borderColor: on ? colors.textPrimary : colors.border,
-                        },
-                      ]}>
-                      <Text style={[s.etaBtnNum, {color: on ? colors.background : colors.textPrimary}]}>{opt}</Text>
-                      <Text style={[s.etaBtnSub, {color: on ? colors.background + 'AA' : colors.textMuted}]}>min</Text>
-                    </PressableScale>
-                  );
-                })}
-              </View>
-
-              {selectedEta != null && (
-                <View style={[s.etaReadyRow, {backgroundColor: colors.success + '10', borderColor: colors.success + '30'}]}>
-                  <View>
-                    <Text style={[s.etaReadyLbl, {color: colors.textMuted}]}>Car ready by</Text>
-                    <Text style={[s.etaReadyVal, {color: colors.success}]}>{fmtClock(Date.now() + selectedEta * 60000)}</Text>
-                  </View>
-                  <Icon name="car" size={24} color={colors.success} />
-                </View>
-              )}
-
-              <PressableScale
-                onPress={handleDeparture}
-                disabled={!selectedEta || requesting}
-                style={[
-                  s.etaConfirmBtn,
-                  {backgroundColor: selectedEta ? colors.primary : colors.border, opacity: requesting ? 0.6 : 1},
-                ]}>
-                <Text style={[s.etaConfirmTxt, {color: selectedEta ? colors.textOnPrimary : colors.textMuted}]}>
-                  {requesting ? 'Requesting…' : selectedEta ? `Confirm — Leaving in ${selectedEta} min` : 'Select a time above'}
-                </Text>
-                {selectedEta && !requesting && <Icon name="arrowRight" size={15} color={colors.textOnPrimary} />}
-              </PressableScale>
-            </View>
-          </View>
-        </ScrollView>
-      </SafeAreaView>
-    );
   }
 
   return (
@@ -324,7 +243,7 @@ export function DoctorHomeScreen() {
             <View style={s.primaryRow}>
               {showEmptyState && (
                 <PressableScale
-                  onPress={() => setScreen('arrival')}
+                  onPress={() => setShowArrivalModal(true)}
                   style={[s.primaryBtn, {backgroundColor: colors.primary}]}>
                   <View style={s.primaryIconWrap}><Icon name="bellAlert" size={26} color="#fff" /></View>
                   <Text style={s.primaryBtnTxt}>Arrival</Text>
@@ -333,7 +252,7 @@ export function DoctorHomeScreen() {
               )}
               {carIsParked && !activeRetrieve && (
                 <PressableScale
-                  onPress={() => setScreen('departure')}
+                  onPress={() => setShowDepartureModal(true)}
                   style={[s.primaryBtn, {backgroundColor: colors.accent}]}>
                   <View style={s.primaryIconWrap}><Icon name="car" size={26} color="#fff" /></View>
                   <Text style={s.primaryBtnTxt}>Departure</Text>
@@ -419,6 +338,121 @@ export function DoctorHomeScreen() {
           </PressableScale>
         </View>
       </ScrollView>
+
+      {/* Arrival popup — sits over Home; Home itself never unmounts. */}
+      <BottomSheetModal visible={showArrivalModal} onClose={() => setShowArrivalModal(false)}>
+          <View style={[s.departureCard, s.modalCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+            <LinearGradient colors={isDark ? BRAND_GRADIENT_DARK : BRAND_GRADIENT} style={s.departureHeader} start={{x:0,y:0}} end={{x:1,y:0}}>
+              <PressableScale style={s.modalCloseBtn} onPress={() => setShowArrivalModal(false)}>
+                <Icon name="close" size={16} color="#fff" />
+              </PressableScale>
+              <Text style={s.departureHeaderTxt}>{arrivalSent ? 'Valet Notified' : 'On Your Way?'}</Text>
+              <Text style={s.departureHeaderSub}>
+                {arrivalSent
+                  ? `We told the valet you'll arrive in ~${arrivalSent} min`
+                  : 'Let the valet know before you get here so a driver is ready'}
+              </Text>
+            </LinearGradient>
+            {!arrivalSent && (
+              <View style={s.etaBody}>
+                <Text style={[s.etaQuestion, {color: colors.textMuted}]}>WHEN WILL YOU ARRIVE?</Text>
+                <View style={s.etaGrid}>
+                  {ETA_OPTIONS.map(opt => {
+                    const on = arrivalEta === opt;
+                    return (
+                      <PressableScale
+                        key={opt}
+                        onPress={() => setArrivalEta(opt)}
+                        disabled={sendingArrival}
+                        style={[
+                          s.etaBtn,
+                          {
+                            backgroundColor: on ? colors.textPrimary : colors.cardAlt,
+                            borderColor: on ? colors.textPrimary : colors.border,
+                          },
+                        ]}>
+                        <Text style={[s.etaBtnNum, {color: on ? colors.background : colors.textPrimary}]}>{opt}</Text>
+                        <Text style={[s.etaBtnSub, {color: on ? colors.background + 'AA' : colors.textMuted}]}>min</Text>
+                      </PressableScale>
+                    );
+                  })}
+                </View>
+                <PressableScale
+                  onPress={handleArrival}
+                  disabled={!arrivalEta || sendingArrival}
+                  style={[
+                    s.etaConfirmBtn,
+                    {backgroundColor: arrivalEta ? colors.primary : colors.border, opacity: sendingArrival ? 0.6 : 1},
+                  ]}>
+                  <Text style={[s.etaConfirmTxt, {color: arrivalEta ? colors.textOnPrimary : colors.textMuted}]}>
+                    {sendingArrival ? 'Notifying…' : arrivalEta ? `Notify Valet — Arriving in ${arrivalEta} min` : 'Select a time above'}
+                  </Text>
+                  {arrivalEta && !sendingArrival && <Icon name="arrowRight" size={15} color={colors.textOnPrimary} />}
+                </PressableScale>
+              </View>
+            )}
+          </View>
+      </BottomSheetModal>
+
+      {/* Departure popup — same pattern, over the same Home screen. */}
+      <BottomSheetModal visible={showDepartureModal} onClose={() => setShowDepartureModal(false)}>
+          <View style={[s.departureCard, s.modalCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+            <LinearGradient colors={isDark ? BRAND_GRADIENT_DARK : BRAND_GRADIENT} style={s.departureHeader} start={{x:0,y:0}} end={{x:1,y:0}}>
+              <PressableScale style={s.modalCloseBtn} onPress={() => setShowDepartureModal(false)}>
+                <Icon name="close" size={16} color="#fff" />
+              </PressableScale>
+              <Text style={s.departureHeaderTxt}>Ready to Leave?</Text>
+              <Text style={s.departureHeaderSub}>Valet will assign a driver to bring your car to you</Text>
+            </LinearGradient>
+            <View style={s.etaBody}>
+              <Text style={[s.etaQuestion, {color: colors.textMuted}]}>WHEN DO YOU NEED YOUR CAR?</Text>
+              <View style={s.etaGrid}>
+                {ETA_OPTIONS.map(opt => {
+                  const on = selectedEta === opt;
+                  return (
+                    <PressableScale
+                      key={opt}
+                      onPress={() => setSelectedEta(opt)}
+                      disabled={requesting}
+                      style={[
+                        s.etaBtn,
+                        {
+                          backgroundColor: on ? colors.textPrimary : colors.cardAlt,
+                          borderColor: on ? colors.textPrimary : colors.border,
+                        },
+                      ]}>
+                      <Text style={[s.etaBtnNum, {color: on ? colors.background : colors.textPrimary}]}>{opt}</Text>
+                      <Text style={[s.etaBtnSub, {color: on ? colors.background + 'AA' : colors.textMuted}]}>min</Text>
+                    </PressableScale>
+                  );
+                })}
+              </View>
+
+              {selectedEta != null && (
+                <View style={[s.etaReadyRow, {backgroundColor: colors.success + '10', borderColor: colors.success + '30'}]}>
+                  <View>
+                    <Text style={[s.etaReadyLbl, {color: colors.textMuted}]}>Car ready by</Text>
+                    <Text style={[s.etaReadyVal, {color: colors.success}]}>{fmtClock(Date.now() + selectedEta * 60000)}</Text>
+                  </View>
+                  <Icon name="car" size={24} color={colors.success} />
+                </View>
+              )}
+
+              <PressableScale
+                onPress={handleDeparture}
+                disabled={!selectedEta || requesting}
+                style={[
+                  s.etaConfirmBtn,
+                  {backgroundColor: selectedEta ? colors.primary : colors.border, opacity: requesting ? 0.6 : 1},
+                ]}>
+                <Text style={[s.etaConfirmTxt, {color: selectedEta ? colors.textOnPrimary : colors.textMuted}]}>
+                  {requesting ? 'Requesting…' : selectedEta ? `Confirm — Leaving in ${selectedEta} min` : 'Select a time above'}
+                </Text>
+                {selectedEta && !requesting && <Icon name="arrowRight" size={15} color={colors.textOnPrimary} />}
+              </PressableScale>
+            </View>
+          </View>
+      </BottomSheetModal>
     </SafeAreaView>
   );
 }
@@ -469,10 +503,10 @@ const s = StyleSheet.create({
   noticeBanner:{flexDirection:'row',alignItems:'center',gap:8,borderRadius:14,borderWidth:1,padding:12},
   noticeBannerTxt:{flex:1,fontSize:12,fontWeight:'700'},
 
-  headerCompact:{flexDirection:'row',alignItems:'center',gap:12,paddingHorizontal:20,paddingTop:12,paddingBottom:16},
-  circleBack:{width:38,height:38,borderRadius:19,borderWidth:1,alignItems:'center',justifyContent:'center'},
-  headerCompactTitle:{fontSize:18,fontWeight:'900'},
-  subContent:{padding:16,paddingTop:4,gap:12},
+  modalBackdrop:{position:'absolute',top:0,left:0,right:0,bottom:0,backgroundColor:'rgba(0,0,0,0.5)'},
+  modalWrap:{flex:1,justifyContent:'flex-end'},
+  modalCard:{width:'100%',borderBottomLeftRadius:0,borderBottomRightRadius:0,paddingBottom:8},
+  modalCloseBtn:{position:'absolute',top:14,right:14,width:30,height:30,borderRadius:15,backgroundColor:'rgba(255,255,255,0.2)',alignItems:'center',justifyContent:'center',zIndex:1},
 
   departureCard:{borderRadius:20,borderWidth:1,overflow:'hidden'},
   departureHeader:{padding:18},

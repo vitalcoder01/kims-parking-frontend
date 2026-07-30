@@ -82,6 +82,19 @@ function buildMapHTML(
 </html>`;
 }
 
+// How many of the 3 checklist steps (Key Collected / In Transit /
+// Parked-or-Delivered) are done, purely from the task's real status — never
+// from GPS/trip progress, which may not exist at all (no destination set,
+// no fix yet) even while the task has genuinely moved forward.
+const STAGE_ORDER: Record<string, number> = {
+  requested: -1,
+  assigned: -1,
+  key_collected: 0,
+  in_transit: 1,
+  delivered: 2,
+  completed: 2,
+};
+
 interface Props {
   task?: ParkingTask;
   onBack?: () => void;
@@ -252,7 +265,13 @@ export function LiveTrackingScreen({task: taskProp, onBack}: Props) {
 
             <View style={s.stepsRow}>
               {['Key Collected', 'In Transit', task?.type === 'park' ? 'Parked' : 'Delivered'].map((step, i) => {
-                const done = progress > i * 0.4;
+                // Driven by the task's real status, never GPS/trip progress —
+                // "Key Collected" already happened the moment the valet
+                // marked the handoff, regardless of whether a GPS fix (or
+                // even a destination) exists yet. GPS progress is a nice-to-
+                // have for the ETA/map above, not a precondition for the
+                // checklist reflecting what's actually already true.
+                const done = (STAGE_ORDER[task?.status ?? ''] ?? -1) >= i;
                 return (
                   <View key={step} style={s.step}>
                     <View style={[s.stepDot, {backgroundColor: done ? colors.success : colors.border}]}>

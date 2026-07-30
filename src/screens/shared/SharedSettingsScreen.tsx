@@ -1,5 +1,6 @@
 import React from 'react';
 import {ScrollView, View, Text, StyleSheet, Alert} from 'react-native';
+import {WebView} from 'react-native-webview';
 import {PressableScale} from '../../components/PressableScale';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useTheme} from '../../context/ThemeContext';
@@ -11,6 +12,53 @@ import {typography, spacing, radius} from '../../theme';
 import {APP_VERSION_NAME, APP_VERSION_CODE} from '../../config/version';
 import {adminApi} from '../../services/api';
 
+// Tap-to-place pin — the admin drops this once on the actual parking lot;
+// every park task then uses this same fixed point as its "destination"
+// (there's no per-task destination to derive it from the way a retrieval
+// has the doctor's live location), which is what makes the ETA/progress bar
+// on the live tracking screen work for parking jobs at all.
+function ParkingLotMapPicker({lat, lng, isDark, onPick}: {lat: number; lng: number; isDark: boolean; onPick: (lat: number, lng: number) => void}) {
+  const html = `<!DOCTYPE html>
+<html><head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body, #map { width:100%; height:100%; }
+  .leaflet-tile-pane { ${isDark ? 'filter: brightness(0.7) saturate(0.8) hue-rotate(190deg);' : ''} }
+</style>
+</head><body>
+<div id="map"></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+  var map = L.map('map', {zoomControl: false, attributionControl: false}).setView([${lat}, ${lng}], 17);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19}).addTo(map);
+  var marker = L.marker([${lat}, ${lng}], {draggable: true}).addTo(map);
+  function report(pos) {
+    window.ReactNativeWebView.postMessage(JSON.stringify({lat: pos.lat, lng: pos.lng}));
+  }
+  marker.on('dragend', function() { report(marker.getLatLng()); });
+  map.on('click', function(e) { marker.setLatLng(e.latlng); report(e.latlng); });
+</script>
+</body></html>`;
+
+  return (
+    <WebView
+      style={{height: 220, borderRadius: 14, overflow: 'hidden'}}
+      source={{html}}
+      javaScriptEnabled
+      domStorageEnabled
+      originWhitelist={['*']}
+      onMessage={(e) => {
+        try {
+          const data = JSON.parse(e.nativeEvent.data);
+          if (typeof data.lat === 'number' && typeof data.lng === 'number') onPick(data.lat, data.lng);
+        } catch {}
+      }}
+    />
+  );
+}
+
 type ThemeMode = 'light' | 'dark' | 'system';
 
 const ROLE_LABELS: Record<string, string> = {
@@ -18,17 +66,35 @@ const ROLE_LABELS: Record<string, string> = {
   parking_driver: 'Parking Driver', retrieval_driver: 'Retrieval Driver', admin: 'Admin',
 };
 
+const DEFAULT_LOT_LAT = 20.5937;
+const DEFAULT_LOT_LNG = 78.9629;
+
 export function SharedSettingsScreen() {
-  const {colors, mode, setMode} = useTheme();
+  const {colors, mode, setMode, isDark} = useTheme();
   const {user, logout} = useAuth();
 
   // Admin-only: driver accept window (seconds) — how long a driver has to
   // accept an assignment before the valet is prompted to reassign.
   const [acceptTimeout, setAcceptTimeout] = React.useState<number | null>(null);
+  // Admin-only: the parking lot's fixed location — every park task's
+  // "destination" (ETA/route on the live tracking screen) comes from this
+  // single point, since (unlike a retrieval) there's no per-task location
+  // to derive it from.
+  const [lotPin, setLotPin] = React.useState<{lat: number; lng: number} | null>(null);
+  const [savingLot, setSavingLot] = React.useState(false);
+  const [lotSaved, setLotSaved] = React.useState(false);
+
   React.useEffect(() => {
     if (user?.role !== 'admin') return;
     adminApi.getSettings()
-      .then(s => setAcceptTimeout(Number(s.driverAcceptTimeoutSeconds) || 60))
+      .then(s => {
+        setAcceptTimeout(Number(s.driverAcceptTimeoutSeconds) || 60);
+        const lat = Number(s.parkingLotLat);
+        const lng = Number(s.parkingLotLng);
+        setLotPin(Number.isFinite(lat) && Number.isFinite(lng) && s.parkingLotLat && s.parkingLotLng
+          ? {lat, lng}
+          : {lat: DEFAULT_LOT_LAT, lng: DEFAULT_LOT_LNG});
+      })
       .catch(() => {});
   }, [user?.role]);
 
@@ -38,6 +104,20 @@ export function SharedSettingsScreen() {
       adminApi.updateSettings({driverAcceptTimeoutSeconds: next}).catch(() => {});
       return next;
     });
+  };
+
+  const saveLotPin = async () => {
+    if (!lotPin) return;
+    setSavingLot(true);
+    try {
+      await adminApi.updateSettings({parkingLotLat: lotPin.lat, parkingLotLng: lotPin.lng});
+      setLotSaved(true);
+      setTimeout(() => setLotSaved(false), 2000);
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not save parking lot location');
+    } finally {
+      setSavingLot(false);
+    }
   };
 
   const [notifTasks,    setNotifTasks]    = React.useState(true);
@@ -127,6 +207,29 @@ export function SharedSettingsScreen() {
               <Text style={[styles.infoLabel, {color: colors.textSecondary}]}>
                 If a driver doesn't accept a job within this window, the valet is alerted and asked to reassign.
               </Text>
+            </Card>
+
+            <Card>
+              <Text style={[styles.cardTitle, {color: colors.textSecondary}]}>Parking Lot Location</Text>
+              <Text style={[styles.infoLabel, {color: colors.textSecondary, marginBottom: spacing.sm}]}>
+                Tap the map (or drag the pin) to set where the parking lot actually is — this is what powers the ETA and live route on parking jobs.
+              </Text>
+              {lotPin && (
+                <ParkingLotMapPicker
+                  lat={lotPin.lat}
+                  lng={lotPin.lng}
+                  isDark={isDark}
+                  onPick={(lat, lng) => { setLotPin({lat, lng}); setLotSaved(false); }}
+                />
+              )}
+              <PressableScale
+                onPress={saveLotPin}
+                disabled={savingLot}
+                style={[styles.stepperBtn, {marginTop: spacing.sm, alignSelf: 'flex-start', backgroundColor: lotSaved ? colors.successLight : colors.primary, borderColor: 'transparent', opacity: savingLot ? 0.6 : 1}]}>
+                <Text style={[styles.stepperBtnTxt, {color: lotSaved ? colors.success : colors.textOnPrimary}]}>
+                  {savingLot ? 'Saving…' : lotSaved ? 'Saved ✓' : 'Save Location'}
+                </Text>
+              </PressableScale>
             </Card>
           </>
         )}

@@ -241,8 +241,10 @@ export const adminApi = {
     client.patch(`/admin/users/${id}/password`, {password}).then(r => r.data),
   deleteUser: (id: number) => client.delete(`/admin/users/${id}`).then(() => undefined),
   // Operational settings (driver accept timeout etc.)
-  getSettings: () => client.get('/admin/settings').then(r => r.data.settings as {driverAcceptTimeoutSeconds: string}),
-  updateSettings: (patch: {driverAcceptTimeoutSeconds?: number | string}) =>
+  getSettings: () => client.get('/admin/settings').then(r => r.data.settings as {
+    driverAcceptTimeoutSeconds: string; parkingLotLat: string; parkingLotLng: string;
+  }),
+  updateSettings: (patch: {driverAcceptTimeoutSeconds?: number | string; parkingLotLat?: number | string; parkingLotLng?: number | string}) =>
     client.patch('/admin/settings', patch).then(r => r.data.settings),
   attendanceToday: () => client.get('/admin/attendance/today').then(r => r.data.attendance),
   attendanceMonthly: (month: string) =>
