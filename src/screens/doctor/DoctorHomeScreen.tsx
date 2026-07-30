@@ -119,12 +119,6 @@ export function DoctorHomeScreen() {
         : statusMap[activeTask.status])
     : null;
 
-  // Arrival only makes sense with no session already running; departure
-  // only once the car is actually parked and waiting. Both cards always
-  // show — whichever doesn't apply right now is just blocked, not hidden.
-  const arrivalBlocked = !showEmptyState;
-  const departureBlocked = !(carIsParked && !activeRetrieve);
-
   if (showTracking && displayTask) {
     return <LiveTrackingScreen task={displayTask} onBack={() => setShowTracking(false)} />;
   }
@@ -285,33 +279,69 @@ export function DoctorHomeScreen() {
         </LinearGradient>
 
         <View style={s.body}>
-          {/* Arrival / Departure — same launcher-card pair as the valet's
-              Staff/Visitor buttons: both always visible, side by side.
-              Whichever doesn't apply to the current state is blocked
-              (dimmed, untappable) rather than disappearing — the doctor
-              always sees both options exist, just not always usable. */}
-          <View style={s.primaryRow}>
-            <PressableScale
-              disabled={arrivalBlocked}
-              onPress={() => setScreen('arrival')}
-              style={[s.primaryBtn, {backgroundColor: colors.primary, opacity: arrivalBlocked ? 0.4 : 1}]}>
-              <View style={s.primaryIconWrap}><Icon name="bellAlert" size={26} color="#fff" /></View>
-              <Text style={s.primaryBtnTxt}>Arrival</Text>
-              <Text style={s.primaryBtnSub} numberOfLines={2}>
-                {arrivalBlocked ? 'Session already active' : "Let valet know you're coming"}
-              </Text>
-            </PressableScale>
-            <PressableScale
-              disabled={departureBlocked}
-              onPress={() => setScreen('departure')}
-              style={[s.primaryBtn, {backgroundColor: colors.accent, opacity: departureBlocked ? 0.4 : 1}]}>
-              <View style={s.primaryIconWrap}><Icon name="car" size={26} color="#fff" /></View>
-              <Text style={s.primaryBtnTxt}>Departure</Text>
-              <Text style={s.primaryBtnSub} numberOfLines={2}>
-                {departureBlocked ? 'No parked car yet' : 'Request your car back'}
-              </Text>
-            </PressableScale>
-          </View>
+          {/* Countdown — real backend-tracked retrieval state, shared with
+              the "My Parking" tab via useRetrievalRequest so it's identical
+              no matter which screen the doctor is looking at. This is the
+              single most relevant thing on the whole screen while it's
+              running, so it leads — above Vehicle Status, above the
+              launcher cards, not buried at the bottom. Hidden once
+              'delivered' — the CAR READY AT ENTRANCE banner below already
+              covers that, so both wouldn't need to say it at once. */}
+          {activeRetrieve && activeRetrieve.status !== 'delivered' && (
+            <Animated.View style={{transform: [{scale: pulse}]}}>
+              <LinearGradient colors={isDark ? BRAND_GRADIENT_DARK : BRAND_GRADIENT} style={s.countdownCard} start={{x:0,y:0}} end={{x:1,y:1}}>
+                <View style={s.countdownLabelRow}>
+                  <Icon
+                    name={activeRetrieve.status === 'requested' ? 'timer' : activeRetrieve.status === 'assigned' ? 'bell' : 'car'}
+                    size={13} color="rgba(255,255,255,0.8)"
+                  />
+                  <Text style={s.countdownLabel}>
+                    {activeRetrieve.status === 'requested' && 'Waiting for Valet'}
+                    {activeRetrieve.status === 'assigned' && `${activeRetrieve.driverName ?? 'Driver'} Assigned`}
+                    {activeRetrieve.status === 'in_transit' && `${activeRetrieve.driverName ?? 'Driver'} On The Way`}
+                  </Text>
+                </View>
+                {remainingSeconds != null && <Text style={s.countdownTimer}>{fmt(remainingSeconds)}</Text>}
+                <Text style={s.countdownSub}>Your car is being retrieved</Text>
+                {activeRetrieve.status === 'in_transit' && (
+                  <PressableScale style={s.countdownTrackBtn} onPress={() => setShowTracking(true)}>
+                    <Icon name="map" size={15} color="#fff" />
+                    <Text style={s.countdownTrackBtnTxt}>View Live Tracking Map</Text>
+                  </PressableScale>
+                )}
+              </LinearGradient>
+            </Animated.View>
+          )}
+
+          {/* Arrival / Departure launcher cards — each independently gated
+              on its OWN relevance, not a shared on/off switch: Arrival only
+              makes sense idle (showEmptyState), Departure only once a car's
+              actually parked (carIsParked && !activeRetrieve) — the
+              opposite state. These two conditions are mutually exclusive,
+              so at most one card ever renders; neither renders "blocked"
+              anymore since a card only shows up when it's actually usable. */}
+          {(showEmptyState || (carIsParked && !activeRetrieve)) && (
+            <View style={s.primaryRow}>
+              {showEmptyState && (
+                <PressableScale
+                  onPress={() => setScreen('arrival')}
+                  style={[s.primaryBtn, {backgroundColor: colors.primary}]}>
+                  <View style={s.primaryIconWrap}><Icon name="bellAlert" size={26} color="#fff" /></View>
+                  <Text style={s.primaryBtnTxt}>Arrival</Text>
+                  <Text style={s.primaryBtnSub} numberOfLines={2}>Let valet know you're coming</Text>
+                </PressableScale>
+              )}
+              {carIsParked && !activeRetrieve && (
+                <PressableScale
+                  onPress={() => setScreen('departure')}
+                  style={[s.primaryBtn, {backgroundColor: colors.accent}]}>
+                  <View style={s.primaryIconWrap}><Icon name="car" size={26} color="#fff" /></View>
+                  <Text style={s.primaryBtnTxt}>Departure</Text>
+                  <Text style={s.primaryBtnSub} numberOfLines={2}>Request your car back</Text>
+                </PressableScale>
+              )}
+            </View>
+          )}
 
           {arrivalSent && showEmptyState && (
             <View style={[s.noticeBanner, {backgroundColor: colors.success + '10', borderColor: colors.success + '30'}]}>
@@ -387,37 +417,6 @@ export function DoctorHomeScreen() {
             <Text style={[s.historyLinkTxt, {color: colors.textPrimary}]}>View Parking History</Text>
             <Icon name="arrowRight" size={16} color={colors.textMuted} />
           </PressableScale>
-
-          {/* Countdown — real backend-tracked retrieval state, shared with
-              the "My Parking" tab via useRetrievalRequest so it's identical
-              no matter which screen the doctor is looking at. Hidden once
-              'delivered' — the CAR READY AT ENTRANCE banner above already
-              covers that, so both wouldn't need to say it at once. */}
-          {activeRetrieve && activeRetrieve.status !== 'delivered' && (
-            <Animated.View style={{transform: [{scale: pulse}]}}>
-              <LinearGradient colors={isDark ? BRAND_GRADIENT_DARK : BRAND_GRADIENT} style={s.countdownCard} start={{x:0,y:0}} end={{x:1,y:1}}>
-                <View style={s.countdownLabelRow}>
-                  <Icon
-                    name={activeRetrieve.status === 'requested' ? 'timer' : activeRetrieve.status === 'assigned' ? 'bell' : 'car'}
-                    size={13} color="rgba(255,255,255,0.8)"
-                  />
-                  <Text style={s.countdownLabel}>
-                    {activeRetrieve.status === 'requested' && 'Waiting for Valet'}
-                    {activeRetrieve.status === 'assigned' && `${activeRetrieve.driverName ?? 'Driver'} Assigned`}
-                    {activeRetrieve.status === 'in_transit' && `${activeRetrieve.driverName ?? 'Driver'} On The Way`}
-                  </Text>
-                </View>
-                {remainingSeconds != null && <Text style={s.countdownTimer}>{fmt(remainingSeconds)}</Text>}
-                <Text style={s.countdownSub}>Your car is being retrieved</Text>
-                {activeRetrieve.status === 'in_transit' && (
-                  <PressableScale style={s.countdownTrackBtn} onPress={() => setShowTracking(true)}>
-                    <Icon name="map" size={15} color="#fff" />
-                    <Text style={s.countdownTrackBtnTxt}>View Live Tracking Map</Text>
-                  </PressableScale>
-                )}
-              </LinearGradient>
-            </Animated.View>
-          )}
         </View>
       </ScrollView>
     </SafeAreaView>
