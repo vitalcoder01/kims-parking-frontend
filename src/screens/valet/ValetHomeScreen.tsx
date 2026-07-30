@@ -627,12 +627,19 @@ export function ValetHomeScreen() {
           // separate status). Whether a driver is actually attached has to
           // come from driverId, not the status string.
           const needsDriver = t.status === 'assigned' && !t.driverId;
+          // A driver being attached doesn't mean they've actually accepted
+          // yet — the accept handshake is a separate step (see
+          // DriverJobsScreen's Accept/Reject buttons), and "Mark Key Handed"
+          // below must not be offered until that's actually done, or a
+          // reject landing right after would either get rejected itself or
+          // leave this task key_collected with no driver on it at all.
+          const awaitingAccept = t.status === 'assigned' && !!t.driverId && !t.acceptedAt;
           // Car's back at the counter, but nothing's confirmed the handover
           // yet — the one stage on this whole screen that's actually
           // time-sensitive right now, so the card itself gets highlighted.
           const needsConfirm = t.status === 'delivered';
           const sl: Record<string,string> = {
-            assigned: needsDriver ? 'Awaiting driver' : 'Driver assigned',
+            assigned: needsDriver ? 'Awaiting driver' : awaitingAccept ? 'Waiting for driver to accept' : 'Driver accepted',
             key_collected:'Driver has key', in_transit:'In transit',
             delivered: 'Awaiting pickup confirmation', completed:'Done',
           };
@@ -669,11 +676,18 @@ export function ValetHomeScreen() {
                 </View>
               )}
               {t.status === 'assigned' && !needsDriver && t.type === 'park' && (
-                <PressableScale style={[s.taskActionBtn, {borderColor: colors.success, backgroundColor: colors.success + '10'}]}
-                  onPress={() => markKeyCollected(t.id)}>
-                  <Icon name="check" size={13} color={colors.success} />
-                  <Text style={[s.taskActionTxt, {color: colors.success}]}>Mark Key Handed to Driver</Text>
-                </PressableScale>
+                awaitingAccept ? (
+                  <View style={[s.taskActionBtn, {borderColor: colors.border, backgroundColor: colors.cardAlt}]}>
+                    <Icon name="timer" size={13} color={colors.textMuted} />
+                    <Text style={[s.taskActionTxt, {color: colors.textMuted}]}>Waiting for driver to accept…</Text>
+                  </View>
+                ) : (
+                  <PressableScale style={[s.taskActionBtn, {borderColor: colors.success, backgroundColor: colors.success + '10'}]}
+                    onPress={() => markKeyCollected(t.id)}>
+                    <Icon name="check" size={13} color={colors.success} />
+                    <Text style={[s.taskActionTxt, {color: colors.success}]}>Mark Key Handed to Driver</Text>
+                  </PressableScale>
+                )
               )}
               {needsConfirm && (
                 <PressableScale style={[s.taskActionBtn, {borderColor: colors.success, backgroundColor: colors.success}]}
