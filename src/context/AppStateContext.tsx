@@ -98,6 +98,14 @@ export interface ArrivalNotice {
   id: number;
   doctorId: number;
   doctorName: string;
+  // Present only if the doctor already has a plate saved on their profile —
+  // lets the valet skip straight to driver assignment from this card.
+  doctorCarNumber?: string;
+  // Only needed for the "no plate on file yet" fallback (see
+  // ValetHomeScreen.handleArrivalArrived) — Path B skips the code lookup
+  // that would normally have supplied these.
+  doctorDepartment?: string;
+  doctorEmployeeId?: string;
   eta: number;
   createdAt: number;
 }

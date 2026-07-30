@@ -198,6 +198,21 @@ export function ValetHomeScreen() {
     }
   };
 
+  // Path B — the valet already knows who this is from the arrival card, so
+  // skip the 3-digit code lookup entirely. If the plate's on file, jump
+  // straight to driver assignment (same as the "already known" branch of
+  // handleScanCode); otherwise drop into the scan screen's step 2 with the
+  // identity pre-filled, so the valet only has to type the plate in.
+  const handleArrivalArrived = async (a: {doctorId: number; doctorName: string; doctorCarNumber?: string; doctorDepartment?: string; doctorEmployeeId?: string}) => {
+    if (a.doctorCarNumber?.trim()) {
+      await createKeyTask({id: a.doctorId, name: a.doctorName}, a.doctorCarNumber.trim());
+    } else {
+      setFoundUser({id: a.doctorId, name: a.doctorName, department: a.doctorDepartment, employeeId: a.doctorEmployeeId});
+      setCarNumber('');
+      setScreen('scan');
+    }
+  };
+
   const handleCancelTask = (taskId: number) => {
     Alert.alert('Cancel This Job?', 'Use this if it’s stuck (e.g. never got a driver) and needs to be cleared.', [
       {text: 'Never mind', style: 'cancel'},
@@ -576,11 +591,17 @@ export function ValetHomeScreen() {
                   <Text style={[s.taskStatusTxt, {color: colors.accent}]}>~{a.eta} min</Text>
                 </View>
                 <Text style={[s.taskDoctor, {color: colors.textPrimary}]}>{a.doctorName}</Text>
-                <PressableScale style={[s.taskActionBtn, {borderColor: colors.border, backgroundColor: colors.cardAlt}]}
-                  onPress={() => dismissArrivalNotice(a.id)}>
-                  <Icon name="close" size={13} color={colors.textSecondary} />
-                  <Text style={[s.taskActionTxt, {color: colors.textSecondary}]}>Dismiss</Text>
-                </PressableScale>
+                <View style={{flexDirection: 'row', gap: 8}}>
+                  <PressableScale style={[s.taskActionBtn, {flex: 1, borderColor: colors.accent, backgroundColor: colors.accent + '12'}]}
+                    onPress={() => handleArrivalArrived(a)}>
+                    <Icon name="key" size={13} color={colors.accent} />
+                    <Text style={[s.taskActionTxt, {color: colors.accent}]}>They've Arrived</Text>
+                  </PressableScale>
+                  <PressableScale style={[s.taskActionBtn, {borderColor: colors.border, backgroundColor: colors.cardAlt}]}
+                    onPress={() => dismissArrivalNotice(a.id)}>
+                    <Icon name="close" size={13} color={colors.textSecondary} />
+                  </PressableScale>
+                </View>
               </View>
             ))}
           </>
