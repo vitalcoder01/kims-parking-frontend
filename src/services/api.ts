@@ -240,8 +240,6 @@ export const visitorsApi = {
 export const arrivalsApi = {
   create: (eta: number) => client.post('/arrivals', {eta}).then(r => r.data.arrival),
   list: () => client.get('/arrivals').then(r => r.data.arrivals),
-  // First valet to call this owns the parking session. Losers get a 409.
-  accept: (id: number) => client.patch(`/arrivals/${id}/accept`).then(r => r.data.arrival),
   dismiss: (id: number) => client.patch(`/arrivals/${id}/dismiss`).then(r => r.data.arrival),
 };
 

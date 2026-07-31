@@ -142,11 +142,6 @@ export interface ArrivalNotice {
   doctorDepartment?: string;
   doctorEmployeeId?: string;
   eta: number;
-  // Null/undefined while still broadcast to every valet. Once set, this
-  // arrival belongs to that valet and drops off everyone else's list.
-  ownerValetId?: number;
-  ownerValetName?: string;
-  arrivalAcceptedAt?: number;
   createdAt: number;
 }
 
@@ -178,7 +173,9 @@ export interface ReassignPrompt {
   kind: 'task' | 'visitor';
   task?: ParkingTask;
   visitor?: Visitor;
-  driverName: string;
+  // Null when no driver was ever involved — the job simply never got one,
+  // which is a different prompt from "your driver dropped it".
+  driverName: string | null;
   rejected?: boolean;
 }
 
@@ -210,7 +207,6 @@ interface AppState {
   // Doctor/staff: "I'm on my way" — before any car/key exists yet, so this
   // has no task id to hand back, just fires the valet-facing notice + push.
   sendArrivalNotice: (eta: number) => Promise<void>;
-  acceptArrivalNotice: (id: number) => Promise<void>;
   acceptRetrieval: (taskId: number) => Promise<void>;
   // Valet: manually clear a no-show/mistaken arrival notice.
   dismissArrivalNotice: (id: number) => Promise<void>;
@@ -569,9 +565,32 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     return () => clearInterval(sweep);
   }, []);
 
+  // A GPS ping is authoritative about ONE thing: where the driver is. It is
+  // NOT authoritative about the job's state, so only the position fields are
+  // merged and the rest of the local record is left alone.
+  //
+  // This used to replace the whole task with the ping's response, which put a
+  // parked job back on the driver's screen. The driver stands still at the
+  // slot, so their pings take the backend's "hasn't moved, skip the write"
+  // path, which answers with the row as it was read at the START of that
+  // request. Tap Mark Parked while one of those is in flight and its reply
+  // lands a moment later still saying `key_collected` — overwriting the
+  // completed task and bringing the card back, slot input and all. Nothing
+  // corrected it either: the app only refetches on socket connect, so the
+  // resurrected card survived until a reconnect or restart.
   const reportLocation = useCallback(async (taskId: number, lat: number, lng: number) => {
-    const updated = mapTask(await tasksApi.updateLocation(taskId, lat, lng));
-    setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
+    const fresh = mapTask(await tasksApi.updateLocation(taskId, lat, lng));
+    setTasks(p => p.map(t => (t.id === taskId
+      ? {...t,
+         driverLat: fresh.driverLat,
+         driverLng: fresh.driverLng,
+         locationUpdatedAt: fresh.locationUpdatedAt,
+         // Only ever set, never cleared — the start anchor is written once by
+         // the first ping and every viewer computes trip progress from it.
+         driverStartLat: t.driverStartLat ?? fresh.driverStartLat,
+         driverStartLng: t.driverStartLng ?? fresh.driverStartLng,
+         trackingProgress: fresh.trackingProgress ?? t.trackingProgress}
+      : t)));
   }, []);
 
   // Single, centralized GPS watcher for the whole app. For drivers it runs
@@ -669,12 +688,11 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
   const requestRetrieval = useCallback(async (plannedDepartureMinutes: number) => {
     const created = mapTask(await tasksApi.requestRetrieval({plannedDepartureMinutes}));
     setTasks(p => [created, ...p]);
-    await pushNotification({
-      targetRole: 'valet',
-      title: `🚗 Retrieval Requested — ${created.doctorName ?? ''}`,
-      body: `${plannedDepartureMinutes === 0 ? 'Leaving now' : `Leaving in ${plannedDepartureMinutes} min`}. Assign a driver to bring ${created.carNumber} from ${created.slotId ?? 'its slot'}.`,
-      type: 'alarm',
-    }).catch(() => {});
+    // No notification is fired from here. The backend raises it inside the
+    // same operation, addressed to the one valet who owns this doctor's
+    // parking session. This used to broadcast to the whole `valet` role from
+    // the DOCTOR's phone, which reached every valet regardless of ownership —
+    // silently undoing the owner-only routing, and ringing the owner twice.
     return created.id;
   }, []);
 
@@ -683,11 +701,16 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
   // moment a real park task is created for the same doctor.
   const sendArrivalNotice = useCallback(async (eta: number) => {
     const created = mapArrival(await arrivalsApi.create(eta));
+    // 'info', not 'alarm'. An arrival is a heads-up that someone is coming,
+    // not a job waiting on a valet — there is nothing to accept and nothing
+    // to assign until they physically hand over a key. Ringing the alarm
+    // channel for it meant a busy morning rang once per arrival, which is
+    // how a genuinely urgent alarm stops being heard.
     await pushNotification({
       targetRole: 'valet',
       title: `🚶 ${created.doctorName ?? 'Someone'} is on the way`,
       body: `Arriving in ${eta} min. Have a driver ready at the entrance.`,
-      type: 'alarm',
+      type: 'info',
     }).catch(() => {});
   }, []);
 
@@ -705,14 +728,6 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     }
     // No generic PATCH exists server-side — every other transition has its
     // own dedicated endpoint (assign/key-collected/park/retrieve) below.
-  }, []);
-
-  // Valet: "Accept" on a broadcast arrival. Whoever the backend lets through
-  // owns the session; everyone else's call throws and their card refreshes to
-  // show it's gone.
-  const acceptArrivalNotice = useCallback(async (id: number) => {
-    const updated = mapArrival(await arrivalsApi.accept(id));
-    setArrivals(p => p.map(a => (a.id === id ? updated : a)));
   }, []);
 
   // Valet: "Accept Retrieval".
@@ -934,7 +949,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     <Ctx.Provider value={{
       drivers, tasks, slots, visitors, arrivalNotices, notifications, hydrated,
       driverLocations, onlineDriverIds, reassignPrompt, clearReassignPrompt,
-      addTask, requestRetrieval, sendArrivalNotice, acceptArrivalNotice, acceptRetrieval, dismissArrivalNotice, updateTask, assignDriver, acceptTask, rejectTask, markKeyCollected, markParked, markRetrieved, confirmTaskDelivered, cancelTask, recallTask, markTaskReturned, fetchTaskHistory, reportLocation,
+      addTask, requestRetrieval, sendArrivalNotice, acceptRetrieval, dismissArrivalNotice, updateTask, assignDriver, acceptTask, rejectTask, markKeyCollected, markParked, markRetrieved, confirmTaskDelivered, cancelTask, recallTask, markTaskReturned, fetchTaskHistory, reportLocation,
       setDriverStatus, addVisitor,
       assignVisitorDriver, acceptVisitorTask, rejectVisitorTask, cancelVisitor,
       markVisitorPickedUp, markVisitorParked, assignRetrievalDriver, markVisitorRetrieved, confirmVisitorDelivered,

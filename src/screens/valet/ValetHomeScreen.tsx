@@ -11,7 +11,8 @@ import {PressableScale} from '../../components/PressableScale';
 import {DriverPickerList} from '../../components/DriverPickerList';
 import {usersApi, tasksApi, isJobGone} from '../../services/api';
 import {PUBLIC_BASE_URL} from '../../config/api';
-import {useValetActions} from './useValetActions';
+import {useValetActions, isMyJobToRun} from './useValetActions';
+import type {ParkingTask} from '../../context/AppStateContext';
 import {useAppState} from '../../context/AppStateContext';
 import {SkeletonCard} from '../../components/Skeleton';
 import {
@@ -36,6 +37,7 @@ function sendWhatsApp(mobile: string, name: string, carNumber: string | undefine
 type Screen = 'home' | 'scan' | 'assign' | 'visitor' | 'retrievals';
 
 type InboxTab = 'all' | 'now' | 'soon' | 'later';
+type QueueTab = 'mine' | 'team';
 const INBOX_TABS: {key: InboxTab; label: string}[] = [
   {key: 'all',   label: 'All'},
   {key: 'now',   label: 'Now'},
@@ -68,7 +70,7 @@ export function ValetHomeScreen() {
   const {drivers, tasks, visitors, addTask, addVisitor, markKeyCollected,
     activeTasks, availableDrivers, retrievalRequests, assignTaskDriver, assignVisitorPickupDriver,
     confirmTaskDelivered, cancelTask, recallTask, arrivalNotices, dismissArrivalNotice,
-    acceptArrivalNotice, acceptRetrieval, myValetId} = useValetActions();
+    acceptRetrieval, myValetId} = useValetActions();
   const {hydrated} = useAppState();
   const {colors, isDark} = useTheme();
 
@@ -97,7 +99,18 @@ export function ValetHomeScreen() {
   const [driverSearch, setDriverSearch] = useState('');
   const [driverSort, setDriverSort] = useState<'suggested' | 'name'>('suggested');
   const [assigningDriverId, setAssigningDriverId] = useState<number | null>(null);
+  // Read from async callbacks that would otherwise close over stale values.
+  const assigningDriverIdRef = useRef<number | null>(null);
+  assigningDriverIdRef.current = assigningDriverId;
+  const screenRef = useRef<Screen>('home');
+  screenRef.current = screen;
+  const pendingTaskIdRef = useRef<number | null>(null);
+  pendingTaskIdRef.current = pendingTaskId;
   const [inboxTab, setInboxTab] = useState<InboxTab>('all');
+  // Job Queue is split so a valet reads only what they're accountable for.
+  // Team jobs stay reachable on the second tab because the key can be handed
+  // between valets — see QUEUE_TABS.
+  const [queueTab, setQueueTab] = useState<QueueTab>('mine');
   // Deadlines have to visibly tick — a static "wants it in 10 min" rendered
   // once tells the valet nothing about how much of that is left by now.
   const [now, setNow] = useState(Date.now());
@@ -107,6 +120,13 @@ export function ValetHomeScreen() {
   }, []);
   // Return-key chaining: enter on one field jumps to the next.
   const fieldRefs = useRef<Record<string, TextInput | null>>({});
+
+  // Mine = I own it, nobody owns it, or it escalated past its owner and is
+  // waiting on anyone. An escalated job deliberately lands here rather than
+  // in the team tab — burying it is the exact stall escalation exists to end.
+  const myJobs = activeTasks.filter(t => isMyJobToRun(t, myValetId));
+  const teamJobs = activeTasks.filter(t => !isMyJobToRun(t, myValetId));
+  const queueJobs = queueTab === 'mine' ? myJobs : teamJobs;
 
   const pendingVisitor = pendingVisitorId ? visitors.find(v => v.id === pendingVisitorId) ?? null : null;
   const pendingTask = pendingTaskId ? tasks.find(t => t.id === pendingTaskId) ?? null : null;
@@ -120,10 +140,17 @@ export function ValetHomeScreen() {
     const what = reassignPrompt.kind === 'task'
       ? `${reassignPrompt.task?.carNumber ?? 'this car'} (${reassignPrompt.task?.doctorName ?? ''})`
       : `${reassignPrompt.visitor?.name ?? 'this visitor'}'s car`;
+    // Two genuinely different situations share this prompt. A named driver
+    // means one was assigned and dropped it. No name means the job never got
+    // a driver at all — saying "X didn't accept in time" there is simply
+    // false, and it used to print the VALET's own name in that slot.
     const why = reassignPrompt.rejected ? 'rejected the job' : "didn't accept in time";
+    const noDriverYet = !reassignPrompt.driverName;
     dialog.show({
-      title: 'Driver did not accept',
-      message: `${reassignPrompt.driverName} ${why} for ${what}. Assign another driver?`,
+      title: noDriverYet ? 'Job still needs a driver' : 'Driver did not accept',
+      message: noDriverYet
+        ? `${what} still has no driver. Assign one?`
+        : `${reassignPrompt.driverName} ${why} for ${what}. Assign another driver?`,
       tone: 'warning',
       buttons: [
         {text: 'Later', style: 'cancel', onPress: () => {
@@ -253,16 +280,45 @@ export function ValetHomeScreen() {
     // finished closing, the effect would report the valet's own assignment
     // as someone else stealing the job.
     if (assigningDriverId != null) return;
-    const taken = (pendingTaskId && pendingTask && pendingTask.driverId)
-      || (pendingVisitorId && pendingVisitor && pendingVisitor.driverId);
-    if (!taken) return;
-    const who = pendingTask?.valetName ?? 'Another valet';
+    // An empty list before the first load is "not known yet", not "gone".
+    if (!hydrated) return;
+
+    // Three ways a job stops being assignable, and this screen has to leave
+    // for all of them — it is bound to ONE entity, so the entity ceasing to
+    // exist has to end the screen, not just the entity changing.
+    //
+    //   taken     — someone else staffed it; it's still on our list.
+    //   vanished  — it left our list entirely. Another valet claiming a
+    //               retrieval removes it from every non-owner's app, and a
+    //               superseded or cancelled job drops out on the next
+    //               refetch.
+    //   finished  — still listed, but past the point of taking a driver.
+    //
+    // Only the first was handled, so the other two left a driver picker open
+    // for a job that no longer existed, and the valet found out by tapping a
+    // driver and getting an error.
+    const taken = (pendingTaskId != null && pendingTask?.driverId != null)
+      || (pendingVisitorId != null && pendingVisitor?.driverId != null);
+    const vanished = (pendingTaskId != null && !pendingTask)
+      || (pendingVisitorId != null && !pendingVisitor);
+    const finished = (pendingTask != null && (pendingTask.status === 'completed' || pendingTask.status === 'cancelled'))
+      || (pendingVisitor != null && (pendingVisitor.status === 'retrieved' || pendingVisitor.status === 'cancelled'));
+    if (!taken && !vanished && !finished) return;
+
     setPendingTaskId(null); setPendingVisitorId(null);
     setScreen('home');
-    dialog.alert(`${who} already assigned a driver to this job.`, {
-      title: 'Job already handled', tone: 'info',
+    if (taken) {
+      const who = pendingTask?.valetName ?? 'Another valet';
+      dialog.alert(`${who} already assigned a driver to this job.`, {
+        title: 'Job already handled', tone: 'info',
+      });
+      return;
+    }
+    // Nobody to name — it left our list, so we don't know who took it.
+    dialog.alert('This job is no longer available.', {
+      title: 'Job no longer available', tone: 'info',
     });
-  }, [screen, pendingTaskId, pendingVisitorId, pendingTask, pendingVisitor, assigningDriverId]);
+  }, [screen, pendingTaskId, pendingVisitorId, pendingTask, pendingVisitor, assigningDriverId, hydrated]);
 
   const handleAddVisitor = async () => {
     if (!vName.trim() || !vMobile.trim()) return;
@@ -285,11 +341,6 @@ export function ValetHomeScreen() {
     }
   };
 
-  const handleAssignDriverTo = (taskId: number) => {
-    setPendingTaskId(taskId);
-    setScreen('assign');
-  };
-
   const handleConfirmTaskDelivered = async (taskId: number) => {
     try {
       await confirmTaskDelivered(taskId);
@@ -298,28 +349,64 @@ export function ValetHomeScreen() {
     }
   };
 
-  // Accepting is a race every valet on shift is in. The backend decides the
-  // winner, so a loss here isn't an error to apologise for — it's the normal
-  // outcome for everyone but one person, and it's reported as plain
-  // information. Their list refreshes itself off the arrival:upsert the
-  // winner's accept emitted.
-  const handleAcceptArrival = async (id: number) => {
-    try {
-      await acceptArrivalNotice(id);
-    } catch (err: any) {
-      dialog.alert(err?.message || 'This request has already been accepted.', {title: 'Already taken'});
-    }
-  };
-
   // Same race, on the departure side. Fires either for the session owner
   // responding inside their window, or for anyone claiming a request the
   // owner never answered.
-  const handleAcceptRetrieval = async (taskId: number) => {
-    try {
-      await acceptRetrieval(taskId);
-    } catch (err: any) {
-      dialog.alert(err?.message || 'This retrieval request has already been accepted.', {title: 'Already taken'});
-    }
+  // The ONLY way into the driver picker, from both the retrieval inbox and
+  // the Job Queue. They had separate handlers with different behaviour, so
+  // the queue's "Assign driver" opened the list without marking the job as
+  // handled — leaving it live to every other valet (and to the recovery
+  // countdown) for however long the valet spent choosing a driver.
+  //
+  // One tap. Accepting and assigning were two separate taps, which is one
+  // more decision than the valet actually makes: opening the driver list IS
+  // them saying they're handling it.
+  //
+  // The screen opens SYNCHRONOUSLY and the claim runs behind it. Awaiting the
+  // claim first is what caused the visible stutter — `await acceptRetrieval()`
+  // flushes its setTasks in one tick and `setScreen` in the next, so React
+  // painted a frame with the button already relabelled "Assign driver" before
+  // navigating away from it.
+  //
+  // Claiming still happens, and still happens immediately: it is what marks
+  // the request as handled, stops the recovery countdown, and takes it off
+  // every other valet's screen. Skipping it would leave the request live to
+  // the whole team while this valet stands there choosing a driver.
+  const handleAssignDriverTo = (t: ParkingTask) => {
+    setPendingTaskId(t.id);
+    setScreen('assign');
+
+    // Claim only what is actually claimable. Every condition here is load-
+    // bearing:
+    //  - park jobs have no retrieval to accept, and `undefined === myValetId`
+    //    is false, so without this a park job would fire a claim that can
+    //    only fail and would then close this screen underneath the valet;
+    //  - a non-valet (admin) has no claim to make and would get a 403;
+    //  - past 'accepted' the job already has a driver history, and takeover
+    //    of an escalated one is assignDriver's job — its guard lifts on
+    //    escalation, whereas claimRetrieval would refuse and close the screen;
+    //  - already ours means there is nothing to spend a request on.
+    const claimable = t.type === 'retrieve'
+      && myValetId != null
+      && (t.status === 'requested' || t.status === 'accepted')
+      && t.retrievalOwnerValetId !== myValetId;
+    if (!claimable) return;
+
+    acceptRetrieval(t.id).catch((err: any) => {
+      // Lost the race. Two ways this screen can already be gone, and
+      // reporting a second time would stack a dialog behind the first:
+      //  - an assignment is in flight (assignDriver claims too, and reports
+      //    its own failure) — leave it alone;
+      //  - the socket's task:restrict already pulled the job from our list
+      //    and the close-effect closed us with its own message.
+      if (assigningDriverIdRef.current != null) return;
+      if (screenRef.current !== 'assign' || pendingTaskIdRef.current !== t.id) return;
+      setPendingTaskId(null);
+      setScreen('home');
+      dialog.alert(err?.message || 'This retrieval request has already been accepted.', {
+        title: 'Already taken', tone: 'info',
+      });
+    });
   };
 
   // Path B — the valet already knows who this is from the arrival card, so
@@ -670,25 +757,14 @@ export function ValetHomeScreen() {
                 </View>
               )}
 
-              {/* Accepting comes first and assigning second: taking the
-                  request is what stops it going out to anyone else, and it's
-                  a decision the valet can make instantly, before they've
-                  worked out which driver to send. Assigning implies the
-                  accept, so an owner who goes straight there doesn't lose the
-                  request in the meantime. */}
-              {t.retrievalOwnerValetId == null ? (
-                <PressableScale style={[s.taskActionBtn, s.jobActions, {borderColor: 'transparent', backgroundColor: colors.primary}]}
-                  onPress={() => handleAcceptRetrieval(t.id)}>
-                  <Icon name="check" size={13} color={colors.textOnPrimary} />
-                  <Text style={[s.taskActionTxt, {color: colors.textOnPrimary}]}>Accept Retrieval</Text>
-                </PressableScale>
-              ) : (
-                <PressableScale style={[s.taskActionBtn, s.jobActions, {borderColor: 'transparent', backgroundColor: colors.primary}]}
-                  onPress={() => handleAssignDriverTo(t.id)}>
-                  <Icon name="people" size={13} color={colors.textOnPrimary} />
-                  <Text style={[s.taskActionTxt, {color: colors.textOnPrimary}]}>Assign driver</Text>
-                </PressableScale>
-              )}
+              {/* One button, one label, whether or not this is already ours —
+                  a label that depends on ownership is exactly what flickered
+                  when ownership changed underneath it mid-tap. */}
+              <PressableScale style={[s.taskActionBtn, s.jobActions, {borderColor: 'transparent', backgroundColor: colors.primary}]}
+                onPress={() => handleAssignDriverTo(t)}>
+                <Icon name="people" size={13} color={colors.textOnPrimary} />
+                <Text style={[s.taskActionTxt, {color: colors.textOnPrimary}]}>Assign driver</Text>
+              </PressableScale>
             </View>
             );
           })}
@@ -872,9 +948,7 @@ export function ValetHomeScreen() {
                     <Icon name="bellAlert" size={11} color={colors.accent} />
                     <Text style={[s.typePillTxt, {color: colors.accent}]}>ARRIVING</Text>
                   </View>
-                  <Text style={[s.taskStatusTxt, {color: colors.accent}]}>
-                    {a.ownerValetId != null ? 'Yours  ·  ' : ''}Arriving in ~{a.eta} min
-                  </Text>
+                  <Text style={[s.taskStatusTxt, {color: colors.accent}]}>Arriving in ~{a.eta} min</Text>
                 </View>
                 <Text style={[s.taskDoctor, {color: colors.textPrimary}]}>{a.doctorName}</Text>
                 {/* The plate is the whole point of a heads-up — it's what
@@ -886,17 +960,10 @@ export function ValetHomeScreen() {
                     {a.doctorCarNumber?.trim() || 'Plate not on file'}
                   </Text>
                 </View>
-                {/* Unaccepted arrivals are on every valet's screen at once.
-                    Accepting is what makes this doctor's whole session yours
-                    — arrival through to departure — so it comes before the
-                    key handover, not after it. */}
-                {a.ownerValetId == null ? (
-                  <PressableScale style={[s.taskActionBtn, {borderColor: 'transparent', backgroundColor: colors.primary}]}
-                    onPress={() => handleAcceptArrival(a.id)}>
-                    <Icon name="check" size={13} color={colors.textOnPrimary} />
-                    <Text style={[s.taskActionTxt, {color: colors.textOnPrimary}]}>Accept</Text>
-                  </PressableScale>
-                ) : (
+                {/* A heads-up, not a job — there is nothing to accept. The
+                    shortcut just skips typing the 3-digit code once they're
+                    actually standing here; from there it's the same key
+                    handover as any other arrival. */}
                 <View style={{flexDirection: 'row', gap: 8}}>
                   <PressableScale style={[s.taskActionBtn, {flex: 1, borderColor: 'transparent', backgroundColor: colors.primary}]}
                     onPress={() => handleArrivalArrived(a)}>
@@ -908,7 +975,6 @@ export function ValetHomeScreen() {
                     <Text style={[s.taskActionTxt, {color: colors.textSecondary}]}>No-show</Text>
                   </PressableScale>
                 </View>
-                )}
               </View>
             ))}
           </>
@@ -919,18 +985,37 @@ export function ValetHomeScreen() {
             One card per job, one contextual action button that changes as
             the job's own stage changes — no separate panel for "needs a
             driver" vs "needs confirming"; it's all still the same job. */}
-        <Text style={[s.sectionTitle, {color: colors.textPrimary}]}>Job Queue ({activeTasks.length})</Text>
+        <Text style={[s.sectionTitle, {color: colors.textPrimary}]}>Job Queue ({queueJobs.length})</Text>
+        {/* Counts sit on the tabs so a valet can see there IS team work
+            without leaving their own list to check. */}
+        <View style={[s.inboxTabs, {borderBottomColor: colors.border, paddingHorizontal: 0, marginBottom: 12}]}>
+          {([['mine', 'My Jobs', myJobs.length], ['team', 'Team Jobs', teamJobs.length]] as const).map(([key, label, count]) => {
+            const active = queueTab === key;
+            return (
+              <PressableScale key={key} style={s.inboxTab} onPress={() => setQueueTab(key)}>
+                <Text style={[s.inboxTabTxt, {
+                  color: active ? colors.textPrimary : count === 0 ? colors.textMuted : colors.textSecondary,
+                }]}>
+                  {label} {count}
+                </Text>
+                {active && <View style={[s.inboxTabBar, {backgroundColor: colors.textPrimary}]} />}
+              </PressableScale>
+            );
+          })}
+        </View>
         {!hydrated ? (
           <>
             <SkeletonCard lines={2} style={{marginBottom: 12}} />
             <SkeletonCard lines={2} />
           </>
-        ) : activeTasks.length === 0 ? (
+        ) : queueJobs.length === 0 ? (
           <View style={[s.emptyBox, {borderColor: colors.border}]}>
             <Icon name="check" size={26} color={colors.textMuted} style={{marginBottom: 8}} />
-            <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No active jobs</Text>
+            <Text style={[s.emptyTxt, {color: colors.textMuted}]}>
+              {queueTab === 'mine' ? 'No active jobs' : 'No one else has a job right now'}
+            </Text>
           </View>
-        ) : activeTasks.map(t => {
+        ) : queueJobs.map(t => {
           const tc = t.type === 'park' ? colors.primary : colors.warning;
           // 'assigned' is the task's status from creation — it does NOT by
           // itself mean a driver has been picked (a park task starts here
@@ -969,7 +1054,14 @@ export function ValetHomeScreen() {
           // A plain cancel is only honest before the key changes hands;
           // after that the car physically exists in a driver's hands and has
           // to be recalled (driver brings it back) rather than silently voided.
-          const canRecall = t.type === 'park' && !recalled
+          // Dispatch rights — the same rule that splits the two tabs, asked
+          // per card rather than read off the tab so the two can't disagree.
+          const canDispatch = isMyJobToRun(t, myValetId);
+          // Recalling is a dispatch decision, not a physical one: it tells a
+          // driver already on the road to turn around. It had no ownership
+          // gate at all, so on the team tab it would have been the one button
+          // letting a valet override someone else's job.
+          const canRecall = canDispatch && t.type === 'park' && !recalled
             && (t.status === 'key_collected' || t.status === 'in_transit');
           // Status text is coloured by how much it needs the VALET right now,
           // not by park-vs-retrieve. It used to use `tc` (the type colour),
@@ -1081,7 +1173,7 @@ export function ValetHomeScreen() {
               {needsDriver && !claimedByOther && (
                 <View style={[s.jobActions, {flexDirection: 'row', gap: 8}]}>
                   <PressableScale style={[s.taskActionBtn, {flex: 1, borderColor: 'transparent', backgroundColor: colors.primary}]}
-                    onPress={() => handleAssignDriverTo(t.id)}>
+                    onPress={() => handleAssignDriverTo(t)}>
                     <Icon name="people" size={13} color={colors.textOnPrimary} />
                     <Text style={[s.taskActionTxt, {color: colors.textOnPrimary}]}>Assign driver</Text>
                   </PressableScale>

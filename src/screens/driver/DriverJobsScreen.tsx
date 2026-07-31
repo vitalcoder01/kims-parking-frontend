@@ -93,8 +93,11 @@ export function DriverJobsScreen() {
         body: `Your car has been parked at slot ${slotInput.toUpperCase()} by ${user?.name}.`,
         type: 'info',
       });
+      // The session's owner, not the whole team — every other valet gets an
+      // inbox entry for a car they have nothing to do with otherwise.
+      const parkOwner = activeTask.arrivalOwnerValetId;
       pushNotification({
-        targetRole: 'valet',
+        targetRole: parkOwner ? `valet:${parkOwner}` : 'valet',
         title: 'Car Parked',
         body: `${activeTask.carNumber} parked at ${slotInput.toUpperCase()} by ${user?.name}`,
         type: 'info',
@@ -123,8 +126,13 @@ export function DriverJobsScreen() {
       await markRetrieved(activeTask.id);
       // Alarm-grade — a car is now sitting at the counter waiting on the
       // owner, and nothing else prompts the valet to confirm the handover.
+      // The valet who owns this retrieval is the one who has to confirm the
+      // handover, so ring them and nobody else. Falls back to the whole team
+      // only when the job genuinely has no owner — an unowned car still has
+      // to be confirmed by someone.
+      const owner = activeTask.retrievalOwnerValetId ?? activeTask.arrivalOwnerValetId;
       pushNotification({
-        targetRole: 'valet',
+        targetRole: owner ? `valet:${owner}` : 'valet',
         title: '🔔 Car at the counter',
         body: `${activeTask.carNumber} is ready. Confirm once the owner has taken it.`,
         type: 'alarm',
@@ -170,8 +178,11 @@ export function DriverJobsScreen() {
   const handleMarkVisitorRetrieved = async (visitorId: number) => {
     try {
       await markVisitorRetrieved(visitorId);
+      // Visitors already carry an owning valet (visitor.valetId, the same
+      // field jobAlerts escalates on) — this alarm just wasn't using it.
+      const vOwner = visitors.find(v => v.id === visitorId)?.valetId;
       pushNotification({
-        targetRole: 'valet',
+        targetRole: vOwner ? `valet:${vOwner}` : 'valet',
         title: '🔔 Car at the counter',
         body: `Brought back by ${user?.name}. Confirm once the visitor has taken it.`,
         type: 'alarm',

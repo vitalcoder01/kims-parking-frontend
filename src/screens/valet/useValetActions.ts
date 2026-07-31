@@ -19,17 +19,29 @@ export function isMyRetrieval(t: ParkingTask, myValetId: number | null | undefin
   return t.recoveryBroadcastAt != null || t.escalatedAt != null;
 }
 
+// Which side of the Job Queue split a job falls on. "Mine to run" is wider
+// than "I own it" on purpose:
+//   - an UNOWNED job has nobody to wait for, so it belongs to whoever looks;
+//   - an ESCALATED job has already had its owner's window and is waiting on
+//     anyone — leaving it on the team side is precisely the stall the
+//     escalation exists to break.
+// Everything else is another valet's, and shows in the team tab read-only
+// for dispatch — though the physical steps stay available there, because a
+// key really can change hands between valets.
+export function isMyJobToRun(t: ParkingTask, myValetId: number | null | undefined): boolean {
+  if (t.valetId == null) return true;
+  if (t.valetId === myValetId) return true;
+  const needsDriver = t.status === 'assigned' && !t.driverId;
+  return !!t.escalatedAt && needsDriver;
+}
+
 export function useValetActions() {
   const {drivers, tasks, visitors, arrivalNotices, dismissArrivalNotice, addTask, assignDriver, markKeyCollected, pushNotification, addVisitor,
     assignVisitorDriver, assignRetrievalDriver, cancelVisitor,
     confirmTaskDelivered, confirmVisitorDelivered, cancelTask, recallTask, fetchTaskHistory,
-    acceptArrivalNotice, acceptRetrieval} = useAppState();
+    acceptRetrieval} = useAppState();
   const {user} = useAuth();
   const myValetId = user?.role === 'valet' ? user.id : null;
-
-  // An arrival someone else has already accepted is their session now — it
-  // comes down off everyone else's list rather than sitting there inert.
-  const visibleArrivals = arrivalNotices.filter(a => a.ownerValetId == null || a.ownerValetId === myValetId);
 
   // "Active Tasks" = already assigned to a driver — a bare 'requested'
   // retrieval isn't a task for anyone to act on yet. Includes 'delivered'
@@ -78,10 +90,10 @@ export function useValetActions() {
 
   return {
     drivers, tasks, visitors, dismissArrivalNotice, addTask, addVisitor, pushNotification, markKeyCollected, cancelVisitor,
-    // Only the arrivals this valet may act on — an accepted one belongs to
-    // whoever accepted it.
-    arrivalNotices: visibleArrivals,
-    acceptArrivalNotice, acceptRetrieval, myValetId,
+    // Every valet sees every expected arrival — it is a heads-up, not a job,
+    // so there is nothing to claim and nobody to filter it for.
+    arrivalNotices,
+    acceptRetrieval, myValetId,
     activeTasks, availableDrivers, retrievalRequests, activeVisitors, hasActiveRetrievalDriver,
     assignTaskDriver, assignVisitorPickupDriver, assignVisitorRetrievalDriver,
     confirmTaskDelivered, confirmVisitorDelivered, cancelTask, recallTask, fetchTaskHistory,
