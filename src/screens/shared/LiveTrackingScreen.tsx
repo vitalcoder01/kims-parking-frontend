@@ -5,6 +5,7 @@ import {WebView} from 'react-native-webview';
 import {useTheme} from '../../context/ThemeContext';
 import {useAppState, ParkingTask} from '../../context/AppStateContext';
 import {useAuth} from '../../context/AuthContext';
+import {useMyDriverId, isMyJob} from '../../hooks/useMyDriverId';
 import {computeTrip} from '../../utils/geo';
 import {Icon} from '../../components/Icon';
 
@@ -110,10 +111,10 @@ export function LiveTrackingScreen({task: taskProp, onBack}: Props) {
   const sheetAnim = useRef(new Animated.Value(260)).current;
 
   const isDriver = user?.role === 'driver';
-  const myDriverId = user?.linkedDriverId ?? user?.id;
+  const myDriverId = useMyDriverId();
   // Used bare (no `task` prop) from the driver's "Track" tab — resolve their
   // own active task instead of rendering an empty/unrelated screen.
-  const task = taskProp ?? (isDriver ? tasks.find(t => t.driverId === myDriverId && t.status !== 'completed' && t.status !== 'delivered' && t.status !== 'cancelled') : undefined);
+  const task = taskProp ?? (isDriver ? tasks.find(t => isMyJob(t.driverId, myDriverId) && t.status !== 'completed' && t.status !== 'delivered' && t.status !== 'cancelled') : undefined);
   // 'delivered' (retrieve trips only) already means the car physically
   // arrived at the valet counter — the trip visually "arrives" there even
   // though the record itself isn't closed out until the valet confirms.
@@ -263,7 +264,7 @@ export function LiveTrackingScreen({task: taskProp, onBack}: Props) {
               </Text>
               <Text style={[s.arrivedSub, {color: colors.textMuted}]}>
                 {task?.type === 'retrieve'
-                  ? (task?.status === 'delivered' ? 'Please collect it at the entrance' : 'Delivered to you')
+                  ? (task?.status === 'delivered' ? 'Please collect it at the valet counter' : 'Waiting at the valet counter')
                   : task?.slotId ? `Slot: ${task.slotId}` : 'Delivered to valet counter'}
               </Text>
             </View>

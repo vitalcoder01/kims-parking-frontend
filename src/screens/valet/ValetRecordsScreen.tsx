@@ -1,5 +1,6 @@
 import React, {useState, useEffect} from 'react';
-import {View, Text, StyleSheet, ScrollView, TextInput, StatusBar, Alert} from 'react-native';
+import {View, Text, StyleSheet, ScrollView, TextInput, StatusBar} from 'react-native';
+import {useDialog} from '../../components/AppDialog';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useTheme} from '../../context/ThemeContext';
 import {Visitor, ParkingTask} from '../../context/AppStateContext';
@@ -37,6 +38,7 @@ type RecordsTab = 'visitors' | 'staff';
 type StatusFilter = 'all' | 'active' | 'completed';
 
 export function ValetRecordsScreen() {
+  const dialog = useDialog();
   const {colors, isDark} = useTheme();
   const {activeVisitors, availableDrivers, hasActiveRetrievalDriver,
     assignVisitorPickupDriver, assignVisitorRetrievalDriver, cancelVisitor, confirmVisitorDelivered,
@@ -79,7 +81,7 @@ export function ValetRecordsScreen() {
       else await assignVisitorPickupDriver(pendingVisitorId, driverId);
       setPendingVisitorId(null); setPendingMode(null);
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Something went wrong');
+      dialog.alert(err.message || 'Something went wrong', {title: 'Error'});
     }
   };
 
@@ -87,7 +89,7 @@ export function ValetRecordsScreen() {
     try {
       await confirmVisitorDelivered(visitorId);
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Could not confirm handover');
+      dialog.alert(err.message || 'Could not confirm handover', {title: 'Error'});
     }
   };
 
@@ -95,16 +97,16 @@ export function ValetRecordsScreen() {
     try {
       await confirmTaskDelivered(taskId);
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Could not confirm handover');
+      dialog.alert(err.message || 'Could not confirm handover', {title: 'Error'});
     }
   };
 
   const handleCancel = (visitorId: number) => {
-    Alert.alert('Cancel Visitor Token', 'Why is this being cancelled?', [
+    dialog.show({title: 'Cancel Visitor Token', message: 'Why is this being cancelled?', tone: 'warning', buttons: [
       {text: 'Never mind', style: 'cancel'},
-      {text: 'No-Show', onPress: () => cancelVisitor(visitorId, 'no_show').catch(err => Alert.alert('Error', err.message || 'Something went wrong'))},
-      {text: 'Cancel Visit', style: 'destructive', onPress: () => cancelVisitor(visitorId, 'valet_cancelled').catch(err => Alert.alert('Error', err.message || 'Something went wrong'))},
-    ]);
+      {text: 'No-Show', onPress: () => cancelVisitor(visitorId, 'no_show').catch(err => dialog.alert(err.message || 'Something went wrong', {title: 'Error'}))},
+      {text: 'Cancel Visit', style: 'destructive', onPress: () => cancelVisitor(visitorId, 'valet_cancelled').catch(err => dialog.alert(err.message || 'Something went wrong', {title: 'Error'}))},
+    ]});
   };
 
   if (pendingVisitor) {

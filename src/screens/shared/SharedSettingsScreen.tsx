@@ -1,5 +1,6 @@
 import React from 'react';
-import {ScrollView, View, Text, StyleSheet, Alert} from 'react-native';
+import {ScrollView, View, Text, StyleSheet} from 'react-native';
+import {useDialog} from '../../components/AppDialog';
 import {PressableScale} from '../../components/PressableScale';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useTheme} from '../../context/ThemeContext';
@@ -19,6 +20,7 @@ const ROLE_LABELS: Record<string, string> = {
 };
 
 export function SharedSettingsScreen() {
+  const dialog = useDialog();
   const {colors, mode, setMode} = useTheme();
   const {user, logout} = useAuth();
 
@@ -187,10 +189,10 @@ export function SharedSettingsScreen() {
         {/* Logout */}
         <PressableScale
           onPress={() =>
-            Alert.alert('Logout', 'Are you sure you want to logout?', [
+            dialog.show({title: 'Logout', message: 'Are you sure you want to logout?', tone: 'warning', buttons: [
               {text: 'Cancel', style: 'cancel'},
               {text: 'Logout', style: 'destructive', onPress: logout},
-            ])
+            ]})
           }
           style={[styles.logoutBtn, {backgroundColor: colors.errorLight, borderColor: colors.error + '44'}]}>
           <Text style={[styles.logoutText, {color: colors.error}]}>Logout</Text>

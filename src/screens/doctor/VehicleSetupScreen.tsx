@@ -1,5 +1,6 @@
 import React, {useRef, useState, useEffect} from 'react';
-import {View, Text, StyleSheet, ScrollView, TextInput, StatusBar, Alert, Dimensions, Modal, Pressable, ActivityIndicator} from 'react-native';
+import {View, Text, StyleSheet, ScrollView, TextInput, StatusBar, Dimensions, Modal, Pressable, ActivityIndicator} from 'react-native';
+import {useDialog} from '../../components/AppDialog';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {WebView} from 'react-native-webview';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -293,6 +294,7 @@ function isLightColor(hex: string) {
 }
 
 export function VehicleSetupScreen() {
+  const dialog = useDialog();
   const {colors, isDark} = useTheme();
   const {user, updateProfile} = useAuth();
   const navigation = useNavigation<any>();
@@ -328,7 +330,7 @@ export function VehicleSetupScreen() {
 
   const handleSave = async () => {
     if (!vehicleNumber.trim()) {
-      Alert.alert('Vehicle number required', 'Please enter your vehicle number before saving.');
+      dialog.alert('Please enter your vehicle number before saving.', {title: 'Vehicle number required', tone: 'info'});
       return;
     }
     setSaving(true);
@@ -338,17 +340,14 @@ export function VehicleSetupScreen() {
       await AsyncStorage.setItem(colorStorageKey, selectedColor);
       setMode('view');
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Could not save vehicle details');
+      dialog.alert(err.message || 'Could not save vehicle details', {title: 'Error'});
     } finally {
       setSaving(false);
     }
   };
 
   const handleHelp = () => {
-    Alert.alert(
-      'Vehicle Setup',
-      'Add your vehicle number, phone number, and pick a body colour — the preview above updates live. This is saved to your account and used by the valet team.',
-    );
+    dialog.alert('Add your vehicle number, phone number, and pick a body colour — the preview above updates live. This is saved to your account and used by the valet team.', {title: 'Vehicle Setup', tone: 'info'});
   };
 
   const sceneHTML = buildCarSceneHTML(selectedColor, vehicleNumber, colors.surface);

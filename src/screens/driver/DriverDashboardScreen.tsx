@@ -2,10 +2,12 @@ import React, {useEffect, useState} from 'react';
 import {View, Text, StyleSheet, ScrollView, StatusBar} from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useAuth} from '../../context/AuthContext';
+import {useMyDriverId, isMyJob} from '../../hooks/useMyDriverId';
 import {useAppState} from '../../context/AppStateContext';
 import {useTheme} from '../../context/ThemeContext';
 import {Icon} from '../../components/Icon';
 import {PressableScale} from '../../components/PressableScale';
+import {SkeletonBlock} from '../../components/Skeleton';
 import {useNavigation} from '@react-navigation/native';
 
 const DAY_LETTERS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
@@ -38,18 +40,18 @@ function isToday(ms?: number) {
 
 export function DriverDashboardScreen() {
   const {user} = useAuth();
-  const {tasks, visitors, fetchTaskHistory} = useAppState();
+  const {tasks, visitors, fetchTaskHistory, hydrated} = useAppState();
   const {colors: c, isDark} = useTheme();
   const navigation = useNavigation<any>();
   const g = greeting();
   const days = weekStrip();
 
-  const myDriverId = user?.linkedDriverId ?? user?.id;
-  const myTasks = tasks.filter(t => t.driverId === myDriverId);
+  const myDriverId = useMyDriverId();
+  const myTasks = tasks.filter(t => isMyJob(t.driverId, myDriverId));
   // 'delivered' is already off this driver's plate — awaiting valet
   // confirmation only, not something to keep showing as their active job.
   const activeTask = myTasks.find(t => t.status !== 'completed' && t.status !== 'delivered' && t.status !== 'cancelled') ?? null;
-  const pendingVisitors = visitors.filter(v => v.driverId === myDriverId
+  const pendingVisitors = visitors.filter(v => isMyJob(v.driverId, myDriverId)
     && (v.status === 'pending' || (v.status === 'parked' && v.retrievalRequested)));
   const openCount = (activeTask ? 1 : 0) + pendingVisitors.length;
 
@@ -118,7 +120,15 @@ export function DriverDashboardScreen() {
 
         {/* Stats row */}
         <View style={st.statsRow}>
-          {stats.map(s => (
+          {/* A zeroed tile during load reads as a real number — "you've done
+              nothing today" — rather than as "not known yet". */}
+          {!hydrated ? [0, 1, 2].map(i => (
+            <View key={i} style={[st.statCard, {backgroundColor: c.surface, borderColor: c.border}]}>
+              <SkeletonBlock height={18} width={18} radius={5} />
+              <SkeletonBlock height={20} width="55%" radius={6} />
+              <SkeletonBlock height={10} width="70%" radius={5} />
+            </View>
+          )) : stats.map(s => (
             <View key={s.label} style={[st.statCard, {backgroundColor: c.surface, borderColor: c.border}]}>
               <Icon name={s.icon} size={18} color={c.textPrimary} />
               <Text style={[st.statValue, {color: c.textPrimary}]}>{s.value}</Text>

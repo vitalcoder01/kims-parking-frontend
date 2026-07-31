@@ -36,6 +36,22 @@ function conditionalGetKey(config: {method?: string; url?: string; params?: unkn
   return `${config.url ?? ''}?${JSON.stringify(config.params ?? {})}`;
 }
 
+/** Error thrown by every API call — carries the server's error code. */
+export class ApiCallError extends Error {
+  code?: string;
+  status?: number;
+  constructor(message: string, code?: string, status?: number) {
+    super(message);
+    this.name = 'ApiCallError';
+    this.code = code;
+    this.status = status;
+  }
+}
+
+/** The job moved on — retrying on the same screen can't succeed. */
+export const isJobGone = (err: unknown) =>
+  err instanceof ApiCallError && err.code === 'JOB_GONE';
+
 let authToken: string | null = null;
 let onUnauthorized: (() => void) | null = null;
 
@@ -85,14 +101,18 @@ client.interceptors.response.use(
     if (etag) etagCache.set(key, {etag, data: res.data});
     return res;
   },
-  (error: AxiosError<{error?: {message?: string}}>) => {
+  (error: AxiosError<{error?: {message?: string; code?: string}}>) => {
     const status = error.response?.status;
     const isLoginCall = error.config?.url?.includes('/auth/login');
     if (status === 401 && !isLoginCall) {
       onUnauthorized?.();
     }
     const message = error.response?.data?.error?.message ?? error.message ?? 'Network error';
-    return Promise.reject(new Error(message));
+    // Carry the server's machine-readable code through. Callers that only
+    // read `.message` are unaffected; the ones that need to branch on WHICH
+    // conflict happened now can, without string-matching copy that gets
+    // reworded (see ApiError on the backend).
+    return Promise.reject(new ApiCallError(message, error.response?.data?.error?.code, status));
   },
 );
 
@@ -125,7 +145,9 @@ export const tasksApi = {
   get: (id: number) => client.get(`/tasks/${id}`).then(r => r.data.task),
   create: (data: {type: 'park' | 'retrieve'; doctorId: number; carNumber: string; slotId?: string}) =>
     client.post('/tasks', data).then(r => r.data.task),
-  requestRetrieval: (data: {eta?: number}) =>
+  // plannedDepartureMinutes: 0 | 10 | 20 | 30 | 40 — when the doctor intends
+  // to leave. Planning info for the valet team, not an arrival promise.
+  requestRetrieval: (data: {plannedDepartureMinutes: number}) =>
     client.post('/tasks/request-retrieval', data).then(r => r.data.task),
   // lat/lng (optional): the valet's own live location at the moment of
   // assignment — for a retrieve task this becomes its destination (the real
@@ -149,6 +171,23 @@ export const tasksApi = {
     client.patch(`/tasks/${id}/confirm-delivered`).then(r => r.data.task),
   cancel: (id: number) =>
     client.patch(`/tasks/${id}/cancel`).then(r => r.data.task),
+  // Valet tapped "Later" on a reassign prompt — tells the backend they've
+  // seen it, so it doesn't broadcast to every valet moments later.
+  // Valet claims a departure request — theirs by ownership, or by winning
+  // the recovery broadcast. The backend decides; a 409 means someone else got
+  // there first.
+  acceptRetrieval: (id: number) =>
+    client.patch(`/tasks/${id}/accept-retrieval`).then(r => r.data.task),
+  acknowledge: (id: number) =>
+    client.patch(`/tasks/${id}/acknowledge`).then(() => undefined),
+  // Valet: abort a park job the driver is already out on — they bring the
+  // car back to the counter instead of parking it. (Plain `cancel` is only
+  // valid before the key changes hands.)
+  recall: (id: number) =>
+    client.patch(`/tasks/${id}/recall`).then(r => r.data.task),
+  // Driver: "car returned to the valet counter" after a recall.
+  markReturned: (id: number) =>
+    client.patch(`/tasks/${id}/returned`).then(r => r.data.task),
   updateLocation: (id: number, lat: number, lng: number) =>
     client.patch(`/tasks/${id}/location`, {lat, lng}).then(r => r.data.task),
 };
@@ -201,6 +240,8 @@ export const visitorsApi = {
 export const arrivalsApi = {
   create: (eta: number) => client.post('/arrivals', {eta}).then(r => r.data.arrival),
   list: () => client.get('/arrivals').then(r => r.data.arrivals),
+  // First valet to call this owns the parking session. Losers get a 409.
+  accept: (id: number) => client.patch(`/arrivals/${id}/accept`).then(r => r.data.arrival),
   dismiss: (id: number) => client.patch(`/arrivals/${id}/dismiss`).then(r => r.data.arrival),
 };
 

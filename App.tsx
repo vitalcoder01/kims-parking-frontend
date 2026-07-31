@@ -8,6 +8,7 @@ import {AppStateProvider} from './src/context/AppStateContext';
 import {AppNavigator} from './src/navigation/AppNavigator';
 import {NotificationBanner} from './src/components/NotificationBanner';
 import {UpdateModal} from './src/components/UpdateModal';
+import {DialogProvider} from './src/components/AppDialog';
 import {initNotifications} from './src/services/notifications';
 
 function AppContent() {
@@ -38,7 +39,9 @@ export default function App() {
         <AuthProvider>
           <AppStateProvider>
             <ThemeProvider>
-              <AppContent />
+              <DialogProvider>
+                <AppContent />
+              </DialogProvider>
             </ThemeProvider>
           </AppStateProvider>
         </AuthProvider>

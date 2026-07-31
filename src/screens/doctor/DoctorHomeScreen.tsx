@@ -1,5 +1,6 @@
 import React, {useState, useEffect, useRef} from 'react';
-import {View, Text, StyleSheet, ScrollView, Animated, Alert, Modal, Pressable, Easing} from 'react-native';
+import {View, Text, StyleSheet, ScrollView, Animated, Modal, Pressable, Easing} from 'react-native';
+import {useDialog} from '../../components/AppDialog';
 import {PressableScale} from '../../components/PressableScale';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import LinearGradient from 'react-native-linear-gradient';
@@ -11,8 +12,16 @@ import {LiveTrackingScreen} from '../shared/LiveTrackingScreen';
 import {useRetrievalRequest} from '../../hooks/useRetrievalRequest';
 import {BRAND_GRADIENT, BRAND_GRADIENT_DARK} from '../../theme/colors';
 import {Icon} from '../../components/Icon';
+import {SkeletonBlock} from '../../components/Skeleton';
+import {
+  PLANNED_DEPARTURE_OPTIONS, plannedDepartureLabel, enRouteSeconds, fmtDuration,
+} from '../../utils/retrievalClocks';
 
-const ETA_OPTIONS = [10, 20, 30, 40];
+// The doctor's PLANNED DEPARTURE — "I intend to leave in X minutes".
+// Never an arrival estimate: the system can't promise when the car turns up.
+const DEPARTURE_OPTIONS = PLANNED_DEPARTURE_OPTIONS;
+// The "on my way in" arrival notice is a separate feature with its own scale.
+const ETA_OPTIONS_ARRIVAL = [10, 20, 30, 40];
 
 // Modal's own `animationType="fade"` just snaps opacity 0→1 on the whole
 // overlay in one flat step — no easing, no motion — which is why it read as
@@ -67,11 +76,12 @@ function BottomSheetModal({visible, onClose, children}: {visible: boolean; onClo
 }
 
 export function DoctorHomeScreen() {
+  const dialog = useDialog();
   const {user} = useAuth();
-  const {tasks, sendArrivalNotice} = useAppState();
+  const {tasks, sendArrivalNotice, hydrated} = useAppState();
   const {colors, isDark} = useTheme();
   const navigation = useNavigation<any>();
-  const {activeRetrieve, remainingSeconds, requestRetrieval} = useRetrievalRequest();
+  const {activeRetrieve, now, requestRetrieval} = useRetrievalRequest();
   // Popups over the home screen, not separate full-screen views — the
   // doctor never leaves Home, Vehicle Status etc. stay visible underneath.
   const [showArrivalModal, setShowArrivalModal] = useState(false);
@@ -103,12 +113,11 @@ export function DoctorHomeScreen() {
   // in the lot, so that one legitimately stays displayed.
   const showEmptyState = !displayTask || displayTask.status === 'cancelled'
     || (displayTask.status === 'completed' && displayTask.type === 'retrieve');
-  // Only once the key's actually collected (park) or the driver's genuinely
-  // en route (retrieve) does the driver's phone start reporting real GPS —
-  // showing the map any earlier (e.g. right after "Driver Assigned", before
-  // they've even taken the key) had nothing real to plot, so it fell back to
-  // a hardcoded placeholder coordinate that looked like a real, wrong location.
-  const canTrack = displayTask?.status === 'key_collected' || displayTask?.status === 'in_transit';
+  // Park job actually under way — the driver has the key and is moving, so
+  // there's a real GPS position worth showing. (Retrievals are covered by
+  // the countdown card; this is the park-side equivalent.)
+  const parkInMotion = displayTask?.type === 'park'
+    && (displayTask.status === 'key_collected' || displayTask.status === 'in_transit');
 
   useEffect(() => {
     Animated.loop(Animated.sequence([
@@ -132,27 +141,27 @@ export function DoctorHomeScreen() {
       setArrivalSent(arrivalEta);
       setShowArrivalModal(false);
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Could not notify the valet');
+      dialog.alert(err.message || 'Could not notify the valet', {title: 'Error'});
     } finally {
       setSendingArrival(false);
     }
   };
 
   const handleDeparture = async () => {
-    if (!selectedEta) return;
+    if (selectedEta == null) return;   // 0 = "Now" is valid, and falsy
     setRequesting(true);
     try {
       await requestRetrieval(selectedEta);
       setShowDepartureModal(false);
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Could not request retrieval');
+      dialog.alert(err.message || 'Could not request retrieval', {title: 'Error'});
     } finally {
       setRequesting(false);
     }
   };
 
-  const fmt = (s: number) => `${Math.floor(s/60).toString().padStart(2,'0')}:${(s%60).toString().padStart(2,'0')}`;
-  const fmtClock = (ms: number) => new Date(ms).toLocaleTimeString(undefined, {hour: 'numeric', minute: '2-digit'});
+  // Wall-clock time of day, e.g. "3:40 PM" — NOT a duration.
+  const fmtTimeOfDay = (ms: number) => new Date(ms).toLocaleTimeString(undefined, {hour: 'numeric', minute: '2-digit'});
 
   // 'assigned' is the task's status from the moment it's *created* — it does
   // NOT mean a driver has been picked yet. Whether one has is driverId
@@ -161,8 +170,13 @@ export function DoctorHomeScreen() {
   const statusMap: Record<string,{label:string;color:string}> = {
     assigned:      {label: 'Driver Assigned',      color: colors.warning},
     key_collected: {label: 'Key Collected',         color: colors.info},
-    in_transit:    {label: activeTask?.type === 'retrieve' ? 'En Route to You' : 'En Route to Parking', color: colors.primary},
-    delivered:     {label: 'Car Arrived — Confirm at Counter', color: colors.success},
+    // A retrieval's destination is the valet counter, NOT the doctor — the
+    // driver brings the car back there and the doctor collects it (their own
+    // button literally says "Car delivered to valet counter", and the
+    // arrival banner says "collect at the gate"). "En Route to You" implied
+    // door-to-door delivery that never happens.
+    in_transit:    {label: activeTask?.type === 'retrieve' ? 'Coming to Valet Counter' : 'En Route to Parking', color: colors.primary},
+    delivered:     {label: 'Ready at the counter', color: colors.success},
     completed:     {label: 'Safely Parked',         color: colors.success},
   };
   const statusInfo = activeTask
@@ -208,30 +222,68 @@ export function DoctorHomeScreen() {
               launcher cards, not buried at the bottom. Hidden once
               'delivered' — the CAR READY AT ENTRANCE banner below already
               covers that, so both wouldn't need to say it at once. */}
-          {activeRetrieve && activeRetrieve.status !== 'delivered' && (
-            <Animated.View style={{transform: [{scale: pulse}]}}>
-              <LinearGradient colors={isDark ? BRAND_GRADIENT_DARK : BRAND_GRADIENT} style={s.countdownCard} start={{x:0,y:0}} end={{x:1,y:1}}>
-                <View style={s.countdownLabelRow}>
-                  <Icon
-                    name={activeRetrieve.status === 'requested' ? 'timer' : activeRetrieve.status === 'assigned' ? 'bell' : 'car'}
-                    size={13} color="rgba(255,255,255,0.8)"
-                  />
-                  <Text style={s.countdownLabel}>
-                    {activeRetrieve.status === 'requested' && 'Waiting for Valet'}
-                    {activeRetrieve.status === 'assigned' && `${activeRetrieve.driverName ?? 'Driver'} Assigned`}
-                    {activeRetrieve.status === 'in_transit' && `${activeRetrieve.driverName ?? 'Driver'} On The Way`}
-                  </Text>
-                </View>
-                {remainingSeconds != null && <Text style={s.countdownTimer}>{fmt(remainingSeconds)}</Text>}
-                <Text style={s.countdownSub}>Your car is being retrieved</Text>
-                {activeRetrieve.status === 'in_transit' && (
-                  <PressableScale style={s.countdownTrackBtn} onPress={() => setShowTracking(true)}>
-                    <Icon name="map" size={15} color="#fff" />
-                    <Text style={s.countdownTrackBtnTxt}>View Live Tracking Map</Text>
-                  </PressableScale>
-                )}
-              </LinearGradient>
-            </Animated.View>
+          {activeRetrieve && activeRetrieve.status !== 'delivered' && (() => {
+            // The doctor is told what is HAPPENING, never when the car will
+            // arrive. Their planned-departure choice was scheduling
+            // information for the valet team — turning it into a countdown
+            // here would be promising a delivery time the system has no way
+            // to honour. The only clock shown is the real trip, and only
+            // once a driver has actually set off.
+            const enRoute = enRouteSeconds(activeRetrieve, now);
+            const onTheWay = activeRetrieve.status === 'in_transit' && enRoute != null;
+            return (
+              <Animated.View style={{transform: [{scale: onTheWay ? pulse : 1}]}}>
+                <LinearGradient colors={isDark ? BRAND_GRADIENT_DARK : BRAND_GRADIENT} style={s.countdownCard} start={{x:0,y:0}} end={{x:1,y:1}}>
+                  {onTheWay ? (
+                    <>
+                      <View style={s.countdownLabelRow}>
+                        <Icon name="car" size={13} color="rgba(255,255,255,0.8)" />
+                        <Text style={s.countdownLabel}>Vehicle on the way</Text>
+                      </View>
+                      <Text style={s.countdownTimer}>{fmtDuration(enRoute!)}</Text>
+                      <Text style={s.countdownSub}>
+                        {activeRetrieve.driverName ?? 'Your driver'} · collect at the valet counter
+                      </Text>
+                      <PressableScale style={s.countdownTrackBtn} onPress={() => setShowTracking(true)}>
+                        <Icon name="map" size={15} color="#fff" />
+                        <Text style={s.countdownTrackBtnTxt}>Track live</Text>
+                      </PressableScale>
+                    </>
+                  ) : (
+                    <>
+                      <View style={s.sentIconWrap}>
+                        <Icon name="checkBold" size={26} color="#fff" />
+                      </View>
+                      <Text style={s.sentTitle}>Departure request sent</Text>
+                      <Text style={s.sentBody}>The valet team has been notified.</Text>
+                      <Text style={s.sentBody}>We'll notify you when your vehicle is on the way.</Text>
+                    </>
+                  )}
+                </LinearGradient>
+              </Animated.View>
+            );
+          })()}
+
+          {/* A park job in motion has no countdown card (there's no ETA to
+              count down to — the driver picks whichever slot is free), so
+              without this the doctor has no way to watch their car being
+              parked. Same role the countdown card plays for a retrieval,
+              minus the timer. */}
+          {parkInMotion && (
+            <LinearGradient colors={isDark ? BRAND_GRADIENT_DARK : BRAND_GRADIENT} style={s.trackCard} start={{x:0,y:0}} end={{x:1,y:1}}>
+              <View style={s.trackCardTop}>
+                <Icon name="carKey" size={15} color="rgba(255,255,255,0.85)" />
+                <Text style={s.trackCardTitle} numberOfLines={1}>
+                  {displayTask?.status === 'key_collected'
+                    ? `${displayTask?.driverName ?? 'Driver'} has your key`
+                    : `${displayTask?.driverName ?? 'Driver'} is parking your car`}
+                </Text>
+              </View>
+              <PressableScale style={s.countdownTrackBtn} onPress={() => setShowTracking(true)}>
+                <Icon name="map" size={15} color="#fff" />
+                <Text style={s.countdownTrackBtnTxt}>Track live</Text>
+              </PressableScale>
+            </LinearGradient>
           )}
 
           {/* Arrival / Departure launcher cards — each independently gated
@@ -241,7 +293,13 @@ export function DoctorHomeScreen() {
               opposite state. These two conditions are mutually exclusive,
               so at most one card ever renders; neither renders "blocked"
               anymore since a card only shows up when it's actually usable. */}
-          {(showEmptyState || (carIsParked && !activeRetrieve)) && (
+          {!hydrated && (
+            <View style={s.primaryRow}>
+              <SkeletonBlock height={116} radius={18} style={{flex: 1}} />
+              <SkeletonBlock height={116} radius={18} style={{flex: 1}} />
+            </View>
+          )}
+          {hydrated && (showEmptyState || (carIsParked && !activeRetrieve)) && (
             <View style={s.primaryRow}>
               {showEmptyState && (
                 <PressableScale
@@ -273,59 +331,70 @@ export function DoctorHomeScreen() {
             </View>
           )}
 
-          {/* Car Status Card */}
+          {/* One fact leads, everything else supports it. When the car is
+              parked the slot number IS the answer the doctor opened the app
+              for, so it's the headline — not a value in a two-column grid
+              under a title bar and a status pill. No dot: the wording
+              already says the state, and a coloured dot next to text that
+              states the same thing is decoration. */}
           <View style={[s.statusCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
-            <View style={s.statusTop}>
-              <Text style={[s.statusCardTitle, {color: colors.textPrimary}]}>Vehicle Status</Text>
-              {statusInfo && (
-                <View style={[s.statusPill, {backgroundColor: statusInfo.color + '18', borderColor: statusInfo.color + '40'}]}>
-                  <View style={[s.statusDot, {backgroundColor: statusInfo.color}]} />
-                  <Text style={[s.statusPillTxt, {color: statusInfo.color}]}>{statusInfo.label}</Text>
+            {!hydrated ? (
+              <View style={s.statusBody}>
+                <SkeletonBlock height={12} width="35%" radius={6} />
+                <SkeletonBlock height={34} width="55%" radius={8} style={{marginTop: 12}} />
+                <SkeletonBlock height={12} width="70%" radius={6} style={{marginTop: 14}} />
+              </View>
+            ) : showEmptyState || !displayTask ? (
+              <View style={s.statusBody}>
+                <View style={s.statusTopRow}>
+                  <Text style={[s.statusEyebrow, {color: colors.textMuted}]}>VEHICLE STATUS</Text>
+                  <Text style={[s.statusState, {color: colors.textMuted}]}>No active session</Text>
                 </View>
-              )}
-            </View>
-
-            {!showEmptyState && displayTask ? (
-              <>
-                {carIsParked && displayTask.slotId && (
-                  <LinearGradient colors={isDark ? ['#162040','#1C2A50'] : ['#EEF2FF','#DBEAFE']} style={s.slotBanner} start={{x:0,y:0}} end={{x:1,y:0}}>
-                    <Text style={[s.slotLabel, {color: colors.textMuted}]}>PARKED AT SLOT</Text>
-                    <Text style={[s.slotValue, {color: colors.primary}]}>{displayTask.slotId}</Text>
-                  </LinearGradient>
-                )}
-                {carJustRetrieved && (
-                  <LinearGradient colors={isDark ? ['#0D2A1C', '#0F3323'] : ['#ECFDF5', '#D1FAE5']} style={s.slotBanner} start={{x:0,y:0}} end={{x:1,y:0}}>
-                    <View style={s.slotLabelRow}>
-                      <Icon name="car" size={13} color={colors.success} />
-                      <Text style={[s.slotLabel, {color: colors.success}]}>CAR READY AT ENTRANCE</Text>
-                    </View>
-                    <Text style={[s.slotValue, {color: colors.success, fontSize: 22}]}>Please collect at the gate</Text>
-                  </LinearGradient>
-                )}
-                <View style={s.metaRow}>
-                  {[
-                    {label: 'Vehicle', value: displayTask.carNumber ?? '—'},
-                    {label: 'Driver', value: displayTask.driverName ?? 'Unassigned'},
-                  ].map(m => (
-                    <View key={m.label} style={[s.metaCell, {borderColor: colors.border}]}>
-                      <Text style={[s.metaCellLabel, {color: colors.textMuted}]}>{m.label.toUpperCase()}</Text>
-                      <Text style={[s.metaCellValue, {color: colors.textPrimary}]}>{m.value}</Text>
-                    </View>
-                  ))}
+                <Text style={[s.statusHeadline, {color: colors.textMuted}]}>No car parked</Text>
+                <Text style={[s.statusSub, {color: colors.textMuted}]}>
+                  Hand your keys to the valet at the entrance.
+                </Text>
+              </View>
+            ) : carIsParked ? (
+              <View style={s.statusBody}>
+                <View style={s.statusTopRow}>
+                  <Text style={[s.statusEyebrow, {color: colors.textMuted}]}>PARKED AT</Text>
+                  <Text style={[s.statusState, {color: colors.success}]}>Safely parked</Text>
                 </View>
-                {canTrack && (
-                  <PressableScale style={[s.trackBtn, {backgroundColor: colors.primary + '10', borderColor: colors.primary + '30'}]}
-                    onPress={() => setShowTracking(true)}>
-                    <Icon name="map" size={18} color={colors.primary} />
-                    <Text style={[s.trackBtnTxt, {color: colors.primary}]}>View Live Tracking Map</Text>
-                    <Icon name="arrowRight" size={18} color={colors.primary} />
-                  </PressableScale>
-                )}
-              </>
+                <Text style={[s.statusSlot, {color: colors.textPrimary}]}>{displayTask.slotId ?? '—'}</Text>
+                <Text style={[s.statusSub, {color: colors.textSecondary}]}>
+                  {displayTask.carNumber}
+                  {displayTask.driverName ? `  ·  Parked by ${displayTask.driverName}` : ''}
+                </Text>
+              </View>
+            ) : carJustRetrieved ? (
+              <View style={s.statusBody}>
+                <View style={s.statusTopRow}>
+                  <Text style={[s.statusEyebrow, {color: colors.textMuted}]}>RETRIEVING</Text>
+                  <Text style={[s.statusState, {color: colors.success}]}>Ready for pickup</Text>
+                </View>
+                <Text style={[s.statusHeadline, {color: colors.textPrimary}]}>Collect at the valet counter</Text>
+                <Text style={[s.statusSub, {color: colors.textSecondary}]}>{displayTask.carNumber}</Text>
+              </View>
             ) : (
-              <View style={[s.emptySlot, {borderColor: colors.border}]}>
-                <Icon name="carSide" size={40} color={colors.textMuted} />
-                <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No active parking session.{'\n'}Hand your keys to the valet at the entrance.</Text>
+              <View style={s.statusBody}>
+                <View style={s.statusTopRow}>
+                  <Text style={[s.statusEyebrow, {color: colors.textMuted}]}>
+                    {displayTask.type === 'park' ? 'PARKING' : 'RETRIEVING'}
+                  </Text>
+                  {!!statusInfo && (
+                    <Text style={[s.statusState, {color: statusInfo.color}]}>{statusInfo.label}</Text>
+                  )}
+                </View>
+                <Text style={[s.statusHeadline, {color: colors.textPrimary}]}>
+                  {displayTask.driverName
+                    ? `${displayTask.driverName} has your car`
+                    : 'Waiting for a driver'}
+                </Text>
+                <Text style={[s.statusSub, {color: colors.textSecondary}]}>
+                  {displayTask.carNumber}
+                  {displayTask.driverName ? `  ·  ${displayTask.driverName}` : ''}
+                </Text>
               </View>
             )}
           </View>
@@ -359,7 +428,7 @@ export function DoctorHomeScreen() {
               <View style={s.etaBody}>
                 <Text style={[s.etaQuestion, {color: colors.textMuted}]}>WHEN WILL YOU ARRIVE?</Text>
                 <View style={s.etaGrid}>
-                  {ETA_OPTIONS.map(opt => {
+                  {ETA_OPTIONS_ARRIVAL.map(opt => {
                     const on = arrivalEta === opt;
                     return (
                       <PressableScale
@@ -387,7 +456,7 @@ export function DoctorHomeScreen() {
                     {backgroundColor: arrivalEta ? colors.primary : colors.border, opacity: sendingArrival ? 0.6 : 1},
                   ]}>
                   <Text style={[s.etaConfirmTxt, {color: arrivalEta ? colors.textOnPrimary : colors.textMuted}]}>
-                    {sendingArrival ? 'Notifying…' : arrivalEta ? `Notify Valet — Arriving in ${arrivalEta} min` : 'Select a time above'}
+                    {sendingArrival ? 'Notifying…' : arrivalEta ? 'Notify the valet' : 'Select a time above'}
                   </Text>
                   {arrivalEta && !sendingArrival && <Icon name="arrowRight" size={15} color={colors.textOnPrimary} />}
                 </PressableScale>
@@ -404,12 +473,12 @@ export function DoctorHomeScreen() {
                 <Icon name="close" size={16} color="#fff" />
               </PressableScale>
               <Text style={s.departureHeaderTxt}>Ready to Leave?</Text>
-              <Text style={s.departureHeaderSub}>Valet will assign a driver to bring your car to you</Text>
+              <Text style={s.departureHeaderSub}>We'll notify the valet team so they can plan your retrieval</Text>
             </LinearGradient>
             <View style={s.etaBody}>
-              <Text style={[s.etaQuestion, {color: colors.textMuted}]}>WHEN DO YOU NEED YOUR CAR?</Text>
+              <Text style={[s.etaQuestion, {color: colors.textMuted}]}>WHEN ARE YOU LEAVING?</Text>
               <View style={s.etaGrid}>
-                {ETA_OPTIONS.map(opt => {
+                {DEPARTURE_OPTIONS.map(opt => {
                   const on = selectedEta === opt;
                   return (
                     <PressableScale
@@ -423,34 +492,30 @@ export function DoctorHomeScreen() {
                           borderColor: on ? colors.textPrimary : colors.border,
                         },
                       ]}>
-                      <Text style={[s.etaBtnNum, {color: on ? colors.background : colors.textPrimary}]}>{opt}</Text>
-                      <Text style={[s.etaBtnSub, {color: on ? colors.background + 'AA' : colors.textMuted}]}>min</Text>
+                      <Text style={[s.etaBtnNum, {color: on ? colors.background : colors.textPrimary}]}>
+                        {opt === 0 ? 'Now' : opt}
+                      </Text>
+                      {opt !== 0 && (
+                        <Text style={[s.etaBtnSub, {color: on ? colors.background + 'AA' : colors.textMuted}]}>min</Text>
+                      )}
                     </PressableScale>
                   );
                 })}
               </View>
-
-              {selectedEta != null && (
-                <View style={[s.etaReadyRow, {backgroundColor: colors.success + '10', borderColor: colors.success + '30'}]}>
-                  <View>
-                    <Text style={[s.etaReadyLbl, {color: colors.textMuted}]}>Car ready by</Text>
-                    <Text style={[s.etaReadyVal, {color: colors.success}]}>{fmtClock(Date.now() + selectedEta * 60000)}</Text>
-                  </View>
-                  <Icon name="car" size={24} color={colors.success} />
-                </View>
-              )}
+              {/* No "car ready by <time>" preview — that was an arrival
+                  promise dressed up as a confirmation. */}
 
               <PressableScale
                 onPress={handleDeparture}
-                disabled={!selectedEta || requesting}
+                disabled={selectedEta == null || requesting}
                 style={[
                   s.etaConfirmBtn,
-                  {backgroundColor: selectedEta ? colors.primary : colors.border, opacity: requesting ? 0.6 : 1},
+                  {backgroundColor: selectedEta != null ? colors.primary : colors.border, opacity: requesting ? 0.6 : 1},
                 ]}>
-                <Text style={[s.etaConfirmTxt, {color: selectedEta ? colors.textOnPrimary : colors.textMuted}]}>
-                  {requesting ? 'Requesting…' : selectedEta ? `Confirm — Leaving in ${selectedEta} min` : 'Select a time above'}
+                <Text style={[s.etaConfirmTxt, {color: selectedEta != null ? colors.textOnPrimary : colors.textMuted}]}>
+                  {requesting ? 'Sending…' : selectedEta != null ? 'Send departure request' : 'Select a time above'}
                 </Text>
-                {selectedEta && !requesting && <Icon name="arrowRight" size={15} color={colors.textOnPrimary} />}
+                {selectedEta != null && !requesting && <Icon name="arrowRight" size={15} color={colors.textOnPrimary} />}
               </PressableScale>
             </View>
           </View>
@@ -473,26 +538,16 @@ const s = StyleSheet.create({
 
   body:{padding:16,paddingTop:20,gap:12},
   statusCard:{borderRadius:20,borderWidth:1,overflow:'hidden'},
-  statusTop:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',padding:16,paddingBottom:12},
-  statusCardTitle:{fontSize:15,fontWeight:'800'},
-  statusPill:{flexDirection:'row',alignItems:'center',gap:5,borderRadius:20,borderWidth:1,paddingHorizontal:10,paddingVertical:4},
-  statusDot:{width:7,height:7,borderRadius:4},
-  statusPillTxt:{fontSize:11,fontWeight:'700'},
-  slotBanner:{padding:16,alignItems:'center',marginHorizontal:16,marginBottom:12,borderRadius:14},
-  slotLabelRow:{flexDirection:'row',alignItems:'center',gap:6},
-  slotLabel:{fontSize:9,fontWeight:'700',letterSpacing:1.5},
-  slotValue:{fontSize:36,fontWeight:'900',marginTop:2},
-  metaRow:{flexDirection:'row',borderTopWidth:1,borderTopColor:'rgba(0,0,0,0.05)'},
-  metaCell:{flex:1,padding:14},
-  metaCellLabel:{fontSize:9,fontWeight:'700',letterSpacing:1,marginBottom:4},
-  metaCellValue:{fontSize:14,fontWeight:'800'},
-  trackBtn:{flexDirection:'row',alignItems:'center',margin:12,marginTop:4,borderRadius:12,borderWidth:1,padding:12,gap:8},
-  trackBtnIcon:{fontSize:16},
-  trackBtnTxt:{flex:1,fontSize:13,fontWeight:'700'},
-  trackBtnArrow:{fontSize:16,fontWeight:'700'},
-  emptySlot:{margin:16,borderRadius:14,borderWidth:1,borderStyle:'dashed',padding:28,alignItems:'center',gap:8},
-  emptyIcon:{fontSize:36},
-  emptyTxt:{fontSize:13,textAlign:'center',lineHeight:19},
+  statusBody:{padding:20},
+  statusTopRow:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:10},
+  statusEyebrow:{fontSize:10,fontWeight:'800',letterSpacing:1.4},
+  // Status as plain weighted text — no dot. The words already carry the
+  // state; a coloured dot beside them repeats it as decoration.
+  statusState:{fontSize:12,fontWeight:'800'},
+  // The slot number is the whole answer when a car is parked — sized like it.
+  statusSlot:{fontSize:40,fontWeight:'900',letterSpacing:-0.5,marginTop:6,fontVariant:['tabular-nums']},
+  statusHeadline:{fontSize:18,fontWeight:'800',marginTop:6},
+  statusSub:{fontSize:13,fontWeight:'600',marginTop:8},
   historyLink:{flexDirection:'row',alignItems:'center',gap:10,borderRadius:16,borderWidth:1,padding:14},
   historyLinkTxt:{flex:1,fontSize:13,fontWeight:'700'},
 
@@ -521,18 +576,21 @@ const s = StyleSheet.create({
   etaBtnNum:{fontSize:22,fontWeight:'900',lineHeight:26},
   etaBtnSub:{fontSize:9,fontWeight:'800',letterSpacing:1,textTransform:'uppercase',marginTop:3},
 
-  etaReadyRow:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',borderRadius:14,borderWidth:1,padding:14,marginTop:14},
-  etaReadyLbl:{fontSize:10,fontWeight:'600'},
-  etaReadyVal:{fontSize:22,fontWeight:'900',marginTop:2},
 
   etaConfirmBtn:{flexDirection:'row',alignItems:'center',justifyContent:'center',gap:8,borderRadius:14,paddingVertical:15,marginTop:14},
   etaConfirmTxt:{fontSize:14,fontWeight:'900'},
 
+  trackCard:{borderRadius:20,padding:18,gap:14},
+  trackCardTop:{flexDirection:'row',alignItems:'center',gap:8},
+  trackCardTitle:{flex:1,color:'#fff',fontSize:14,fontWeight:'800'},
   countdownCard:{borderRadius:20,padding:28,alignItems:'center'},
   countdownLabelRow:{flexDirection:'row',alignItems:'center',gap:6},
   countdownLabel:{color:'rgba(255,255,255,0.8)',fontSize:12,fontWeight:'700'},
   countdownTimer:{color:'#fff',fontSize:56,fontWeight:'900',fontVariant:['tabular-nums'],marginVertical:6},
-  countdownSub:{color:'rgba(255,255,255,0.7)',fontSize:12},
+  countdownSub:{color:'rgba(255,255,255,0.7)',fontSize:12,textAlign:'center'},
+  sentIconWrap:{width:52,height:52,borderRadius:26,backgroundColor:'rgba(255,255,255,0.18)',alignItems:'center',justifyContent:'center',marginBottom:14},
+  sentTitle:{color:'#fff',fontSize:18,fontWeight:'900',marginBottom:8,textAlign:'center'},
+  sentBody:{color:'rgba(255,255,255,0.75)',fontSize:13,textAlign:'center',lineHeight:19},
   countdownTrackBtn:{flexDirection:'row',alignItems:'center',gap:8,marginTop:16,backgroundColor:'rgba(255,255,255,0.2)',borderRadius:12,paddingVertical:12,paddingHorizontal:20,borderWidth:1,borderColor:'rgba(255,255,255,0.3)'},
   countdownTrackBtnTxt:{color:'#fff',fontSize:13,fontWeight:'800'},
 

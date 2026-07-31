@@ -1,5 +1,6 @@
 import React, {useState, useEffect, useCallback, useRef} from 'react';
-import {View, Text, StyleSheet, ScrollView, TextInput, Alert, ActivityIndicator} from 'react-native';
+import {View, Text, StyleSheet, ScrollView, TextInput, ActivityIndicator} from 'react-native';
+import {useDialog} from '../../components/AppDialog';
 import {PressableScale} from '../../components/PressableScale';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useTheme} from '../../context/ThemeContext';
@@ -47,6 +48,7 @@ function genPassword() {
 }
 
 export function AdminStaffScreen() {
+  const dialog = useDialog();
   const {colors} = useTheme();
   const [filter, setFilter] = useState<Filter>('all');
   const [users, setUsers] = useState<AdminUser[]>([]);
@@ -113,7 +115,7 @@ export function AdminStaffScreen() {
   const handleCreate = async () => {
     if (!name.trim() || !employeeId.trim() || !password.trim()) return;
     if (password.length < 8 || password.length > 64) {
-      Alert.alert('Invalid password', 'Password must be 8–64 characters.');
+      dialog.alert('Password must be 8–64 characters.', {title: 'Invalid password', tone: 'info'});
       return;
     }
     setSubmitting(true);
@@ -127,14 +129,11 @@ export function AdminStaffScreen() {
         cardCode: (role === 'doctor' || role === 'staff') && cardCode.trim() ? cardCode.trim() : undefined,
         phone: role === 'driver' && phone.trim() ? phone.trim() : undefined,
       });
-      Alert.alert(
-        'Staff Added',
-        `${name.trim()} can now sign in with:\n\nUsername: ${(created as any).username}\nPassword: ${password.trim()}\n\nShare these credentials securely — they won't be shown again here.`,
-      );
+      dialog.alert(`${name.trim()} can now sign in with:\n\nUsername: ${(created as any).username}\nPassword: ${password.trim()}\n\nShare these credentials securely — they won't be shown again here.`, {title: 'Staff Added', tone: 'info'});
       closeForm();
       loadUsers();
     } catch (err: any) {
-      Alert.alert('Could not add staff', err.message || 'Something went wrong');
+      dialog.alert(err.message || 'Something went wrong', {title: 'Could not add staff', tone: 'info'});
     } finally {
       setSubmitting(false);
     }
@@ -154,7 +153,7 @@ export function AdminStaffScreen() {
       closeForm();
       loadUsers();
     } catch (err: any) {
-      Alert.alert('Could not save changes', err.message || 'Something went wrong');
+      dialog.alert(err.message || 'Something went wrong', {title: 'Could not save changes', tone: 'info'});
     } finally {
       setSubmitting(false);
     }
@@ -163,32 +162,34 @@ export function AdminStaffScreen() {
   const handleResetPassword = () => {
     if (!editingUser) return;
     const newPassword = genPassword();
-    Alert.alert(
-      'Reset Password?',
-      `${editingUser.name}'s password will be changed to:\n\n${newPassword}\n\nShare this with them directly.`,
-      [
+    dialog.show({
+      title: 'Reset Password?',
+      message: `${editingUser.name}'s password will be changed to:\n\n${newPassword}\n\nShare this with them directly.`,
+      tone: 'warning',
+      buttons: [
         {text: 'Cancel', style: 'cancel'},
         {
           text: 'Reset',
           onPress: async () => {
             try {
               await adminApi.resetPassword(editingUser.id, newPassword);
-              Alert.alert('Password Reset', `New password: ${newPassword}`);
+              dialog.alert(`New password: ${newPassword}`, {title: 'Password Reset', tone: 'info'});
             } catch (err: any) {
-              Alert.alert('Could not reset password', err.message || 'Something went wrong');
+              dialog.alert(err.message || 'Something went wrong', {title: 'Could not reset password', tone: 'info'});
             }
           },
         },
       ],
-    );
+    });
   };
 
   const handleDelete = () => {
     if (!editingUser) return;
-    Alert.alert(
-      'Delete Account?',
-      `This permanently removes ${editingUser.name}'s login (${editingUser.username}). This can't be undone.`,
-      [
+    dialog.show({
+      title: 'Delete Account?',
+      message: `This permanently removes ${editingUser.name}'s login (${editingUser.username}). This can't be undone.`,
+      tone: 'warning',
+      buttons: [
         {text: 'Cancel', style: 'cancel'},
         {
           text: 'Delete',
@@ -199,12 +200,12 @@ export function AdminStaffScreen() {
               closeForm();
               loadUsers();
             } catch (err: any) {
-              Alert.alert('Could not delete', err.message || 'Something went wrong');
+              dialog.alert(err.message || 'Something went wrong', {title: 'Could not delete', tone: 'info'});
             }
           },
         },
       ],
-    );
+    });
   };
 
   const driverStaff = users.filter(u => u.role === 'driver');

@@ -1,30 +1,35 @@
 import React, {useState, useEffect, useRef} from 'react';
-import {View, Text, StyleSheet, ScrollView, TextInput, Animated, Alert, StatusBar} from 'react-native';
+import {View, Text, StyleSheet, ScrollView, TextInput, Animated, StatusBar} from 'react-native';
+import {useDialog} from '../../components/AppDialog';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useAuth} from '../../context/AuthContext';
+import {useMyDriverId, isMyJob} from '../../hooks/useMyDriverId';
 import {useAppState} from '../../context/AppStateContext';
 import {useTheme} from '../../context/ThemeContext';
 import {computeTrip} from '../../utils/geo';
 import {Icon, IconName} from '../../components/Icon';
 import {PressableScale} from '../../components/PressableScale';
+import {SkeletonCard} from '../../components/Skeleton';
 
 export function DriverJobsScreen() {
+  const dialog = useDialog();
   const {user} = useAuth();
   const {tasks, slots, visitors, markParked, markRetrieved, updateTask, pushNotification,
-    acceptTask, rejectTask, fetchTaskHistory,
-    acceptVisitorTask, rejectVisitorTask, markVisitorPickedUp, markVisitorParked, markVisitorRetrieved} = useAppState();
+    acceptTask, rejectTask, fetchTaskHistory, markTaskReturned,
+    acceptVisitorTask, rejectVisitorTask, markVisitorPickedUp, markVisitorParked, markVisitorRetrieved,
+    hydrated} = useAppState();
   const {colors: c, isDark} = useTheme();
 
   const [slotInput, setSlotInput] = useState('');
   const carAnim = useRef(new Animated.Value(0)).current;
 
-  const myDriverId = user?.linkedDriverId ?? user?.id;
+  const myDriverId = useMyDriverId();
   // 'delivered' means the driver's own part is already done (car dropped at
   // the valet counter) — it's just awaiting the valet's confirmation now,
   // so it shouldn't keep sitting here as this driver's "current job".
-  const myTasks = tasks.filter(t => t.driverId === myDriverId && t.status !== 'completed' && t.status !== 'delivered' && t.status !== 'cancelled');
+  const myTasks = tasks.filter(t => isMyJob(t.driverId, myDriverId) && t.status !== 'completed' && t.status !== 'delivered' && t.status !== 'cancelled');
   const activeTask = myTasks[0] ?? null;
-  const myVisitors = visitors.filter(v => v.driverId === myDriverId
+  const myVisitors = visitors.filter(v => isMyJob(v.driverId, myDriverId)
     && (v.status === 'pending' || (v.status === 'parked' && v.retrievalRequested)));
 
   // The live `tasks` array is bounded to "at most one row per doctor" now —
@@ -55,7 +60,7 @@ export function DriverJobsScreen() {
     try {
       await acceptTask(activeTask.id);
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Could not accept task');
+      dialog.alert(err.message || 'Could not accept task', {title: 'Error'});
     }
   };
 
@@ -64,7 +69,7 @@ export function DriverJobsScreen() {
     try {
       await rejectTask(activeTask.id);
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Could not reject task');
+      dialog.alert(err.message || 'Could not reject task', {title: 'Error'});
     }
   };
 
@@ -73,7 +78,7 @@ export function DriverJobsScreen() {
     try {
       await updateTask(activeTask.id, {status: 'in_transit'});
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Could not start retrieval');
+      dialog.alert(err.message || 'Could not start retrieval', {title: 'Error'});
     }
   };
 
@@ -96,8 +101,19 @@ export function DriverJobsScreen() {
       });
       setSlotInput('');
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Could not mark parked');
+      dialog.alert(err.message || 'Could not mark parked', {title: 'Error'});
       return;
+    }
+  };
+
+  // Valet pulled this park job back mid-drive — the car goes back to the
+  // counter instead of into a slot. They still have to confirm receipt.
+  const handleMarkReturned = async () => {
+    if (!activeTask) return;
+    try {
+      await markTaskReturned(activeTask.id);
+    } catch (err: any) {
+      dialog.alert(err.message || 'Could not mark returned', {title: 'Error'});
     }
   };
 
@@ -109,12 +125,12 @@ export function DriverJobsScreen() {
       // owner, and nothing else prompts the valet to confirm the handover.
       pushNotification({
         targetRole: 'valet',
-        title: '🔔 Car Delivered — Confirm Handover',
-        body: `${activeTask.carNumber} is at the valet counter. Confirm once the owner has taken it.`,
+        title: '🔔 Car at the counter',
+        body: `${activeTask.carNumber} is ready. Confirm once the owner has taken it.`,
         type: 'alarm',
       });
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Could not mark retrieved');
+      dialog.alert(err.message || 'Could not mark retrieved', {title: 'Error'});
       return;
     }
   };
@@ -123,7 +139,7 @@ export function DriverJobsScreen() {
     try {
       await acceptVisitorTask(visitorId);
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Could not accept task');
+      dialog.alert(err.message || 'Could not accept task', {title: 'Error'});
     }
   };
 
@@ -131,7 +147,7 @@ export function DriverJobsScreen() {
     try {
       await rejectVisitorTask(visitorId);
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Could not reject task');
+      dialog.alert(err.message || 'Could not reject task', {title: 'Error'});
     }
   };
 
@@ -139,7 +155,7 @@ export function DriverJobsScreen() {
     try {
       await markVisitorPickedUp(visitorId);
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Could not mark picked up');
+      dialog.alert(err.message || 'Could not mark picked up', {title: 'Error'});
     }
   };
 
@@ -147,7 +163,7 @@ export function DriverJobsScreen() {
     try {
       await markVisitorParked(visitorId);
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Could not mark parked');
+      dialog.alert(err.message || 'Could not mark parked', {title: 'Error'});
     }
   };
 
@@ -156,12 +172,12 @@ export function DriverJobsScreen() {
       await markVisitorRetrieved(visitorId);
       pushNotification({
         targetRole: 'valet',
-        title: '🔔 Car Delivered — Confirm Handover',
-        body: `Delivered by ${user?.name} — confirm once the visitor has taken it.`,
+        title: '🔔 Car at the counter',
+        body: `Brought back by ${user?.name}. Confirm once the visitor has taken it.`,
         type: 'alarm',
       });
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Could not mark retrieved');
+      dialog.alert(err.message || 'Could not mark retrieved', {title: 'Error'});
     }
   };
 
@@ -169,7 +185,7 @@ export function DriverJobsScreen() {
 
   const statusMeta: Record<string, {label: string; color: string; bg: string; icon: IconName}> = {
     assigned:      {label: activeTask?.type === 'retrieve' ? 'Go to parking slot' : 'Go to valet counter', color: c.warning, bg: c.warningLight, icon: 'bellAlert'},
-    key_collected: {label: 'Key in hand — driving', color: c.primary, bg: c.cardAlt, icon: 'carKey'},
+    key_collected: {label: 'Driving to park', color: c.primary, bg: c.cardAlt, icon: 'carKey'},
     in_transit:    {label: 'In transit', color: c.primary, bg: c.cardAlt, icon: 'navigate'},
     completed:     {label: 'Done', color: c.success, bg: c.successLight, icon: 'check'},
   };
@@ -194,7 +210,9 @@ export function DriverJobsScreen() {
         </View>
 
         {/* Active task */}
-        {activeTask ? (
+        {!hydrated ? (
+          <SkeletonCard lines={3} style={{marginBottom: 20}} />
+        ) : activeTask ? (
           <View style={[s.activeCard, {backgroundColor: c.surface, borderColor: c.border}]}>
             <View style={[s.taskBanner, {backgroundColor: c.primary}]}>
               <Icon name={activeTask.type === 'park' ? 'arrowDown' : 'arrowUp'} size={16} color={c.textOnPrimary} />
@@ -282,7 +300,29 @@ export function DriverJobsScreen() {
                 </View>
               )}
 
-              {activeTask.type === 'park' && (activeTask.status === 'key_collected' || activeTask.status === 'in_transit') && (
+              {/* Recalled: the valet wants this car back, not parked. The
+                  slot picker below is deliberately replaced entirely — an
+                  attempt to park it would be rejected server-side anyway. */}
+              {activeTask.type === 'park' && !!activeTask.recalledAt
+                && (activeTask.status === 'key_collected' || activeTask.status === 'in_transit') && (
+                <View style={{gap: 10}}>
+                  <View style={[s.statusRow, {backgroundColor: c.warningLight}]}>
+                    <Icon name="bellAlert" size={16} color={c.warning} />
+                    <Text style={[s.statusLabel, {color: c.warning}]}>
+                      Do not park — return this car to the valet counter
+                    </Text>
+                  </View>
+                  <PressableScale
+                    style={[s.retrieveBtn, {backgroundColor: c.primary}]}
+                    onPress={handleMarkReturned}
+                  >
+                    <Icon name="check" size={16} color={c.textOnPrimary} />
+                    <Text style={[s.retrieveBtnTxt, {color: c.textOnPrimary}]}>Returned to counter</Text>
+                  </PressableScale>
+                </View>
+              )}
+
+              {activeTask.type === 'park' && !activeTask.recalledAt && (activeTask.status === 'key_collected' || activeTask.status === 'in_transit') && (
                 <View style={s.parkAction}>
                   <View style={s.slotInputRow}>
                     <View style={[s.slotInput, {borderColor: c.border, backgroundColor: c.background}]}>
@@ -341,7 +381,7 @@ export function DriverJobsScreen() {
                   onPress={handleMarkRetrieved}
                 >
                   <Icon name="check" size={16} color={c.textOnPrimary} />
-                  <Text style={[s.retrieveBtnTxt, {color: c.textOnPrimary}]}>Car delivered to valet counter</Text>
+                  <Text style={[s.retrieveBtnTxt, {color: c.textOnPrimary}]}>Delivered to counter</Text>
                 </PressableScale>
               )}
             </View>
@@ -403,10 +443,10 @@ export function DriverJobsScreen() {
                   <PressableScale style={[s.retrieveBtn, {backgroundColor: c.primary, marginTop: 10}]}
                     onPress={() => handleMarkVisitorRetrieved(v.id)}>
                     <Icon name="check" size={16} color={c.textOnPrimary} />
-                    <Text style={[s.retrieveBtnTxt, {color: c.textOnPrimary}]}>Car delivered to valet counter</Text>
+                    <Text style={[s.retrieveBtnTxt, {color: c.textOnPrimary}]}>Delivered to counter</Text>
                   </PressableScale>
                 ) : (
-                  <Text style={[s.completedMeta, {color: c.textSecondary, marginTop: 6}]}>Parked at {v.slotId} — waiting for retrieval request</Text>
+                  <Text style={[s.completedMeta, {color: c.textSecondary, marginTop: 6}]}>Parked at {v.slotId} · awaiting pickup request</Text>
                 )}
               </View>
             ))}

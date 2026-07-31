@@ -21,6 +21,8 @@ const STATUS_LABEL: Record<string, string> = {
   key_collected: 'Driver has key',
   assigned: 'Assigned',
   requested: 'Requested',
+  // A valet has taken the departure but hasn't dispatched a driver yet.
+  accepted: 'Valet assigned',
 };
 
 export function DoctorHistoryScreen() {

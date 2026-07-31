@@ -10,7 +10,7 @@ import {useAuth} from './AuthContext';
 
 export type DriverStatus = 'available' | 'busy' | 'off';
 export type TaskType = 'park' | 'retrieve';
-export type TaskStatus = 'requested' | 'assigned' | 'key_collected' | 'in_transit' | 'delivered' | 'completed' | 'cancelled';
+export type TaskStatus = 'requested' | 'accepted' | 'assigned' | 'key_collected' | 'in_transit' | 'delivered' | 'completed' | 'cancelled';
 export type SlotStatus = 'free' | 'occupied' | 'reserved';
 
 export interface Driver {
@@ -39,9 +39,42 @@ export interface ParkingTask {
   requestedAt?: number;
   assignedAt?: number;
   acceptedAt?: number; // driver's explicit accept — see accept watchdog flow
+  // When the driver actually set off. The trip clock anchors here; the
+  // doctor's deadline anchors to requestedAt. See utils/retrievalClocks.
+  startedAt?: number;
+  // The valet who owns this job — only they are alarmed when it needs
+  // attention, instead of every valet on shift (see jobAlerts.js).
+  valetId?: number;
+  valetName?: string;
+  // Set once a stalled job has escalated past its owner to the whole team.
+  escalatedAt?: number;
+
+  // ── Parking session ownership ──────────────────────────────────────
+  // The valet who accepted this doctor's arrival. Written once and never
+  // overwritten, so it stays true even if someone else recovers the
+  // departure — it's history, not routing.
+  arrivalOwnerValetId?: number;
+  arrivalOwnerValetName?: string;
+  arrivalAcceptedAt?: number;
+  // Whoever is actually running the departure leg. Same person as the
+  // arrival owner in the normal case.
+  retrievalOwnerValetId?: number;
+  retrievalOwnerValetName?: string;
+  retrievalAcceptedAt?: number;
+  retrievalOwnershipSource?: 'OWNER' | 'RECOVERY';
+  ownerNotifiedAt?: number;
+  // Set when the owner's response window lapsed and the request was
+  // released to every valet — this is what makes the "Original owner
+  // unavailable" card appear.
+  recoveryBroadcastAt?: number;
+  // Valet aborted this park job after the key was handed over: the driver
+  // brings the car back to the counter instead of parking it.
+  recalledAt?: number;
   keyCollectedAt?: number;
   completedAt?: number;
-  eta?: number; // minutes
+  // The doctor's planned departure in minutes (0 = now). Valet-side
+  // planning information only — never rendered to the doctor as an ETA.
+  plannedDepartureMinutes?: number;
   trackingProgress?: number; // 0-1
   driverLat?: number;
   driverLng?: number;
@@ -73,6 +106,8 @@ export interface Visitor {
   driverName?: string;
   status: 'parked' | 'pending' | 'delivered' | 'retrieved' | 'cancelled';
   retrievalRequested: boolean;
+  valetId?: number;
+  escalatedAt?: number;
   // Assignment/accept handshake — see backend visitor.service.js. Both
   // clear again if the driver rejects or the 60s accept timeout fires.
   driverAssignedAt?: number;
@@ -107,6 +142,11 @@ export interface ArrivalNotice {
   doctorDepartment?: string;
   doctorEmployeeId?: string;
   eta: number;
+  // Null/undefined while still broadcast to every valet. Once set, this
+  // arrival belongs to that valet and drops off everyone else's list.
+  ownerValetId?: number;
+  ownerValetName?: string;
+  arrivalAcceptedAt?: number;
   createdAt: number;
 }
 
@@ -149,6 +189,15 @@ interface AppState {
   visitors: Visitor[];
   arrivalNotices: ArrivalNotice[];
   notifications: Notification[];
+  /**
+   * False until the first full fetch has resolved. Distinguishes "still
+   * loading" from "loaded and genuinely empty" — without it every screen
+   * rendered its confident empty state during startup, and any ACTION
+   * offered in that state (the doctor's Arrival card) could be taken
+   * against data that hadn't arrived yet, writing a real record and
+   * alarming a valet for a car that was already parked.
+   */
+  hydrated: boolean;
   driverLocations: Record<number, DriverLocation>;
   onlineDriverIds: number[];
   reassignPrompt: ReassignPrompt | null;
@@ -156,10 +205,13 @@ interface AppState {
 
   // Actions — all backed by the API now, so all return Promises.
   addTask: (task: Omit<ParkingTask, 'id'>) => Promise<number>;
-  requestRetrieval: (eta: number) => Promise<number>;
+  /** plannedDepartureMinutes: 0 | 10 | 20 | 30 | 40 — not an ETA. */
+  requestRetrieval: (plannedDepartureMinutes: number) => Promise<number>;
   // Doctor/staff: "I'm on my way" — before any car/key exists yet, so this
   // has no task id to hand back, just fires the valet-facing notice + push.
   sendArrivalNotice: (eta: number) => Promise<void>;
+  acceptArrivalNotice: (id: number) => Promise<void>;
+  acceptRetrieval: (taskId: number) => Promise<void>;
   // Valet: manually clear a no-show/mistaken arrival notice.
   dismissArrivalNotice: (id: number) => Promise<void>;
   updateTask: (id: number, patch: Partial<ParkingTask>) => Promise<void>;
@@ -171,6 +223,10 @@ interface AppState {
   markRetrieved: (taskId: number) => Promise<void>;
   confirmTaskDelivered: (taskId: number) => Promise<void>;
   cancelTask: (taskId: number) => Promise<void>;
+  // Valet: abort a park job already in the driver's hands — "bring it back".
+  recallTask: (taskId: number) => Promise<void>;
+  // Driver: confirm a recalled car is back at the valet counter.
+  markTaskReturned: (taskId: number) => Promise<void>;
   fetchTaskHistory: (params?: {doctorId?: number; driverId?: number}) => Promise<ParkingTask[]>;
   reportLocation: (taskId: number, lat: number, lng: number) => Promise<void>;
   setDriverStatus: (driverId: number, status: DriverStatus) => Promise<void>;
@@ -207,9 +263,22 @@ function toEpoch(v: unknown): number | undefined {
 function mapTask(t: any): ParkingTask {
   return {
     ...t,
+    // Accept the legacy `eta` key as well. The rollout isn't atomic — a
+    // running server may still be serializing the old field name while a
+    // freshly built app reads the new one, which rendered "Leaving in
+    // undefined min" on the valet's inbox. Compatibility has to work in
+    // BOTH directions, not just old-app -> new-backend.
+    plannedDepartureMinutes: t.plannedDepartureMinutes ?? t.eta ?? undefined,
     requestedAt: toEpoch(t.requestedAt),
     assignedAt: toEpoch(t.assignedAt),
     acceptedAt: toEpoch(t.acceptedAt),
+    startedAt: toEpoch(t.startedAt),
+    escalatedAt: toEpoch(t.escalatedAt),
+    arrivalAcceptedAt: toEpoch(t.arrivalAcceptedAt),
+    retrievalAcceptedAt: toEpoch(t.retrievalAcceptedAt),
+    ownerNotifiedAt: toEpoch(t.ownerNotifiedAt),
+    recoveryBroadcastAt: toEpoch(t.recoveryBroadcastAt),
+    recalledAt: toEpoch(t.recalledAt),
     keyCollectedAt: toEpoch(t.keyCollectedAt),
     completedAt: toEpoch(t.completedAt),
     locationUpdatedAt: toEpoch(t.locationUpdatedAt),
@@ -251,6 +320,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
   const [visitors, setVisitors]       = useState<Visitor[]>([]);
   const [arrivalNotices, setArrivals] = useState<ArrivalNotice[]>([]);
   const [notifications, setNotifs]    = useState<Notification[]>([]);
+  const [hydrated, setHydrated]       = useState(false);
   const [driverLocations, setDriverLocations] = useState<Record<number, DriverLocation>>({});
   const [onlineDriverIds, setOnlineDriverIds] = useState<number[]>([]);
   const [reassignPrompt, setReassignPrompt]   = useState<ReassignPrompt | null>(null);
@@ -282,6 +352,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     if (d) setDrivers(d);
     if (v) setVisitors(v.map(mapVisitor));
     if (a) setArrivals(a.map(mapArrival));
+    setHydrated(true);
   }, [needsOpsData, needsVisitors]);
 
   // Some socket handlers need the current user without re-subscribing the
@@ -289,6 +360,9 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
   const userRef = useRef(user);
   userRef.current = user;
 
+  // When a reassign dialog was last raised — see the notification:new
+  // handler for why the companion alarm is suppressed right after.
+  const reassignShownAt = useRef(0);
   const clearReassignPrompt = useCallback(() => setReassignPrompt(null), []);
 
   // ── True-WebSocket sync ─────────────────────────────────────────────────
@@ -300,6 +374,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
   useEffect(() => {
     if (!user) {
       setDrivers([]); setTasks([]); setSlots([]); setVisitors([]); setNotifs([]); setArrivals([]);
+      setHydrated(false);
       setDriverLocations({}); setOnlineDriverIds([]); setReassignPrompt(null);
       disconnectSocket();
       return;
@@ -314,6 +389,13 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     socket.on('task:upsert', (raw: any) => {
       const task = mapTask(raw);
       setTasks(p => upsertById(p, task));
+      // Someone (possibly another valet) just staffed this job — close any
+      // open "needs a driver" prompt for it rather than leaving a dialog on
+      // screen inviting a second, conflicting assignment.
+      if (task.driverId) {
+        setReassignPrompt(prev =>
+          prev?.kind === 'task' && prev.task?.id === task.id ? null : prev);
+      }
       // My assignment just resolved (accepted elsewhere / reassigned /
       // moved on) — stop a still-ringing alarm.
       const me = userRef.current;
@@ -325,7 +407,12 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     });
 
     socket.on('visitor:upsert', (raw: any) => {
-      setVisitors(p => upsertById(p, mapVisitor(raw)));
+      const visitor = mapVisitor(raw);
+      setVisitors(p => upsertById(p, visitor));
+      if (visitor.driverId) {
+        setReassignPrompt(prev =>
+          prev?.kind === 'visitor' && prev.visitor?.id === visitor.id ? null : prev);
+      }
     });
 
     socket.on('slot:patch', (slot: ParkingSlot) => {
@@ -349,6 +436,14 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
         n.targetRole === `driver:${me?.linkedDriverId}` ||
         n.targetRole === 'all';
       if (!isForMe) return;
+      // A reassign alert arrives twice: once as `task:needs-reassign` (the
+      // in-app dialog, which is actionable) and once as this notification
+      // (which rings the alarm). The push has to keep existing — it's the
+      // only thing that reaches a valet whose app is closed — but when the
+      // dialog is already on screen the ring is the same message a second
+      // time. They land within milliseconds of each other, so a short window
+      // is enough to tell "companion of the dialog" from "genuinely new".
+      if (Date.now() - reassignShownAt.current < 4000) return;
       // Alarm-grade notifications (driver assignment, valet reassign
       // warning) ring loud: native alarm-channel notification + vibration
       // loop. Everything else is a normal tray notification.
@@ -381,6 +476,20 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
       setDriverLocations(p => ({...p, [loc.driverId]: loc}));
     });
 
+    // A retrieval just became someone's alone. Anyone who isn't that valet
+    // drops it — otherwise a card they were shown during a recovery
+    // broadcast stays on screen with a button that can only 409.
+    socket.on('task:restrict', ({id, ownerValetId}: {id: number; ownerValetId: number}) => {
+      if (user?.role !== 'valet' || user.id === ownerValetId) return;
+      setTasks(p => p.filter(t => t.id !== id));
+    });
+
+    // The owner didn't respond in time — this request is now open to
+    // everyone, and arrives with the reason to show on the card.
+    socket.on('task:recovery', ({task}: any) => {
+      setTasks(p => upsertById(p, mapTask(task)));
+    });
+
     socket.on('arrival:upsert', (raw: any) => {
       setArrivals(p => upsertById(p, mapArrival(raw)));
     });
@@ -389,11 +498,27 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     });
 
     // ── accept-timeout / reject prompts (valet + admin rooms only) ──
+    // One prompt per job, ever, while it's open. The same job legitimately
+    // raises this event more than once — first to its owner alone, then to
+    // the whole team when it escalates — and the owner is a valet, so they
+    // receive both. Without this the second one replaced the first (firing
+    // the dialog again) and, because dialogs queue rather than drop, they
+    // stacked up one behind another the longer nobody acted.
     socket.on('task:needs-reassign', ({task, driverName, rejected}: any) => {
-      setReassignPrompt({kind: 'task', task: mapTask(task), driverName, rejected});
+      const mapped = mapTask(task);
+      setReassignPrompt(prev => {
+        if (prev?.kind === 'task' && prev.task?.id === mapped.id) return prev;
+        reassignShownAt.current = Date.now();
+        return {kind: 'task', task: mapped, driverName, rejected};
+      });
     });
     socket.on('visitor:needs-reassign', ({visitor, driverName, rejected}: any) => {
-      setReassignPrompt({kind: 'visitor', visitor: mapVisitor(visitor), driverName, rejected});
+      const mapped = mapVisitor(visitor);
+      setReassignPrompt(prev => {
+        if (prev?.kind === 'visitor' && prev.visitor?.id === mapped.id) return prev;
+        reassignShownAt.current = Date.now();
+        return {kind: 'visitor', visitor: mapped, driverName, rejected};
+      });
     });
 
     // FCM device registration + foreground push handling (no-op until
@@ -418,6 +543,20 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     };
   }, [user?.id, fetchAll]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // A reassign prompt says "this job needs a driver". Derived state, not a
+  // one-shot event: the instant the job actually has one — whoever assigned
+  // it, and whether or not we saw the socket event that did it — the prompt
+  // is describing something untrue and must go. Relying on catching
+  // task:upsert alone left it on screen across a backgrounded app or a
+  // dropped socket, which is precisely when another valet steps in.
+  useEffect(() => {
+    if (!reassignPrompt) return;
+    const stillNeedsDriver = reassignPrompt.kind === 'task'
+      ? tasks.some(t => t.id === reassignPrompt.task?.id && !t.driverId)
+      : visitors.some(v => v.id === reassignPrompt.visitor?.id && !v.driverId);
+    if (!stillNeedsDriver) setReassignPrompt(null);
+  }, [reassignPrompt, tasks, visitors]);
+
   // Sweep stale GPS markers (socket still open but no pings — e.g. GPS off).
   useEffect(() => {
     const sweep = setInterval(() => {
@@ -441,9 +580,13 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
   // drivers; during an active trip the same fix additionally goes through
   // the REST location endpoint, which persists it on the task and emits the
   // task:upsert delta that live-tracking screens render.
-  const myDriverId = user?.linkedDriverId ?? user?.id;
-  const activeDriverTask = user?.role === 'driver'
-    ? tasks.find(t => t.driverId === myDriverId && (t.status === 'key_collected' || t.status === 'in_transit'))
+  // linkedDriverId only — never fall back to user.id (different sequence),
+  // and never match on undefined (an unassigned task serialises driverId as
+  // undefined, so `undefined === undefined` claimed every unclaimed job).
+  const myDriverId = user?.role === 'driver' ? user.linkedDriverId ?? null : null;
+  const activeDriverTask = myDriverId != null
+    ? tasks.find(t => t.driverId != null && t.driverId === myDriverId
+        && (t.status === 'key_collected' || t.status === 'in_transit'))
     : undefined;
   const activeDriverTaskId = activeDriverTask?.id;
   const activeDriverTaskIdRef = useRef(activeDriverTaskId);
@@ -523,13 +666,13 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
   // tap the button (see "CAR READY AT ENTRANCE — please collect at the
   // gate"), and capturing live GPS here was exactly as fragile as an
   // emulator's default location was for parking.
-  const requestRetrieval = useCallback(async (eta: number) => {
-    const created = mapTask(await tasksApi.requestRetrieval({eta}));
+  const requestRetrieval = useCallback(async (plannedDepartureMinutes: number) => {
+    const created = mapTask(await tasksApi.requestRetrieval({plannedDepartureMinutes}));
     setTasks(p => [created, ...p]);
     await pushNotification({
       targetRole: 'valet',
       title: `🚗 Retrieval Requested — ${created.doctorName ?? ''}`,
-      body: `Leaving in ${eta} min. Please assign a driver to bring ${created.carNumber} from ${created.slotId ?? 'its slot'}.`,
+      body: `${plannedDepartureMinutes === 0 ? 'Leaving now' : `Leaving in ${plannedDepartureMinutes} min`}. Assign a driver to bring ${created.carNumber} from ${created.slotId ?? 'its slot'}.`,
       type: 'alarm',
     }).catch(() => {});
     return created.id;
@@ -564,6 +707,21 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     // own dedicated endpoint (assign/key-collected/park/retrieve) below.
   }, []);
 
+  // Valet: "Accept" on a broadcast arrival. Whoever the backend lets through
+  // owns the session; everyone else's call throws and their card refreshes to
+  // show it's gone.
+  const acceptArrivalNotice = useCallback(async (id: number) => {
+    const updated = mapArrival(await arrivalsApi.accept(id));
+    setArrivals(p => p.map(a => (a.id === id ? updated : a)));
+  }, []);
+
+  // Valet: "Accept Retrieval".
+  const acceptRetrieval = useCallback(async (taskId: number) => {
+    await stopAssignmentAlarm().catch(() => {});
+    const updated = mapTask(await tasksApi.acceptRetrieval(taskId));
+    setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
+  }, []);
+
   const assignDriver = useCallback(async (taskId: number, driverId: number) => {
     await stopAssignmentAlarm().catch(() => {});
     // Only a retrieval needs a destination at all — that's the valet's own
@@ -590,7 +748,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     await stopAssignmentAlarm().catch(() => {});
     const updated = mapTask(await tasksApi.reject(taskId));
     setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
-    if (myDriverId) setDrivers(p => p.map(d => (d.id === myDriverId ? {...d, status: 'available', currentTaskId: undefined} : d)));
+    if (myDriverId != null) setDrivers(p => p.map(d => (d.id === myDriverId ? {...d, status: 'available', currentTaskId: undefined} : d)));
   }, [myDriverId]);
 
   const markKeyCollected = useCallback(async (taskId: number) => {
@@ -641,6 +799,20 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
   const cancelTask = useCallback(async (taskId: number) => {
     await stopAssignmentAlarm().catch(() => {});
     const updated = mapTask(await tasksApi.cancel(taskId));
+    setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
+  }, []);
+
+  // Past the key handover a plain cancel isn't allowed (a real car is in a
+  // driver's hands) — this recalls it instead: the driver is told to bring
+  // it back, and the valet confirms receipt to close it out.
+  const recallTask = useCallback(async (taskId: number) => {
+    const updated = mapTask(await tasksApi.recall(taskId));
+    setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
+  }, []);
+
+  const markTaskReturned = useCallback(async (taskId: number) => {
+    await stopAssignmentAlarm().catch(() => {});
+    const updated = mapTask(await tasksApi.markReturned(taskId));
     setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
   }, []);
 
@@ -760,9 +932,9 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
 
   return (
     <Ctx.Provider value={{
-      drivers, tasks, slots, visitors, arrivalNotices, notifications,
+      drivers, tasks, slots, visitors, arrivalNotices, notifications, hydrated,
       driverLocations, onlineDriverIds, reassignPrompt, clearReassignPrompt,
-      addTask, requestRetrieval, sendArrivalNotice, dismissArrivalNotice, updateTask, assignDriver, acceptTask, rejectTask, markKeyCollected, markParked, markRetrieved, confirmTaskDelivered, cancelTask, fetchTaskHistory, reportLocation,
+      addTask, requestRetrieval, sendArrivalNotice, acceptArrivalNotice, acceptRetrieval, dismissArrivalNotice, updateTask, assignDriver, acceptTask, rejectTask, markKeyCollected, markParked, markRetrieved, confirmTaskDelivered, cancelTask, recallTask, markTaskReturned, fetchTaskHistory, reportLocation,
       setDriverStatus, addVisitor,
       assignVisitorDriver, acceptVisitorTask, rejectVisitorTask, cancelVisitor,
       markVisitorPickedUp, markVisitorParked, assignRetrievalDriver, markVisitorRetrieved, confirmVisitorDelivered,

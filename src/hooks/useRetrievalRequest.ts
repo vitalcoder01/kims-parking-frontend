@@ -2,11 +2,12 @@ import {useEffect, useState} from 'react';
 import {useAuth} from '../context/AuthContext';
 import {useAppState} from '../context/AppStateContext';
 
-// Shared by DoctorHomeScreen and ParkingScreen so both read the exact same
-// real, backend-tracked retrieval state (and the same countdown) instead of
-// each keeping its own local, unpersisted "I picked a time" flag — that
-// duplication was why the timer looked like it "disappeared" depending on
-// which tab you were on.
+
+// Reads the real, backend-tracked retrieval state (and its countdown)
+// rather than a local, unpersisted "I picked a time" flag. Originally shared
+// with a separate "My Parking" tab; that tab duplicated the Home screen and
+// was removed, but keeping this here means the countdown stays a single
+// source of truth if another surface ever needs it.
 export function useRetrievalRequest() {
   const {user} = useAuth();
   const {tasks, requestRetrieval} = useAppState();
@@ -21,9 +22,8 @@ export function useRetrievalRequest() {
     return () => clearInterval(iv);
   }, [activeRetrieve?.id]);
 
-  const remainingSeconds = activeRetrieve?.requestedAt != null && activeRetrieve?.eta != null
-    ? Math.max(0, Math.round((activeRetrieve.requestedAt + activeRetrieve.eta * 60000 - now) / 1000))
-    : null;
-
-  return {activeRetrieve, remainingSeconds, requestRetrieval};
+  // `now` ticks so callers can derive real elapsed time. There is no
+  // deadline clock any more — the doctor's planned departure is never
+  // rendered back to them as an estimate (see utils/retrievalClocks).
+  return {activeRetrieve, now, requestRetrieval};
 }
