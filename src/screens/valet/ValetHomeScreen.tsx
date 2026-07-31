@@ -17,6 +17,7 @@ import {useAppState} from '../../context/AppStateContext';
 import {SkeletonCard} from '../../components/Skeleton';
 import {
   plannedDepartureLabel, departurePriority, minutesUntilDeparture, departureClockLabel,
+  isScheduled, startsInLabel,
   enRouteSeconds, agoLabel, fmtDuration,
 } from '../../utils/retrievalClocks';
 
@@ -781,25 +782,37 @@ export function ValetHomeScreen() {
                 // NOW first, then 10/20/30/40; oldest request first within a
                 // band so nobody is overtaken by a later request at the same
                 // urgency.
+                // Actionable work first, scheduled rows beneath it. Within
+                // each group, soonest departure first. Sorting purely by
+                // departure would float a request booked for 3pm above one
+                // that needs a driver right now.
                 .sort((a, b) =>
-                  departurePriority(a.requestedAt, a.plannedDepartureMinutes, now) - departurePriority(b.requestedAt, b.plannedDepartureMinutes, now)
+                  Number(isScheduled(a.retrievalReadyAt, now)) - Number(isScheduled(b.retrievalReadyAt, now))
+                  || departurePriority(a.requestedAt, a.plannedDepartureMinutes, now) - departurePriority(b.requestedAt, b.plannedDepartureMinutes, now)
                   || (a.requestedAt ?? 0) - (b.requestedAt ?? 0))
                 .map(t => {
             // Everything on this card is driven by time LEFT, recomputed each
             // second, so a card genuinely heats up as its deadline approaches
             // instead of being frozen at whatever the doctor first picked.
+            // Booked for later: this row is informational until its lead
+            // time. The server refuses the actions too (NOT_READY), so hiding
+            // them is about not offering a button that can only fail.
+            const scheduled = isScheduled(t.retrievalReadyAt, now);
             const left = minutesUntilDeparture(t.requestedAt, t.plannedDepartureMinutes, now);
-            const tone = departureTone(left, colors);
+            const tone = scheduled ? colors.textMuted : departureTone(left, colors);
             // The card itself carries the colour, graded by urgency: due is a
             // clearly washed card, hours away is barely tinted. Sorted top to
             // bottom, the inbox reads as a fade from hot to cool — which
             // conveys priority without every card shouting equally.
-            const wash = left == null ? '00' : left <= 0 ? '1C' : left <= 10 ? '14' : left <= 20 ? '0E' : left <= 30 ? '0A' : '08';
-            const edge = left == null ? null : left <= 0 ? '66' : left <= 10 ? '4D' : left <= 20 ? '3A' : '26';
+            // A scheduled row stays flat: the urgency wash is about what needs
+            // doing NOW, and something that cannot be acted on yet must not
+            // compete with something that can.
+            const wash = scheduled || left == null ? '00' : left <= 0 ? '1C' : left <= 10 ? '14' : left <= 20 ? '0E' : left <= 30 ? '0A' : '08';
+            const edge = scheduled || left == null ? null : left <= 0 ? '66' : left <= 10 ? '4D' : left <= 20 ? '3A' : '26';
             return (
             <View key={t.id} style={[
               s.taskCard,
-              {backgroundColor: left == null ? colors.surface : tone + wash,
+              {backgroundColor: scheduled || left == null ? colors.surface : tone + wash,
                borderColor: edge ? tone + edge : colors.border},
             ]}>
               <View style={s.jobHead}>
@@ -812,7 +825,9 @@ export function ValetHomeScreen() {
                 </View>
                 {/* Planned departure only — NOT a delivery ETA. */}
                 <View style={[s.departureBadge, {backgroundColor: tone}]}>
-                  <Text style={s.departureBadgeTxt}>{plannedDepartureLabel(t.requestedAt, t.plannedDepartureMinutes, now)}</Text>
+                  <Text style={s.departureBadgeTxt}>
+                    {scheduled ? 'SCHEDULED' : plannedDepartureLabel(t.requestedAt, t.plannedDepartureMinutes, now)}
+                  </Text>
                 </View>
               </View>
 
@@ -828,16 +843,20 @@ export function ValetHomeScreen() {
                   ? 'Departure time not given'
                   : left <= 0
                   ? 'Leaving now'
-                  : `Leaving at ${departureClockLabel(t.requestedAt, t.plannedDepartureMinutes)}`}
+                  : `Leaves at ${departureClockLabel(t.requestedAt, t.plannedDepartureMinutes, t.plannedDepartureAt)}`}
               </Text>
-              {!!t.requestedAt && (
+              {scheduled ? (
+                <Text style={[s.jobSlot, {color: colors.textSecondary}]}>
+                  {startsInLabel(t.retrievalReadyAt, now)}
+                </Text>
+              ) : !!t.requestedAt && (
                 <Text style={[s.jobSlot, {color: colors.textMuted}]}>Requested {agoLabel(t.requestedAt, now)}</Text>
               )}
 
               {/* Why this is on a non-owner's screen at all. Without the
                   reason it just looks like a request that was routed
                   strangely. */}
-              {t.recoveryBroadcastAt != null && t.arrivalOwnerValetId !== myValetId && (
+              {!scheduled && t.recoveryBroadcastAt != null && t.arrivalOwnerValetId !== myValetId && (
                 <View style={s.taskMetaRow}>
                   <Icon name="bellAlert" size={12} color={colors.warning} />
                   <Text style={[s.taskMeta, {color: colors.warning}]}>Original owner unavailable</Text>
@@ -846,12 +865,15 @@ export function ValetHomeScreen() {
 
               {/* One button, one label, whether or not this is already ours —
                   a label that depends on ownership is exactly what flickered
-                  when ownership changed underneath it mid-tap. */}
-              <PressableScale style={[s.taskActionBtn, s.jobActions, {borderColor: 'transparent', backgroundColor: colors.primary}]}
-                onPress={() => handleAssignDriverTo(t)}>
-                <Icon name="people" size={13} color={colors.textOnPrimary} />
-                <Text style={[s.taskActionTxt, {color: colors.textOnPrimary}]}>Assign driver</Text>
-              </PressableScale>
+                  when ownership changed underneath it mid-tap. Absent entirely
+                  while scheduled: the row is a heads-up, not work. */}
+              {!scheduled && (
+                <PressableScale style={[s.taskActionBtn, s.jobActions, {borderColor: 'transparent', backgroundColor: colors.primary}]}
+                  onPress={() => handleAssignDriverTo(t)}>
+                  <Icon name="people" size={13} color={colors.textOnPrimary} />
+                  <Text style={[s.taskActionTxt, {color: colors.textOnPrimary}]}>Assign driver</Text>
+                </PressableScale>
+              )}
             </View>
             );
           })}

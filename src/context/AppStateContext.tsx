@@ -79,6 +79,11 @@ export interface ParkingTask {
   // The doctor's planned departure in minutes (0 = now). Valet-side
   // planning information only — never rendered to the doctor as an ETA.
   plannedDepartureMinutes?: number;
+  // Absolute departure time, and when the request becomes actionable
+  // (departure minus the configured lead time). Before readyAt the request is
+  // SCHEDULED: informational only, no actions.
+  plannedDepartureAt?: number;
+  retrievalReadyAt?: number;
   trackingProgress?: number; // 0-1
   driverLat?: number;
   driverLng?: number;
@@ -280,6 +285,8 @@ function mapTask(t: any): ParkingTask {
     acceptedAt: toEpoch(t.acceptedAt),
     startedAt: toEpoch(t.startedAt),
     escalatedAt: toEpoch(t.escalatedAt),
+    plannedDepartureAt: toEpoch(t.plannedDepartureAt),
+    retrievalReadyAt: toEpoch(t.retrievalReadyAt),
     arrivalAcceptedAt: toEpoch(t.arrivalAcceptedAt),
     retrievalAcceptedAt: toEpoch(t.retrievalAcceptedAt),
     ownerNotifiedAt: toEpoch(t.ownerNotifiedAt),

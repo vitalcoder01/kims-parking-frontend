@@ -600,8 +600,12 @@ export function DoctorHomeScreen() {
                           borderColor: on ? colors.textPrimary : colors.border,
                         },
                       ]}>
-                      <Text style={[s.etaBtnNum, {color: on ? colors.background : colors.textPrimary}]}>{opt}</Text>
-                      <Text style={[s.etaBtnSub, {color: on ? colors.background + 'AA' : colors.textMuted}]}>min</Text>
+                      <Text style={[s.etaBtnNum, {color: on ? colors.background : colors.textPrimary}]}>
+                        {opt === 0 ? 'Now' : opt}
+                      </Text>
+                      {opt !== 0 && (
+                        <Text style={[s.etaBtnSub, {color: on ? colors.background + 'AA' : colors.textMuted}]}>min</Text>
+                      )}
                     </PressableScale>
                   );
                 })}
