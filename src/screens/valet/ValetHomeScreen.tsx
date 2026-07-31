@@ -38,6 +38,7 @@ type Screen = 'home' | 'scan' | 'assign' | 'visitor' | 'retrievals';
 
 type InboxTab = 'all' | 'now' | 'soon' | 'later';
 type QueueTab = 'mine' | 'team';
+type InboxSection = 'retrievals' | 'arrivals';
 const INBOX_TABS: {key: InboxTab; label: string}[] = [
   {key: 'all',   label: 'All'},
   {key: 'now',   label: 'Now'},
@@ -107,6 +108,11 @@ export function ValetHomeScreen() {
   const pendingTaskIdRef = useRef<number | null>(null);
   pendingTaskIdRef.current = pendingTaskId;
   const [inboxTab, setInboxTab] = useState<InboxTab>('all');
+  // The inbox holds both kinds of incoming request. Retrievals are work;
+  // arrivals are information — separated so a flood of arrivals can never
+  // push a waiting car off the screen.
+  const [inboxSection, setInboxSection] = useState<InboxSection>('retrievals');
+  const [arrivalQuery, setArrivalQuery] = useState('');
   // Job Queue is split so a valet reads only what they're accountable for.
   // Team jobs stay reachable on the second tab because the key can be handed
   // between valets — see QUEUE_TABS.
@@ -124,6 +130,17 @@ export function ValetHomeScreen() {
   // Mine = I own it, nobody owns it, or it escalated past its owner and is
   // waiting on anyone. An escalated job deliberately lands here rather than
   // in the team tab — burying it is the exact stall escalation exists to end.
+  // Arrivals, searchable and soonest-first. Matching code / plate / name in
+  // one pass rather than three fields: whoever is at the counter gives you
+  // one of the three and the valet shouldn't have to choose which box first.
+  const arrivalQ = arrivalQuery.trim().toLowerCase();
+  const arrivalsFiltered = [...arrivalNotices]
+    .filter(a => !arrivalQ
+      || (a.doctorCardCode ?? '').toLowerCase().includes(arrivalQ)
+      || (a.doctorCarNumber ?? '').toLowerCase().includes(arrivalQ)
+      || (a.doctorName ?? '').toLowerCase().includes(arrivalQ))
+    .sort((a, b) => a.eta - b.eta);
+
   const myJobs = activeTasks.filter(t => isMyJobToRun(t, myValetId));
   const teamJobs = activeTasks.filter(t => !isMyJobToRun(t, myValetId));
   const queueJobs = queueTab === 'mine' ? myJobs : teamJobs;
@@ -660,8 +677,37 @@ export function ValetHomeScreen() {
           <PressableScale onPress={() => setScreen('home')} style={[s.circleBack, {backgroundColor: colors.surface, borderColor: colors.border}]}>
             <Icon name="back" size={18} color={colors.textPrimary} />
           </PressableScale>
-          <Text style={[s.headerTitle, {color: colors.textPrimary}]}>Retrieval Requests</Text>
+          <Text style={[s.headerTitle, {color: colors.textPrimary}]}>Inbox</Text>
         </View>
+
+        {/* Two kinds of incoming request, kept apart. The colour of each
+            count is the same language the inbox icon uses: red is a car
+            someone is waiting for, blue is only a heads-up. */}
+        <View style={[s.inboxTabs, {borderBottomColor: colors.border}]}>
+          {([
+            ['retrievals', 'Retrieval Requests', retrievalRequests.length, colors.error],
+            ['arrivals', 'Expected Arrivals', arrivalNotices.length, colors.info],
+          ] as const).map(([key, label, count, tint]) => {
+            const active = inboxSection === key;
+            return (
+              <PressableScale key={key} style={s.inboxTab} onPress={() => setInboxSection(key)}>
+                <View style={s.inboxSectionRow}>
+                  <Text style={[s.inboxTabTxt, {color: active ? colors.textPrimary : colors.textSecondary}]}>
+                    {label}
+                  </Text>
+                  {count > 0 && (
+                    <View style={[s.inboxSectionCount, {backgroundColor: tint}]}>
+                      <Text style={s.inboxSectionCountTxt}>{count > 99 ? '99+' : count}</Text>
+                    </View>
+                  )}
+                </View>
+                {active && <View style={[s.inboxTabBar, {backgroundColor: colors.textPrimary}]} />}
+              </PressableScale>
+            );
+          })}
+        </View>
+
+        {inboxSection === 'retrievals' && (<>
         {/* Counts live on the tabs so the distribution is visible without
             switching. Zero-count tabs stay in place, dimmed — hiding them
             would shift the others under the valet's thumb mid-triage. */}
@@ -769,6 +815,84 @@ export function ValetHomeScreen() {
             );
           })}
         </ScrollView>
+        </>)}
+
+        {inboxSection === 'arrivals' && (<>
+          {/* Search is what makes a flood survivable: the valet never scrolls
+              this list, they type whatever the person at the counter gives
+              them. One box matching code, plate or name — at the counter you
+              get whichever of the three they happen to say, and making them
+              pick a field first would be a decision with no information. */}
+          <View style={[s.arrivalSearchWrap, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+            <Icon name="search" size={15} color={colors.textMuted} />
+            <TextInput
+              style={[s.arrivalSearchInput, {color: colors.textPrimary}]}
+              value={arrivalQuery}
+              onChangeText={setArrivalQuery}
+              placeholder="Search code, plate or name"
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="characters"
+              autoCorrect={false}
+              returnKeyType="search"
+            />
+            {arrivalQuery.length > 0 && (
+              <PressableScale onPress={() => setArrivalQuery('')} hitSlop={10}>
+                <Icon name="close" size={15} color={colors.textMuted} />
+              </PressableScale>
+            )}
+          </View>
+
+          <ScrollView contentContainerStyle={s.subContent} keyboardShouldPersistTaps="handled">
+            {!hydrated ? (
+              <SkeletonCard lines={2} />
+            ) : arrivalNotices.length === 0 ? (
+              <View style={[s.emptyBox, {borderColor: colors.border}]}>
+                <Icon name="inbox" size={26} color={colors.textMuted} style={{marginBottom: 8}} />
+                <Text style={[s.emptyTxt, {color: colors.textMuted}]}>Nobody has announced an arrival.</Text>
+              </View>
+            ) : arrivalsFiltered.length === 0 ? (
+              <View style={[s.emptyBox, {borderColor: colors.border}]}>
+                <Icon name="search" size={26} color={colors.textMuted} style={{marginBottom: 8}} />
+                <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No arrival matches "{arrivalQuery.trim()}".</Text>
+              </View>
+            ) : arrivalsFiltered.map(a => (
+              <View key={a.id} style={[s.taskCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+                <View style={s.taskTop}>
+                  <View style={[s.typePill, {backgroundColor: colors.info + '15'}]}>
+                    <Icon name="bellAlert" size={11} color={colors.info} />
+                    <Text style={[s.typePillTxt, {color: colors.info}]}>ARRIVING</Text>
+                  </View>
+                  <Text style={[s.taskStatusTxt, {color: colors.info}]}>~{a.eta} min</Text>
+                </View>
+                <Text style={[s.taskDoctor, {color: colors.textPrimary}]}>{a.doctorName}</Text>
+                <View style={s.taskMetaRow}>
+                  <Icon name="car" size={12} color={colors.textSecondary} />
+                  <Text style={[s.taskMeta, {color: colors.textSecondary}]}>
+                    {a.doctorCarNumber?.trim() || 'Plate not on file'}
+                    {a.doctorCardCode ? `  ·  code ${a.doctorCardCode}` : ''}
+                  </Text>
+                </View>
+                {/* Kept from the old home-screen card. "They've arrived"
+                    skips typing the code once they're standing here; without
+                    a plate on file it still saves re-entering their identity.
+                    "No-show" is not decoration — a notice only clears itself
+                    when a key is taken, so without it a doctor who never
+                    turns up leaves the blue count permanently wrong. */}
+                <View style={{flexDirection: 'row', gap: 8}}>
+                  <PressableScale style={[s.taskActionBtn, {flex: 1, borderColor: 'transparent', backgroundColor: colors.primary}]}
+                    onPress={() => handleArrivalArrived(a)}>
+                    <Icon name="key" size={13} color={colors.textOnPrimary} />
+                    <Text style={[s.taskActionTxt, {color: colors.textOnPrimary}]}>They've arrived</Text>
+                  </PressableScale>
+                  <PressableScale style={[s.taskActionBtn, {borderColor: colors.border, backgroundColor: colors.cardAlt, paddingHorizontal: 14}]}
+                    onPress={() => dismissArrivalNotice(a.id)}>
+                    <Text style={[s.taskActionTxt, {color: colors.textSecondary}]}>No-show</Text>
+                  </PressableScale>
+                </View>
+              </View>
+            ))}
+          </ScrollView>
+        </>)}
       </SafeAreaView>
     );
   }
@@ -860,11 +984,21 @@ export function ValetHomeScreen() {
               <Text style={s.gradGreetSub}>{todayLabel}</Text>
               <Text style={s.gradGreetName}>{user?.name}</Text>
             </View>
+            {/* Two counts, and the colour carries the meaning: red is a car
+                someone is waiting for, blue is only a heads-up that someone
+                is on their way. They sit on opposite corners so neither
+                moves or overlaps as the other changes, and a zero count
+                hides rather than showing "0". */}
             <PressableScale style={s.inboxBtn} onPress={() => setScreen('retrievals')}>
               <Icon name="inbox" size={20} color="#fff" />
               {retrievalRequests.length > 0 && (
-                <View style={s.inboxBadge}>
+                <View style={[s.inboxBadge, {backgroundColor: '#E53935'}]}>
                   <Text style={s.inboxBadgeTxt}>{retrievalRequests.length > 9 ? '9+' : retrievalRequests.length}</Text>
+                </View>
+              )}
+              {arrivalNotices.length > 0 && (
+                <View style={[s.inboxBadgeAlt, {backgroundColor: '#2F6FA8'}]}>
+                  <Text style={s.inboxBadgeTxt}>{arrivalNotices.length > 9 ? '9+' : arrivalNotices.length}</Text>
                 </View>
               )}
             </PressableScale>
@@ -933,52 +1067,6 @@ export function ValetHomeScreen() {
             );
           })}
         </ScrollView>
-
-        {/* Expected Arrivals — doctors/staff who tapped "On Your Way?"
-            before handing over a key, so there's no ParkingTask for these
-            yet. Purely a heads-up: entering the 3-digit code still works
-            exactly as before whether or not someone appears here. */}
-        {arrivalNotices.length > 0 && (
-          <>
-            <Text style={[s.sectionTitle, {color: colors.textPrimary}]}>Expected Arrivals ({arrivalNotices.length})</Text>
-            {arrivalNotices.map(a => (
-              <View key={a.id} style={[s.taskCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
-                <View style={s.taskTop}>
-                  <View style={[s.typePill, {backgroundColor: colors.accent + '15'}]}>
-                    <Icon name="bellAlert" size={11} color={colors.accent} />
-                    <Text style={[s.typePillTxt, {color: colors.accent}]}>ARRIVING</Text>
-                  </View>
-                  <Text style={[s.taskStatusTxt, {color: colors.accent}]}>Arriving in ~{a.eta} min</Text>
-                </View>
-                <Text style={[s.taskDoctor, {color: colors.textPrimary}]}>{a.doctorName}</Text>
-                {/* The plate is the whole point of a heads-up — it's what
-                    lets the valet recognise the car pulling in. The notice
-                    already carries it; the card just wasn't showing it. */}
-                <View style={s.taskMetaRow}>
-                  <Icon name="car" size={12} color={colors.textSecondary} />
-                  <Text style={[s.taskMeta, {color: colors.textSecondary}]}>
-                    {a.doctorCarNumber?.trim() || 'Plate not on file'}
-                  </Text>
-                </View>
-                {/* A heads-up, not a job — there is nothing to accept. The
-                    shortcut just skips typing the 3-digit code once they're
-                    actually standing here; from there it's the same key
-                    handover as any other arrival. */}
-                <View style={{flexDirection: 'row', gap: 8}}>
-                  <PressableScale style={[s.taskActionBtn, {flex: 1, borderColor: 'transparent', backgroundColor: colors.primary}]}
-                    onPress={() => handleArrivalArrived(a)}>
-                    <Icon name="key" size={13} color={colors.textOnPrimary} />
-                    <Text style={[s.taskActionTxt, {color: colors.textOnPrimary}]}>They've arrived</Text>
-                  </PressableScale>
-                  <PressableScale style={[s.taskActionBtn, {borderColor: colors.border, backgroundColor: colors.cardAlt, paddingHorizontal: 14}]}
-                    onPress={() => dismissArrivalNotice(a.id)}>
-                    <Text style={[s.taskActionTxt, {color: colors.textSecondary}]}>No-show</Text>
-                  </PressableScale>
-                </View>
-              </View>
-            ))}
-          </>
-        )}
 
         {/* Job Queue — every task from assignment through to the valet's
             final confirmation that the owner actually took the car back.
@@ -1237,6 +1325,7 @@ const s = StyleSheet.create({
   gradGreetName:{color:'#fff',fontSize:24,fontWeight:'900',marginTop:2,marginBottom:18},
   inboxBtn:{width:40,height:40,borderRadius:20,alignItems:'center',justifyContent:'center',backgroundColor:'rgba(255,255,255,0.18)'},
   inboxBadge:{position:'absolute',top:-4,right:-4,minWidth:18,height:18,borderRadius:9,paddingHorizontal:4,backgroundColor:'#E53935',alignItems:'center',justifyContent:'center',borderWidth:1.5,borderColor:'#fff'},
+  inboxBadgeAlt:{position:'absolute',bottom:-4,left:-4,minWidth:18,height:18,borderRadius:9,paddingHorizontal:4,alignItems:'center',justifyContent:'center',borderWidth:1.5,borderColor:'#fff'},
   inboxBadgeTxt:{color:'#fff',fontSize:10,fontWeight:'800'},
   statRow:{flexDirection:'row',alignItems:'center'},
   statItem:{flex:1},
@@ -1283,6 +1372,11 @@ const s = StyleSheet.create({
   inboxTab:{flex:1,alignItems:'center',paddingVertical:12},
   inboxTabTxt:{fontSize:13,fontWeight:'800'},
   inboxTabBar:{height:2,borderRadius:1,marginTop:8,alignSelf:'stretch',marginHorizontal:6},
+  inboxSectionRow:{flexDirection:'row',alignItems:'center',gap:6},
+  inboxSectionCount:{minWidth:18,height:18,borderRadius:9,paddingHorizontal:5,alignItems:'center',justifyContent:'center'},
+  inboxSectionCountTxt:{color:'#fff',fontSize:10,fontWeight:'800'},
+  arrivalSearchWrap:{flexDirection:'row',alignItems:'center',gap:8,marginHorizontal:20,marginTop:12,paddingHorizontal:12,height:42,borderRadius:12,borderWidth:1},
+  arrivalSearchInput:{flex:1,fontSize:14,fontWeight:'600',padding:0},
   departureBadge:{borderRadius:8,paddingHorizontal:10,paddingVertical:6},
   departureBadgeTxt:{color:'#fff',fontSize:11,fontWeight:'900',letterSpacing:0.8},
   departureChip:{borderRadius:6,paddingHorizontal:8,paddingVertical:3},

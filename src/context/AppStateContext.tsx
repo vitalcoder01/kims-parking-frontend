@@ -1,5 +1,5 @@
 import React, {createContext, useContext, useState, useCallback, useEffect, useRef} from 'react';
-import {Platform, PermissionsAndroid} from 'react-native';
+import {Platform, PermissionsAndroid, AppState as RNAppState} from 'react-native';
 import Geolocation from 'react-native-geolocation-service';
 import {displayNotification, ringAssignmentAlarm, stopAssignmentAlarm} from '../services/notifications';
 import {tasksApi, driversApi, slotsApi, visitorsApi, notificationsApi, arrivalsApi, getAuthToken} from '../services/api';
@@ -141,6 +141,8 @@ export interface ArrivalNotice {
   // that would normally have supplied these.
   doctorDepartment?: string;
   doctorEmployeeId?: string;
+  // 3-digit valet code — what the valet searches the arrivals list by.
+  doctorCardCode?: string;
   eta: number;
   createdAt: number;
 }
@@ -237,6 +239,9 @@ interface AppState {
   markVisitorRetrieved: (visitorId: number) => Promise<void>;
   confirmVisitorDelivered: (visitorId: number) => Promise<void>;
   pushNotification: (n: Omit<Notification, 'id' | 'createdAt' | 'read'>) => Promise<void>;
+  /** Re-read everything from the server. For the rare case a client knows its
+   *  own state is stale (e.g. a JOB_GONE reply proves the job moved on). */
+  refreshTasks: () => Promise<void>;
   markNotificationRead: (id: number) => Promise<void>;
   clearNotifications: () => void;
 }
@@ -342,13 +347,29 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
       // Only the valet/admin queue needs the "expected arrivals" list.
       needsOpsData ? arrivalsApi.list() : Promise.resolve(null),
     ]);
-    setTasks(t.map(mapTask));
+    const tasks: ParkingTask[] = t.map(mapTask);
+    const visitorRows: Visitor[] | null = v ? v.map(mapVisitor) : null;
+    setTasks(tasks);
     setSlots(s);
     setNotifs(n.map(mapNotification));
     if (d) setDrivers(d);
-    if (v) setVisitors(v.map(mapVisitor));
+    if (visitorRows) setVisitors(visitorRows);
     if (a) setArrivals(a.map(mapArrival));
     setHydrated(true);
+
+    // Kill a stale alarm that no socket event could ever have reached us.
+    // If the app was killed or offline when the assignment was rolled back,
+    // the `ongoing` notification is still sitting there — unswipeable — for a
+    // job that is no longer ours. This is the authoritative answer: we have
+    // just asked the server for everything, so if nothing is waiting on our
+    // acceptance, nothing should be ringing.
+    const me = userRef.current;
+    const myDrvId = me?.role === 'driver' ? me.linkedDriverId ?? null : null;
+    if (myDrvId != null) {
+      const awaitingMe = tasks.some(x => x.driverId === myDrvId && x.status === 'assigned' && !x.acceptedAt)
+        || (visitorRows ?? []).some(x => x.driverId === myDrvId && x.status === 'pending' && !x.acceptedAt);
+      if (!awaitingMe) stopAssignmentAlarm().catch(() => {});
+    }
   }, [needsOpsData, needsVisitors]);
 
   // Some socket handlers need the current user without re-subscribing the
@@ -395,11 +416,23 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
       // My assignment just resolved (accepted elsewhere / reassigned /
       // moved on) — stop a still-ringing alarm.
       const me = userRef.current;
-      const myDrvId = me?.linkedDriverId ?? me?.id;
-      if (me?.role === 'driver' && task.driverId !== myDrvId) {
+      // linkedDriverId ONLY. Driver.id and User.id are separate sequences, so
+      // `?? me.id` silently resolves to some other driver's id and this stops
+      // (or fails to stop) the alarm on the wrong person's event.
+      const myDrvId = me?.role === 'driver' ? me.linkedDriverId ?? null : null;
+      if (myDrvId != null && task.driverId !== myDrvId) {
         // it may have been mine a moment ago — harmless if not ringing
         stopAssignmentAlarm().catch(() => {});
       }
+    });
+
+    // The server telling THIS driver, specifically, that a job stopped being
+    // theirs — rolled back by the accept watchdog, or reassigned by a valet.
+    // The alarm notification is `ongoing`, so it cannot be swiped away; if we
+    // only inferred this from the broadcast above, a driver who was offline
+    // at that moment would be left holding a live-looking alarm forever.
+    socket.on('assignment:cancelled', () => {
+      stopAssignmentAlarm().catch(() => {});
     });
 
     socket.on('visitor:upsert', (raw: any) => {
@@ -446,7 +479,9 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
       if (n.type === 'alarm') {
         ringAssignmentAlarm(n.title, n.body).catch(() => {});
       } else {
-        displayNotification(n.title, n.body, n.type);
+        // Same id the FCM push carries, so the two deliveries of this one
+        // event collapse into a single tray entry and a single buzz.
+        displayNotification(n.title, n.body, n.type, n.id);
       }
     });
 
@@ -552,6 +587,20 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
       : visitors.some(v => v.id === reassignPrompt.visitor?.id && !v.driverId);
     if (!stillNeedsDriver) setReassignPrompt(null);
   }, [reassignPrompt, tasks, visitors]);
+
+  // The socket is the only thing that keeps state fresh, and `connect` is the
+  // only refetch trigger — so a socket that drops without reconnecting (wifi
+  // wobble, doze, backgrounded app) leaves the UI frozen indefinitely. That is
+  // how a driver ends up staring at an Accept button for a job that was rolled
+  // back minutes ago. Coming back to the foreground is the moment the user is
+  // about to act on what they see, so it is exactly when it must be true.
+  useEffect(() => {
+    if (!user) return;
+    const sub = RNAppState.addEventListener('change', next => {
+      if (next === 'active') fetchAll().catch(() => {});
+    });
+    return () => sub.remove();
+  }, [user?.id, fetchAll]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Sweep stale GPS markers (socket still open but no pings — e.g. GPS off).
   useEffect(() => {
@@ -700,18 +749,16 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
   // heads-up ETA for the valet queue. The backend auto-clears this the
   // moment a real park task is created for the same doctor.
   const sendArrivalNotice = useCallback(async (eta: number) => {
-    const created = mapArrival(await arrivalsApi.create(eta));
-    // 'info', not 'alarm'. An arrival is a heads-up that someone is coming,
-    // not a job waiting on a valet — there is nothing to accept and nothing
-    // to assign until they physically hand over a key. Ringing the alarm
-    // channel for it meant a busy morning rang once per arrival, which is
-    // how a genuinely urgent alarm stops being heard.
-    await pushNotification({
-      targetRole: 'valet',
-      title: `🚶 ${created.doctorName ?? 'Someone'} is on the way`,
-      body: `Arriving in ${eta} min. Have a driver ready at the entrance.`,
-      type: 'info',
-    }).catch(() => {});
+    await arrivalsApi.create(eta);
+    // The valet's list updates from the arrival:upsert socket delta this
+    // creates, which is also what moves the blue inbox count.
+    // No notification at all — not alarm, not info. An arrival is not work:
+    // nothing can be accepted or assigned until a key physically changes
+    // hands. The valet's only cue is the blue count on the inbox icon, which
+    // is what makes twenty people announcing themselves cost twenty rows in
+    // a searchable list instead of twenty interruptions. It also closes the
+    // repeat-tap flood: the notice dedupes to one open row per doctor, while
+    // a push fired once per tap.
   }, []);
 
   // Valet: dismiss a stale/no-show/mistaken arrival notice by hand.
@@ -953,7 +1000,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
       setDriverStatus, addVisitor,
       assignVisitorDriver, acceptVisitorTask, rejectVisitorTask, cancelVisitor,
       markVisitorPickedUp, markVisitorParked, assignRetrievalDriver, markVisitorRetrieved, confirmVisitorDelivered,
-      pushNotification, markNotificationRead, clearNotifications,
+      pushNotification, markNotificationRead, clearNotifications, refreshTasks: fetchAll,
     }}>
       {children}
     </Ctx.Provider>

@@ -4,6 +4,8 @@ import {useDialog} from '../../components/AppDialog';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useAuth} from '../../context/AuthContext';
 import {useMyDriverId, isMyJob} from '../../hooks/useMyDriverId';
+import {isJobGone} from '../../services/api';
+import {stopAssignmentAlarm} from '../../services/notifications';
 import {useAppState} from '../../context/AppStateContext';
 import {useTheme} from '../../context/ThemeContext';
 import {computeTrip} from '../../utils/geo';
@@ -17,7 +19,7 @@ export function DriverJobsScreen() {
   const {tasks, slots, visitors, markParked, markRetrieved, updateTask, pushNotification,
     acceptTask, rejectTask, fetchTaskHistory, markTaskReturned,
     acceptVisitorTask, rejectVisitorTask, markVisitorPickedUp, markVisitorParked, markVisitorRetrieved,
-    hydrated} = useAppState();
+    hydrated, refreshTasks} = useAppState();
   const {colors: c, isDark} = useTheme();
 
   const [slotInput, setSlotInput] = useState('');
@@ -55,12 +57,29 @@ export function DriverJobsScreen() {
     Animated.timing(carAnim, {toValue: liveProgress, duration: 400, useNativeDriver: false}).start();
   }, [liveProgress]);
 
+  // A driver tapping Accept on a card the server has already invalidated is
+  // the normal end of a stalled assignment, not an error they did anything
+  // wrong about: the watchdog rolled it back, or the valet gave it to someone
+  // else. Say so plainly, drop the dead card, and stop the alarm — leaving it
+  // on screen invites the same failing tap again.
+  const handleStaleJob = async (err: any, fallback: string) => {
+    if (!isJobGone(err)) {
+      dialog.alert(err?.message || fallback, {title: 'Error'});
+      return;
+    }
+    await stopAssignmentAlarm().catch(() => {});
+    await refreshTasks().catch(() => {});
+    dialog.alert('This job was reassigned while you were deciding.', {
+      title: 'Job no longer yours', tone: 'info',
+    });
+  };
+
   const handleAcceptTask = async () => {
     if (!activeTask) return;
     try {
       await acceptTask(activeTask.id);
     } catch (err: any) {
-      dialog.alert(err.message || 'Could not accept task', {title: 'Error'});
+      await handleStaleJob(err, 'Could not accept task');
     }
   };
 
@@ -69,7 +88,7 @@ export function DriverJobsScreen() {
     try {
       await rejectTask(activeTask.id);
     } catch (err: any) {
-      dialog.alert(err.message || 'Could not reject task', {title: 'Error'});
+      await handleStaleJob(err, 'Could not reject task');
     }
   };
 

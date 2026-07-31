@@ -27,16 +27,36 @@ function getMessaging(): MessagingModule | null {
   return messagingFn;
 }
 
-/** Show the right notification for an incoming FCM data message. */
-export async function handleRemoteMessage(remoteMessage: any): Promise<void> {
+/**
+ * Show the right notification for an incoming FCM message.
+ *
+ * `fromBackground` matters. Non-alarm pushes now carry a `notification` block
+ * so Android renders them itself even when the app is killed — but the system
+ * only does that while the app is NOT in the foreground. So:
+ *
+ *   background + notification block -> Android already showed it; showing it
+ *                                      again here would be the same message
+ *                                      twice, side by side.
+ *   background + data only (alarm)  -> nothing was shown; raise the alarm.
+ *   foreground                      -> the system never renders, so we always
+ *                                      show it ourselves.
+ */
+export async function handleRemoteMessage(
+  remoteMessage: any,
+  {fromBackground = false}: {fromBackground?: boolean} = {},
+): Promise<void> {
   const data = remoteMessage?.data ?? {};
   const title = data.title ?? remoteMessage?.notification?.title ?? 'KIMS Parking';
   const body = data.body ?? remoteMessage?.notification?.body ?? '';
   if (data.type === 'alarm') {
     await ringAssignmentAlarm(title, body);
-  } else {
-    await displayNotification(title, body, (data.type as any) ?? 'info');
+    return;
   }
+  if (fromBackground && remoteMessage?.notification) return;
+  // notifId is set by the backend for every notification it raises — the
+  // socket path uses the same value, so whichever arrives second updates
+  // the first in place rather than stacking a duplicate.
+  await displayNotification(title, body, (data.type as any) ?? 'info', data.notifId);
 }
 
 /**
@@ -47,7 +67,7 @@ export function registerBackgroundPushHandler(): void {
   const messaging = getMessaging();
   if (!messaging) return;
   messaging().setBackgroundMessageHandler(async (remoteMessage: any) => {
-    await handleRemoteMessage(remoteMessage);
+    await handleRemoteMessage(remoteMessage, {fromBackground: true});
   });
 }
 

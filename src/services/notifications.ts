@@ -106,10 +106,30 @@ export async function hasNotificationPermission(): Promise<boolean> {
 type Kind = 'alarm' | 'info' | 'warning';
 
 /** Fire an OS notification immediately — shows in the tray even if the app is backgrounded. */
-export async function displayNotification(title: string, body: string, kind: Kind = 'info'): Promise<void> {
+/**
+ * One tray notification per event.
+ *
+ * `notifId` is the server's Notification row id, carried by BOTH delivery
+ * paths — the socket's notification:new and the FCM push. Without it notifee
+ * generated a fresh id per call, so a phone that received both (which is
+ * every foreground phone, since FCM's onMessage fires alongside the socket)
+ * showed the same message twice and buzzed twice. The alarm path never had
+ * this problem because it always used a fixed id.
+ *
+ * `onlyAlertOnce` is what makes the SECOND arrival silent: it updates the
+ * existing notification in place instead of re-alerting. One banner, one
+ * vibration, whichever path happens to win the race.
+ */
+export async function displayNotification(
+  title: string,
+  body: string,
+  kind: Kind = 'info',
+  notifId?: string | number,
+): Promise<void> {
   try {
     await initNotifications();
     await notifee.displayNotification({
+      ...(notifId != null ? {id: `kims-notif-${notifId}`} : {}),
       title,
       body,
       android: {
@@ -120,6 +140,9 @@ export async function displayNotification(title: string, body: string, kind: Kin
         pressAction: {id: 'default'},
         // Alarm-type notifications stay until dismissed; info auto-cancels.
         autoCancel: true,
+        // Vibration comes from the channel; this stops the duplicate delivery
+        // from buzzing a second time for something already on screen.
+        onlyAlertOnce: true,
       },
     });
   } catch {
