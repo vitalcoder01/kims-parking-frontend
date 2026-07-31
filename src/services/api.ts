@@ -49,6 +49,16 @@ export class ApiCallError extends Error {
 }
 
 /** The job moved on — retrying on the same screen can't succeed. */
+/** The admin-tunable operational knobs. Mirrors DEFAULTS in setting.service.js. */
+export interface OpsSettings {
+  /** Seconds a driver has to accept before the valet is asked to reassign. */
+  driverAcceptTimeoutSeconds: string;
+  /** Seconds the owning valet has to respond before recovery releases it. */
+  ownerResponseTimeoutSeconds: string;
+  /** How far ahead of a planned departure the retrieval becomes actionable. */
+  retrievalLeadTimeMinutes: string;
+}
+
 export const isJobGone = (err: unknown) =>
   err instanceof ApiCallError && err.code === 'JOB_GONE';
 
@@ -213,6 +223,9 @@ export const slotsApi = {
 
 // ── Visitors ─────────────────────────────────────────────────────────────
 export const visitorsApi = {
+  // Vehicle-number typeahead, sourced from plates the system has already seen.
+  suggestPlates: (q: string) =>
+    client.get('/visitors/plate-suggest', {params: {q}}).then(r => r.data.plates as string[]),
   list: () => client.get('/visitors').then(r => r.data.visitors),
   create: (data: {name: string; carNumber?: string; mobile: string; vehicleType?: 'car' | 'bike'}) =>
     client.post('/visitors', data).then(r => r.data.visitor),
@@ -287,10 +300,11 @@ export const adminApi = {
   resetPassword: (id: number, password: string) =>
     client.patch(`/admin/users/${id}/password`, {password}).then(r => r.data),
   deleteUser: (id: number) => client.delete(`/admin/users/${id}`).then(() => undefined),
-  // Operational settings (driver accept timeout etc.)
-  getSettings: () => client.get('/admin/settings').then(r => r.data.settings as {driverAcceptTimeoutSeconds: string}),
-  updateSettings: (patch: {driverAcceptTimeoutSeconds?: number | string}) =>
-    client.patch('/admin/settings', patch).then(r => r.data.settings),
+  // Operational settings. Values come back as strings — they are stored in a
+  // key/value table, so every field is text on the wire whatever it means.
+  getSettings: () => client.get('/admin/settings').then(r => r.data.settings as OpsSettings),
+  updateSettings: (patch: Partial<Record<keyof OpsSettings, number | string>>) =>
+    client.patch('/admin/settings', patch).then(r => r.data.settings as OpsSettings),
   attendanceToday: () => client.get('/admin/attendance/today').then(r => r.data.attendance),
   attendanceMonthly: (month: string) =>
     client.get('/admin/attendance/monthly', {params: {month}}).then(r => r.data as {

@@ -1,5 +1,5 @@
 import React, {useState, useRef, useEffect} from 'react';
-import {View, Text, StyleSheet, ScrollView, TextInput, Linking, StatusBar} from 'react-native';
+import {View, Text, StyleSheet, ScrollView, TextInput, StatusBar} from 'react-native';
 import {useDialog} from '../../components/AppDialog';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import LinearGradient from 'react-native-linear-gradient';
@@ -9,8 +9,9 @@ import {BRAND_GRADIENT, BRAND_GRADIENT_DARK} from '../../theme/colors';
 import {Icon, IconName} from '../../components/Icon';
 import {PressableScale} from '../../components/PressableScale';
 import {DriverPickerList} from '../../components/DriverPickerList';
-import {usersApi, tasksApi, isJobGone} from '../../services/api';
-import {PUBLIC_BASE_URL} from '../../config/api';
+import {usersApi, tasksApi, visitorsApi, isJobGone} from '../../services/api';
+import {formatPlate, isCompletePlate} from '../../utils/plate';
+import {VehicleNumberInput} from '../../components/VehicleNumberInput';
 import {useValetActions, isMyJobToRun} from './useValetActions';
 import type {ParkingTask} from '../../context/AppStateContext';
 import {useAppState} from '../../context/AppStateContext';
@@ -21,20 +22,6 @@ import {
   enRouteSeconds, agoLabel, fmtDuration,
 } from '../../utils/retrievalClocks';
 
-function sendWhatsApp(mobile: string, name: string, carNumber: string | undefined, token: string, publicToken: string, onError: (msg: string) => void) {
-  const trackingUrl = `${PUBLIC_BASE_URL}/track/${publicToken}`;
-  const vehicleLine = carNumber ? `Your car *${carNumber}*` : 'Your vehicle';
-  const msg = `🏥 *KIMS Hospital Parking*\n\nHello ${name},\n\n${vehicleLine} has been safely received by our valet service.\n\n📍 *Token:* ${token}\n_Please don't lose this token._\n\n_Track your car live:_\n${trackingUrl}\n\nWhen you're ready to leave, contact the valet desk to request your car back.\n\n_KIMS Smart Parking · Secure · Real-time_`;
-  const url = `whatsapp://send?phone=+91${mobile.replace(/\D/g,'')}&text=${encodeURIComponent(msg)}`;
-  Linking.canOpenURL(url).then(supported => {
-    if (supported) {
-      Linking.openURL(url);
-    } else {
-      // fallback to wa.me
-      Linking.openURL(`https://wa.me/91${mobile.replace(/\D/g,'')}?text=${encodeURIComponent(msg)}`);
-    }
-  }).catch(() => onError('Could not open WhatsApp. Please check if it is installed.'));
-}
 
 type Screen = 'home' | 'scan' | 'assign' | 'visitor' | 'retrievals';
 
@@ -98,6 +85,23 @@ export function ValetHomeScreen() {
   const [vCar, setVCar] = useState('');
   const [vMobile, setVMobile] = useState('');
   const [vVehicleType, setVVehicleType] = useState<'car' | 'bike'>('car');
+  // Mobile is the one field that must be right — it is how the token and the
+  // tracking link reach them. Validated inline, but only complained about
+  // once they've actually typed something and moved on.
+  const [mobileTouched, setMobileTouched] = useState(false);
+  const vMobileDigits = vMobile.replace(/\D/g, '');
+  const mobileValid = vMobileDigits.length === 10;
+  // The plate is how the car is found later — at the desk, in the car park,
+  // and in search. Required, but only non-empty: a foreign or temporary
+  // registration is still a real plate, and refusing it would strand a car
+  // the valet is physically looking at.
+  // A complete, parseable Indian plate — not merely non-empty. The valet is
+  // reading it off the car in front of them, so a half-typed one is a slip
+  // rather than an edge case worth accepting.
+  const carValid = isCompletePlate(vCar);
+  const [carTouched, setCarTouched] = useState(false);
+  const canCheckIn = mobileValid && carValid;
+
   // Which input currently has the keyboard — drives the focus ring so the
   // active field visibly "wakes up" instead of looking like a static box.
   const [focused, setFocused] = useState<string | null>(null);
@@ -345,16 +349,25 @@ export function ValetHomeScreen() {
   }, [screen, pendingTaskId, pendingVisitorId, pendingTask, pendingVisitor, assigningDriverId, hydrated]);
 
   const handleAddVisitor = async () => {
-    if (!vName.trim() || !vMobile.trim()) return;
+    // Name is optional; the mobile number and the plate are not.
+    if (!canCheckIn) { setMobileTouched(true); setCarTouched(true); return; }
     try {
       const visitor = await addVisitor({
         name: vName.trim(),
-        carNumber: vCar.trim() ? vCar.trim().toUpperCase() : undefined,
-        mobile: vMobile.trim(),
+        // Required now, and sent in canonical form so the stored plate matches
+        // what search normalises against.
+        carNumber: formatPlate(vCar) ?? vCar.trim().toUpperCase(),
+        mobile: vMobileDigits,
         vehicleType: vVehicleType,
       });
-      sendWhatsApp(vMobile.trim(), vName.trim(), visitor.carNumber, visitor.token, visitor.publicToken,
-        msg => dialog.alert(msg, {title: 'WhatsApp', tone: 'warning'}));
+      // Shown regardless of WhatsApp: this token is what the visitor brings
+      // back to the desk to collect their car, and with WhatsApp off it is
+      // the ONLY place it appears. Reading it out is the fallback.
+      dialog.alert(
+        `Parking token  ${visitor.token}\n\n${visitor.carNumber || 'Vehicle'} — ${vMobileDigits}\n\n` +
+        'Give this token to the visitor. They return to the valet desk with it to collect their car.',
+        {title: 'Checked in', tone: 'success'},
+      );
       setVName(''); setVCar(''); setVMobile(''); setVVehicleType('car');
       // Straight into driver assignment — a token with nobody assigned to
       // collect the key is exactly the gap this flow used to leave open.
@@ -974,34 +987,76 @@ export function ValetHomeScreen() {
           </PressableScale>
           <Text style={[s.headerTitle, {color: colors.textPrimary}]}>Visitor / Patient</Text>
         </View>
-        <ScrollView contentContainerStyle={s.subContent}>
+        {/* keyboardShouldPersistTaps: without it, a tap while the keyboard is
+            up is consumed by the ScrollView dismissing the keyboard and never
+            reaches the view underneath — which made every vehicle suggestion
+            unselectable. */}
+        <ScrollView contentContainerStyle={s.subContent} keyboardShouldPersistTaps="handled">
           <Text style={[s.stepLabel, {color: colors.textMuted}]}>VISITOR DETAILS</Text>
           <Text style={[s.stepDesc, {color: colors.textPrimary}]}>WhatsApp tracking link will be sent automatically</Text>
+          {/* Mobile leads: it is the only required field, and the one the
+              whole flow depends on. Name follows, marked optional so a valet
+              doesn't stall asking for something a visitor may not give. */}
           {[
-            {key: 'name', label: 'Full Name', icon: 'user' as IconName, val: vName, set: setVName, ph: 'Patient / Visitor name', kb: 'default' as const},
-            {key: 'mobile', label: 'Mobile Number', icon: 'phone' as IconName, val: vMobile, set: setVMobile, ph: '10-digit number', kb: 'numeric' as const},
-            {key: 'car', label: 'Car Number (optional)', icon: 'car' as IconName, val: vCar, set: setVCar, ph: 'e.g. TN09 AB 1234', kb: 'default' as const},
+            {key: 'mobile', label: 'Mobile Number', icon: 'phone' as IconName, val: vMobile, set: setVMobile, ph: '10-digit number', kb: 'numeric' as const, required: true},
+            {key: 'name', label: 'Name (optional)', icon: 'user' as IconName, val: vName, set: setVName, ph: 'Patient / visitor name', kb: 'default' as const, required: false},
           ].map((f, i, arr) => {
             const nextKey = arr[i + 1]?.key;
+            const showMobileError = f.key === 'mobile' && mobileTouched && !mobileValid;
+            const showError = showMobileError;
             return (
               <View key={f.key} style={{marginBottom: 4}}>
-                <Text style={[s.fieldLabel, {color: colors.textMuted}]}>{f.label.toUpperCase()}</Text>
-                <View style={[s.inputRow, {borderColor: focused === f.key ? colors.textPrimary : colors.border, backgroundColor: colors.surface}]}>
+                <View style={s.fieldLabelRow}>
+                  <Text style={[s.fieldLabel, {color: colors.textMuted}]}>{f.label.toUpperCase()}</Text>
+                  {f.required && <Text style={[s.fieldReq, {color: colors.error}]}>REQUIRED</Text>}
+                </View>
+                <View style={[s.inputRow, {
+                  borderColor: showError ? colors.error
+                    : focused === f.key ? colors.textPrimary : colors.border,
+                  backgroundColor: colors.surface,
+                }]}>
                   <View style={[s.inputIconWrap, {backgroundColor: colors.cardAlt}]}>
-                    <Icon name={f.icon} size={16} color={focused === f.key ? colors.textPrimary : colors.textMuted} />
+                    <Icon name={f.icon} size={16} color={showError ? colors.error : focused === f.key ? colors.textPrimary : colors.textMuted} />
                   </View>
-                  <TextInput style={[s.textInput, {color: colors.textPrimary}]} value={f.val} onChangeText={f.set}
+                  <TextInput style={[s.textInput, {color: colors.textPrimary}]} value={f.val}
+                    onChangeText={t => {
+                      // Digits only for the phone, so paste and keypad quirks
+                      // can't smuggle in spaces or dashes that the length
+                      // check would then measure.
+                      f.set(f.key === 'mobile' ? t.replace(/\D/g, '').slice(0, 10) : t);
+                    }}
                     ref={r => { fieldRefs.current[f.key] = r; }}
-                    onFocus={() => setFocused(f.key)} onBlur={() => setFocused(null)}
+                    onFocus={() => setFocused(f.key)}
+                    onBlur={() => {
+                      setFocused(null);
+                      if (f.key === 'mobile') setMobileTouched(true);
+                    }}
                     returnKeyType={nextKey ? 'next' : 'done'}
                     blurOnSubmit={!nextKey}
                     onSubmitEditing={() => nextKey && fieldRefs.current[nextKey]?.focus()}
                     placeholder={f.ph} placeholderTextColor={colors.textMuted}
                     keyboardType={f.kb} autoCapitalize={f.kb === 'default' ? 'words' : 'none'} />
+                  {f.key === 'mobile' && mobileValid && <Icon name="check" size={16} color={colors.success} />}
                 </View>
+                {showMobileError && (
+                  <Text style={[s.fieldError, {color: colors.error}]}>
+                    {vMobileDigits.length === 0 ? 'Mobile number is required' : `Enter all 10 digits (${vMobileDigits.length}/10)`}
+                  </Text>
+                )}
               </View>
             );
           })}
+          {/* Its own component: it carries the offline state/RTO dataset, its
+              own debounce and cache, and block-level validation, none of
+              which belongs in a generic text row. */}
+          <VehicleNumberInput
+            value={vCar}
+            onChange={setVCar}
+            touched={carTouched}
+            onTouch={() => setCarTouched(true)}
+            required
+          />
+
           <Text style={[s.fieldLabel, {color: colors.textMuted}]}>VEHICLE TYPE</Text>
           <View style={{flexDirection: 'row', gap: 10, marginBottom: 16}}>
             {(['car', 'bike'] as const).map(t => {
@@ -1015,18 +1070,22 @@ export function ValetHomeScreen() {
               );
             })}
           </View>
+          {/* Deliberately hedged. Whether WhatsApp actually goes out is the
+              backend's call — it depends on Meta credentials the app never
+              sees — so this cannot promise a message was sent. The token is
+              shown on screen either way, which is what the visitor needs. */}
           <View style={[s.whatsappNote, {backgroundColor: colors.surface, borderColor: colors.border}]}>
             <Icon name="whatsapp" size={17} color="#25D366" />
             <Text style={[s.whatsappTxt, {color: colors.textSecondary}]}>
-              Live tracking link + parking status will be sent to {vMobile || 'their number'} via WhatsApp.
+              A parking token is issued on check-in. If WhatsApp is switched on, the tracking link also goes to {vMobile || 'their number'}.
             </Text>
           </View>
           <PressableScale
-            style={[s.actionBtn, {backgroundColor: (vName && vMobile.length >= 10) ? colors.primary : colors.cardAlt, marginTop: 8}]}
-            onPress={handleAddVisitor} disabled={!(vName && vMobile.length >= 10)}
+            style={[s.actionBtn, {backgroundColor: canCheckIn ? colors.primary : colors.cardAlt, marginTop: 8}]}
+            onPress={handleAddVisitor} disabled={!canCheckIn}
           >
-            <Icon name="whatsapp" size={17} color={(vName && vMobile.length >= 10) ? colors.textOnPrimary : colors.textMuted} />
-            <Text style={[s.actionBtnTxt, {color: (vName && vMobile.length >= 10) ? colors.textOnPrimary : colors.textMuted}]}>Generate Token & Send WhatsApp</Text>
+            <Icon name="whatsapp" size={17} color={canCheckIn ? colors.textOnPrimary : colors.textMuted} />
+            <Text style={[s.actionBtnTxt, {color: canCheckIn ? colors.textOnPrimary : colors.textMuted}]}>Check In</Text>
           </PressableScale>
         </ScrollView>
       </SafeAreaView>
@@ -1502,6 +1561,9 @@ const s = StyleSheet.create({
   foundDept:{fontSize:13,marginTop:2},
   foundId:{fontSize:11,marginTop:4},
   fieldLabel:{fontSize:10,fontWeight:'700',letterSpacing:1,marginBottom:8,marginTop:4},
+  fieldLabelRow:{flexDirection:'row',alignItems:'center',justifyContent:'space-between'},
+  fieldReq:{fontSize:9,fontWeight:'900',letterSpacing:0.8,marginBottom:8,marginTop:4},
+  fieldError:{fontSize:12,fontWeight:'700',marginTop:-10,marginBottom:10,marginLeft:2},
   segment:{flex:1,flexDirection:'row',alignItems:'center',justifyContent:'center',gap:8,borderWidth:1.5,borderRadius:14,height:50},
   segmentTxt:{fontSize:14,fontWeight:'800'},
   inputRow:{

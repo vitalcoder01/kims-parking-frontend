@@ -24,21 +24,47 @@ export function SharedSettingsScreen() {
   const {colors, mode, setMode} = useTheme();
   const {user, logout} = useAuth();
 
-  // Admin-only: driver accept window (seconds) — how long a driver has to
-  // accept an assignment before the valet is prompted to reassign.
-  const [acceptTimeout, setAcceptTimeout] = React.useState<number | null>(null);
+  // Admin-only operational knobs. Loaded together because they come from one
+  // endpoint, and held as one object so a stepper cannot write a stale
+  // sibling value back over someone else's change.
+  const [ops, setOps] = React.useState<{
+    driverAcceptTimeoutSeconds: number;
+    ownerResponseTimeoutSeconds: number;
+    retrievalLeadTimeMinutes: number;
+  } | null>(null);
+
   React.useEffect(() => {
     if (user?.role !== 'admin') return;
     adminApi.getSettings()
-      .then(s => setAcceptTimeout(Number(s.driverAcceptTimeoutSeconds) || 60))
+      .then(s => setOps({
+        // Number('') is 0, so `|| default` is right here: an absent or blank
+        // row means "never set", not "set to zero".
+        driverAcceptTimeoutSeconds: Number(s.driverAcceptTimeoutSeconds) || 60,
+        ownerResponseTimeoutSeconds: Number(s.ownerResponseTimeoutSeconds) || 60,
+        // Lead time is the exception — 0 IS a real choice ("start the moment
+        // they ask"), so it must survive rather than snap back to 10.
+        retrievalLeadTimeMinutes: Number.isFinite(Number(s.retrievalLeadTimeMinutes))
+          ? Number(s.retrievalLeadTimeMinutes) : 10,
+      }))
       .catch(() => {});
   }, [user?.role]);
 
-  const changeAcceptTimeout = (delta: number) => {
-    setAcceptTimeout(prev => {
-      const next = Math.min(600, Math.max(10, (prev ?? 60) + delta));
-      adminApi.updateSettings({driverAcceptTimeoutSeconds: next}).catch(() => {});
-      return next;
+  // Clamped to the same ranges the backend validates, so a tap can never
+  // produce a request the server will reject.
+  const OPS_RANGE = {
+    driverAcceptTimeoutSeconds: [10, 600],
+    ownerResponseTimeoutSeconds: [10, 600],
+    retrievalLeadTimeMinutes: [0, 240],
+  } as const;
+
+  const bumpOps = (key: keyof typeof OPS_RANGE, delta: number) => {
+    setOps(prev => {
+      if (!prev) return prev;
+      const [lo, hi] = OPS_RANGE[key];
+      const next = Math.min(hi, Math.max(lo, prev[key] + delta));
+      if (next === prev[key]) return prev;   // already at the limit — no write
+      adminApi.updateSettings({[key]: next}).catch(() => {});
+      return {...prev, [key]: next};
     });
   };
 
@@ -108,28 +134,56 @@ export function SharedSettingsScreen() {
         </Card>
 
         {/* Operations (admin only) */}
-        {user?.role === 'admin' && acceptTimeout != null && (
+        {user?.role === 'admin' && ops != null && (
           <>
             <Text style={[styles.sectionTitle, {color: colors.textMuted}]}>OPERATIONS</Text>
-            <Card>
-              <Text style={[styles.cardTitle, {color: colors.textSecondary}]}>Driver Accept Timeout</Text>
-              <View style={styles.stepperRow}>
-                <PressableScale
-                  onPress={() => changeAcceptTimeout(-10)}
-                  style={[styles.stepperBtn, {backgroundColor: colors.cardAlt, borderColor: colors.border}]}>
-                  <Text style={[styles.stepperBtnTxt, {color: colors.textPrimary}]}>−10s</Text>
-                </PressableScale>
-                <Text style={[styles.stepperValue, {color: colors.textPrimary}]}>{acceptTimeout}s</Text>
-                <PressableScale
-                  onPress={() => changeAcceptTimeout(10)}
-                  style={[styles.stepperBtn, {backgroundColor: colors.cardAlt, borderColor: colors.border}]}>
-                  <Text style={[styles.stepperBtnTxt, {color: colors.textPrimary}]}>+10s</Text>
-                </PressableScale>
-              </View>
-              <Text style={[styles.infoLabel, {color: colors.textSecondary}]}>
-                If a driver doesn't accept a job within this window, the valet is alerted and asked to reassign.
-              </Text>
-            </Card>
+            {([
+              {
+                key: 'retrievalLeadTimeMinutes' as const,
+                title: 'Retrieval Lead Time',
+                step: 5,
+                unit: 'min',
+                help: 'How far ahead of a doctor\'s planned departure the retrieval becomes actionable. A request sits on the Retrieval Requests page as information until this point, then the owning valet is alerted. Set it to cover walking to the slot and driving back.',
+              },
+              {
+                key: 'ownerResponseTimeoutSeconds' as const,
+                title: 'Owner Response Timeout',
+                step: 10,
+                unit: 's',
+                help: 'How long the owning valet has to respond once alerted. If they do not, the request is released to every available valet.',
+              },
+              {
+                key: 'driverAcceptTimeoutSeconds' as const,
+                title: 'Driver Accept Timeout',
+                step: 10,
+                unit: 's',
+                help: "If a driver doesn't accept a job within this window, the valet is alerted and asked to reassign.",
+              },
+            ]).map(row => {
+              const [lo, hi] = OPS_RANGE[row.key];
+              const value = ops[row.key];
+              return (
+                <Card key={row.key}>
+                  <Text style={[styles.cardTitle, {color: colors.textSecondary}]}>{row.title}</Text>
+                  <View style={styles.stepperRow}>
+                    <PressableScale
+                      onPress={() => bumpOps(row.key, -row.step)}
+                      disabled={value <= lo}
+                      style={[styles.stepperBtn, {backgroundColor: colors.cardAlt, borderColor: colors.border}, value <= lo && {opacity: 0.4}]}>
+                      <Text style={[styles.stepperBtnTxt, {color: colors.textPrimary}]}>−{row.step}{row.unit}</Text>
+                    </PressableScale>
+                    <Text style={[styles.stepperValue, {color: colors.textPrimary}]}>{value}{row.unit}</Text>
+                    <PressableScale
+                      onPress={() => bumpOps(row.key, row.step)}
+                      disabled={value >= hi}
+                      style={[styles.stepperBtn, {backgroundColor: colors.cardAlt, borderColor: colors.border}, value >= hi && {opacity: 0.4}]}>
+                      <Text style={[styles.stepperBtnTxt, {color: colors.textPrimary}]}>+{row.step}{row.unit}</Text>
+                    </PressableScale>
+                  </View>
+                  <Text style={[styles.infoLabel, {color: colors.textSecondary}]}>{row.help}</Text>
+                </Card>
+              );
+            })}
           </>
         )}
 
