@@ -20,14 +20,30 @@ function greeting() {
   return {text: 'good night.', icon: 'moon' as const};
 }
 
+// A rolling seven-day window CENTRED on today, not the Sunday-to-Saturday
+// calendar week. Anchoring to the calendar meant the highlight drifted across
+// the row as the week went on — parked at the far right by Friday and at the
+// far left on Sunday — so the one cell the driver looks at was never in the
+// same place twice. Now today holds the middle and the dates move around it.
+const WINDOW = 7;
+const TODAY_INDEX = Math.floor(WINDOW / 2);   // 3 of 0..6
+
 function weekStrip() {
   const today = new Date();
-  const start = new Date(today);
-  start.setDate(today.getDate() - today.getDay());
-  return Array.from({length: 7}, (_, i) => {
-    const d = new Date(start);
-    d.setDate(start.getDate() + i);
-    return {letter: DAY_LETTERS[i], num: d.getDate(), isToday: d.toDateString() === today.toDateString()};
+  return Array.from({length: WINDOW}, (_, i) => {
+    const d = new Date(today);
+    d.setDate(today.getDate() + (i - TODAY_INDEX));
+    return {
+      // toDateString, not letter+num: a window spanning a month boundary can
+      // repeat a day number, and React needs these keys to be unique.
+      key: d.toDateString(),
+      // Indexed by the real weekday. The old code used the loop index, which
+      // only lined up because the row happened to start on a Sunday.
+      letter: DAY_LETTERS[d.getDay()],
+      num: d.getDate(),
+      isToday: i === TODAY_INDEX,
+      isPast: i < TODAY_INDEX,
+    };
   });
 }
 
@@ -92,7 +108,15 @@ export function DriverDashboardScreen() {
         {/* Week strip */}
         <View style={st.weekRow}>
           {days.map(d => (
-            <View key={d.letter + d.num} style={[st.dayCell, d.isToday && {borderColor: c.textPrimary, backgroundColor: c.surface}]}>
+            <View
+              key={d.key}
+              style={[
+                st.dayCell,
+                d.isToday && {borderColor: c.textPrimary, backgroundColor: c.surface},
+                // Days already gone recede, so the eye lands on today and the
+                // days still ahead of it.
+                d.isPast && !d.isToday && {opacity: 0.45},
+              ]}>
               <Text style={[st.dayLetter, {color: c.textMuted}]}>{d.letter}</Text>
               <Text style={[st.dayNum, {color: d.isToday ? c.textPrimary : c.textSecondary}, d.isToday && st.dayNumToday]}>{d.num}</Text>
             </View>
