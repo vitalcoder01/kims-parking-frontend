@@ -176,6 +176,10 @@ export const tasksApi = {
   // Valet claims a departure request — theirs by ownership, or by winning
   // the recovery broadcast. The backend decides; a 409 means someone else got
   // there first.
+  // Doctor/staff calling off their own departure request. Refused once the
+  // driver has set off — the car is out of its slot by then.
+  cancelMyRetrieval: (id: number) =>
+    client.patch(`/tasks/${id}/cancel-my-retrieval`).then(r => r.data.task),
   acceptRetrieval: (id: number) =>
     client.patch(`/tasks/${id}/accept-retrieval`).then(r => r.data.task),
   acknowledge: (id: number) =>

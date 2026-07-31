@@ -16,7 +16,8 @@ import type {ParkingTask} from '../../context/AppStateContext';
 import {useAppState} from '../../context/AppStateContext';
 import {SkeletonCard} from '../../components/Skeleton';
 import {
-  plannedDepartureLabel, departurePriority, enRouteSeconds, agoLabel, fmtDuration,
+  plannedDepartureLabel, departurePriority, minutesUntilDeparture, departureClockLabel,
+  enRouteSeconds, agoLabel, fmtDuration,
 } from '../../utils/retrievalClocks';
 
 function sendWhatsApp(mobile: string, name: string, carNumber: string | undefined, token: string, publicToken: string, onError: (msg: string) => void) {
@@ -45,24 +46,30 @@ const INBOX_TABS: {key: InboxTab; label: string}[] = [
   {key: 'soon',  label: 'Soon'},
   {key: 'later', label: 'Later'},
 ];
-// Bands over the planned-departure minutes. A request with no departure
-// value (legacy row, or an older server) lands in "later" rather than
-// vanishing from every filtered tab.
-function inboxBand(mins: number | undefined): Exclude<InboxTab, 'all'> {
-  if (mins === 0) return 'now';
-  if (mins != null && mins <= 20) return 'soon';
+// Bands over the time REMAINING, not the number the doctor originally picked.
+// A doctor can now name a time up to 24h out, so the stored offset decays: a
+// request made at 09:00 for 18:00 must read "9 hr" at 09:00 and "10 min" at
+// 17:50, and must move from Later to Now on its own. Banding on the stored
+// value would leave it parked in Later all day and then fire with no warning.
+//
+// A request with no departure value (legacy row, or an older server) lands in
+// "later" rather than vanishing from every filtered tab.
+function inboxBand(left: number | null): Exclude<InboxTab, 'all'> {
+  if (left == null) return 'later';
+  if (left <= 0) return 'now';
+  if (left <= 20) return 'soon';
   return 'later';
 }
 
 // Planned-departure badge colours, most urgent first. This shows ONLY when
 // the doctor intends to leave — it is not a delivery estimate.
-function departureTone(mins: number | undefined, c: any): string {
-  if (mins == null) return c.textMuted;
-  if (mins === 0) return c.error;     // NOW
-  if (mins <= 10) return '#F97316';   // orange
-  if (mins <= 20) return c.warning;   // yellow
-  if (mins <= 30) return c.info ?? '#3B82F6';
-  return c.success;                   // 40 min — least urgent
+function departureTone(left: number | null, c: any): string {
+  if (left == null) return c.textMuted;
+  if (left <= 0) return c.error;      // due, or overdue
+  if (left <= 10) return '#F97316';   // orange
+  if (left <= 20) return c.warning;   // yellow
+  if (left <= 30) return c.info ?? '#3B82F6';
+  return c.success;                   // furthest out — least urgent
 }
 
 export function ValetHomeScreen() {
@@ -98,7 +105,6 @@ export function ValetHomeScreen() {
   // computes; 'name' re-sorts alphabetically for a valet who knows exactly
   // who they want and would rather scan a fixed order than a shifting one.
   const [driverSearch, setDriverSearch] = useState('');
-  const [driverSort, setDriverSort] = useState<'suggested' | 'name'>('suggested');
   const [assigningDriverId, setAssigningDriverId] = useState<number | null>(null);
   // Read from async callbacks that would otherwise close over stale values.
   const assigningDriverIdRef = useRef<number | null>(null);
@@ -569,13 +575,17 @@ export function ValetHomeScreen() {
   if (screen === 'assign') {
     const closeAssign = () => {
       setScreen('home'); setPendingVisitorId(null); setPendingTaskId(null);
-      setDriverSearch(''); setDriverSort('suggested');
+      setDriverSearch('');
     };
     const isRetrieve = pendingTask?.type === 'retrieve';
+    // Fewest jobs today first, then alphabetical so the order is stable
+    // rather than shuffling between renders on equal counts. This ordering
+    // only started meaning anything once completedToday was actually computed
+    // server-side — before that every comparison was 0 minus 0.
     const visibleDrivers = availableDrivers
       .filter(d => d.name.toLowerCase().includes(driverSearch.trim().toLowerCase()))
       .slice()
-      .sort((a, b) => (driverSort === 'name' ? a.name.localeCompare(b.name) : 0));
+      .sort((a, b) => (a.completedToday ?? 0) - (b.completedToday ?? 0) || a.name.localeCompare(b.name));
 
     return (
       <SafeAreaView style={[s.safe, {backgroundColor: colors.background}]}>
@@ -594,34 +604,60 @@ export function ValetHomeScreen() {
               mis-scanned/mis-typed code gets caught here, not after a driver's
               already been notified. */}
           {(pendingVisitor || pendingTask) && (
-            <View style={[s.confirmCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
-              <View style={[s.confirmAvatar, {backgroundColor: colors.primaryLight}]}>
-                <Icon name={isRetrieve ? 'car' : 'carKey'} size={20} color={colors.primary} />
-              </View>
-              <View style={{flex: 1}}>
-                <Text style={[s.confirmName, {color: colors.textPrimary}]}>
-                  {pendingVisitor?.carNumber ?? pendingTask?.carNumber ?? 'No plate'}
+            <LinearGradient
+              colors={isDark ? BRAND_GRADIENT_DARK : BRAND_GRADIENT}
+              start={{x: 0, y: 0}} end={{x: 1, y: 1}}
+              style={s.confirmCard}>
+              {/* The person leads, the plate sits under it. A valet is about
+                  to dispatch someone on behalf of a named human, so the name
+                  is the headline and everything else is detail beneath it.
+                  Each fact is on its own line — the middle-dot runs meant the
+                  slot could be truncated away by a long name. */}
+              <View style={s.confirmTop}>
+                <Text style={[s.confirmWho, {color: '#FFFFFF'}]} numberOfLines={1}>
+                  {pendingVisitor?.name ?? pendingTask?.doctorName ?? 'Unknown'}
                 </Text>
-                <View style={s.confirmMetaRow}>
-                  <Icon name="pin" size={12} color={colors.textSecondary} />
-                  <Text style={[s.confirmMeta, {color: colors.textSecondary}]}>
-                    {pendingVisitor?.name ?? pendingTask?.doctorName}
-                    {pendingTask?.slotId ? ` · Slot ${pendingTask.slotId}` : ''}
+                {/* Fixed light-on-dark values, not theme tokens: this card is
+                    a dark surface in BOTH themes, so textPrimary would render
+                    near-black on the dark theme and vanish. Retrieve keeps an
+                    amber tint so the two job types stay tellable apart. */}
+                <View style={[s.confirmTypePill, {backgroundColor: 'rgba(255,255,255,0.14)'}]}>
+                  <Text style={[s.confirmTypeTxt, {color: isRetrieve ? '#F5C168' : '#FFFFFF'}]}>
+                    {isRetrieve ? 'RETRIEVE' : 'PARK'}
                   </Text>
                 </View>
-                <View style={[s.confirmStatusPill, {backgroundColor: colors.cardAlt, alignSelf: 'flex-start', marginTop: 6}]}>
-                  <Text style={[s.confirmStatusTxt, {color: colors.textMuted}]}>
-                    {isRetrieve ? 'Pickup required' : 'Key handover required'}
-                  </Text>
-                </View>
               </View>
-              <View style={[s.confirmTypePill, {backgroundColor: isRetrieve ? colors.warning + '18' : colors.primary + '18'}]}>
-                <Icon name={isRetrieve ? 'arrowUp' : 'arrowDown'} size={11} color={isRetrieve ? colors.warning : colors.primary} />
-                <Text style={[s.confirmTypeTxt, {color: isRetrieve ? colors.warning : colors.primary}]}>
-                  {isRetrieve ? 'RETRIEVE' : 'PARK'}
-                </Text>
+              {/* Who they are, under the name. A visitor has no department,
+                  so they get the label that actually applies to them. */}
+              <Text style={[s.confirmSub, {color: 'rgba(255,255,255,0.62)'}]} numberOfLines={1}>
+                {pendingVisitor
+                  ? (pendingVisitor.vehicleType === 'bike' ? 'Visitor — bike' : 'Visitor')
+                  : pendingTask?.doctorDepartment?.trim() || 'Department not on file'}
+              </Text>
+
+              {/* Label/value rows rather than a run-on line: a valet scans
+                  down the left edge for the field they want, and nothing gets
+                  truncated away by a long value in front of it. */}
+              <View style={[s.confirmFacts, {borderTopColor: 'rgba(255,255,255,0.16)'}]}>
+                {(() => {
+                  const facts: [string, string][] = [];
+                  const plate = (pendingVisitor?.carNumber ?? pendingTask?.carNumber ?? '').trim();
+                  facts.push(['VEHICLE', plate || 'Plate not on file']);
+                  if (pendingTask?.slotId) facts.push(['SLOT', pendingTask.slotId]);
+                  if (pendingVisitor?.mobile) facts.push(['MOBILE', pendingVisitor.mobile]);
+                  if (pendingVisitor?.token) facts.push(['TOKEN', pendingVisitor.token]);
+                  if (!pendingVisitor && pendingTask?.doctorEmployeeId) {
+                    facts.push(['STAFF ID', pendingTask.doctorEmployeeId]);
+                  }
+                  return facts.map(([k, v]) => (
+                    <View key={k} style={s.confirmFactRow}>
+                      <Text style={[s.confirmFactKey, {color: 'rgba(255,255,255,0.5)'}]}>{k}</Text>
+                      <Text style={[s.confirmFactVal, {color: '#FFFFFF'}]} numberOfLines={1}>{v}</Text>
+                    </View>
+                  ));
+                })()}
               </View>
-            </View>
+            </LinearGradient>
           )}
 
           <Text style={[s.stepLabel, {color: colors.textMuted}]}>SELECT DRIVER</Text>
@@ -645,14 +681,9 @@ export function ValetHomeScreen() {
                 returnKeyType="search"
               />
             </View>
-            <PressableScale
-              onPress={() => setDriverSort(p => (p === 'suggested' ? 'name' : 'suggested'))}
-              style={[s.driverFilterBtn, {backgroundColor: driverSort === 'name' ? colors.primary : colors.surface, borderColor: driverSort === 'name' ? colors.primary : colors.border}]}>
-              <Icon name="filter" size={18} color={driverSort === 'name' ? colors.textOnPrimary : colors.textPrimary} />
-            </PressableScale>
           </View>
 
-          <DriverPickerList drivers={visibleDrivers} onAssign={handleAssignDriver} sorted={driverSort === 'name'} assigningId={assigningDriverId} />
+          <DriverPickerList drivers={visibleDrivers} onAssign={handleAssignDriver} assigningId={assigningDriverId} />
 
           <View style={[s.assignNoteCard, {backgroundColor: colors.cardAlt, borderColor: colors.border}]}>
             <View style={[s.assignNoteIconWrap, {backgroundColor: colors.successLight}]}>
@@ -716,7 +747,7 @@ export function ValetHomeScreen() {
             {INBOX_TABS.map(tb => {
               const count = tb.key === 'all'
                 ? retrievalRequests.length
-                : retrievalRequests.filter(t => inboxBand(t.plannedDepartureMinutes) === tb.key).length;
+                : retrievalRequests.filter(t => inboxBand(minutesUntilDeparture(t.requestedAt, t.plannedDepartureMinutes, now)) === tb.key).length;
               const active = inboxTab === tb.key;
               const empty = count === 0;
               return (
@@ -740,44 +771,48 @@ export function ValetHomeScreen() {
               <Icon name="inbox" size={26} color={colors.textMuted} style={{marginBottom: 8}} />
               <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No retrieval requests right now.</Text>
             </View>
-          ) : retrievalRequests.filter(t => inboxTab === 'all' || inboxBand(t.plannedDepartureMinutes) === inboxTab).length === 0 ? (
+          ) : retrievalRequests.filter(t => inboxTab === 'all' || inboxBand(minutesUntilDeparture(t.requestedAt, t.plannedDepartureMinutes, now)) === inboxTab).length === 0 ? (
             <View style={[s.emptyBox, {borderColor: colors.border}]}>
               <Icon name="check" size={26} color={colors.textMuted} style={{marginBottom: 8}} />
               <Text style={[s.emptyTxt, {color: colors.textMuted}]}>Nothing in this group.</Text>
             </View>
           ) : [...retrievalRequests]
-                .filter(t => inboxTab === 'all' || inboxBand(t.plannedDepartureMinutes) === inboxTab)
+                .filter(t => inboxTab === 'all' || inboxBand(minutesUntilDeparture(t.requestedAt, t.plannedDepartureMinutes, now)) === inboxTab)
                 // NOW first, then 10/20/30/40; oldest request first within a
                 // band so nobody is overtaken by a later request at the same
                 // urgency.
                 .sort((a, b) =>
-                  departurePriority(a.plannedDepartureMinutes) - departurePriority(b.plannedDepartureMinutes)
+                  departurePriority(a.requestedAt, a.plannedDepartureMinutes, now) - departurePriority(b.requestedAt, b.plannedDepartureMinutes, now)
                   || (a.requestedAt ?? 0) - (b.requestedAt ?? 0))
                 .map(t => {
-            const tone = departureTone(t.plannedDepartureMinutes, colors);
-            // The card itself carries the colour, graded by urgency: NOW is a
-            // clearly washed card, 40 MIN is barely tinted. Sorted top to
+            // Everything on this card is driven by time LEFT, recomputed each
+            // second, so a card genuinely heats up as its deadline approaches
+            // instead of being frozen at whatever the doctor first picked.
+            const left = minutesUntilDeparture(t.requestedAt, t.plannedDepartureMinutes, now);
+            const tone = departureTone(left, colors);
+            // The card itself carries the colour, graded by urgency: due is a
+            // clearly washed card, hours away is barely tinted. Sorted top to
             // bottom, the inbox reads as a fade from hot to cool — which
             // conveys priority without every card shouting equally.
-            const mins = t.plannedDepartureMinutes;
-            const wash = mins == null ? '00' : mins === 0 ? '1C' : mins <= 10 ? '14' : mins <= 20 ? '0E' : mins <= 30 ? '0A' : '08';
-            const edge = mins == null ? null : mins === 0 ? '66' : mins <= 10 ? '4D' : mins <= 20 ? '3A' : '26';
+            const wash = left == null ? '00' : left <= 0 ? '1C' : left <= 10 ? '14' : left <= 20 ? '0E' : left <= 30 ? '0A' : '08';
+            const edge = left == null ? null : left <= 0 ? '66' : left <= 10 ? '4D' : left <= 20 ? '3A' : '26';
             return (
             <View key={t.id} style={[
               s.taskCard,
-              {backgroundColor: mins == null ? colors.surface : tone + wash,
+              {backgroundColor: left == null ? colors.surface : tone + wash,
                borderColor: edge ? tone + edge : colors.border},
             ]}>
               <View style={s.jobHead}>
                 <View style={{flex: 1}}>
                   <Text style={[s.jobPlate, {color: colors.textPrimary}]} numberOfLines={1}>{t.carNumber}</Text>
-                  <Text style={[s.jobWho, {color: colors.textSecondary}]} numberOfLines={1}>
-                    {t.doctorName}{t.slotId ? `  ·  Slot ${t.slotId}` : ''}
-                  </Text>
+                  <Text style={[s.jobWho, {color: colors.textSecondary}]} numberOfLines={1}>{t.doctorName}</Text>
+                  {!!t.slotId && (
+                    <Text style={[s.jobSlot, {color: colors.textMuted}]} numberOfLines={1}>Slot {t.slotId}</Text>
+                  )}
                 </View>
                 {/* Planned departure only — NOT a delivery ETA. */}
                 <View style={[s.departureBadge, {backgroundColor: tone}]}>
-                  <Text style={s.departureBadgeTxt}>{plannedDepartureLabel(t.plannedDepartureMinutes)}</Text>
+                  <Text style={s.departureBadgeTxt}>{plannedDepartureLabel(t.requestedAt, t.plannedDepartureMinutes, now)}</Text>
                 </View>
               </View>
 
@@ -785,13 +820,19 @@ export function ValetHomeScreen() {
                 {/* Never interpolate the raw value — an older server (or a
                     pre-departure-field task) has none, and template literals
                     happily print "undefined" to the user. */}
-                {t.plannedDepartureMinutes == null
+                {/* The wall-clock time they said, alongside the countdown in
+                    the badge. A doctor who names 18:00 should be findable by
+                    that, not only by "in 4 hr" — and never by a raw number
+                    that quietly goes stale. */}
+                {left == null
                   ? 'Departure time not given'
-                  : t.plannedDepartureMinutes === 0
+                  : left <= 0
                   ? 'Leaving now'
-                  : `Leaving in ${t.plannedDepartureMinutes} min`}
-                {t.requestedAt ? `  ·  requested ${agoLabel(t.requestedAt, now)}` : ''}
+                  : `Leaving at ${departureClockLabel(t.requestedAt, t.plannedDepartureMinutes)}`}
               </Text>
+              {!!t.requestedAt && (
+                <Text style={[s.jobSlot, {color: colors.textMuted}]}>Requested {agoLabel(t.requestedAt, now)}</Text>
+              )}
 
               {/* Why this is on a non-owner's screen at all. Without the
                   reason it just looks like a request that was routed
@@ -862,16 +903,19 @@ export function ValetHomeScreen() {
                     <Icon name="bellAlert" size={11} color={colors.info} />
                     <Text style={[s.typePillTxt, {color: colors.info}]}>ARRIVING</Text>
                   </View>
-                  <Text style={[s.taskStatusTxt, {color: colors.info}]}>~{a.eta} min</Text>
-                </View>
-                <Text style={[s.taskDoctor, {color: colors.textPrimary}]}>{a.doctorName}</Text>
-                <View style={s.taskMetaRow}>
-                  <Icon name="car" size={12} color={colors.textSecondary} />
-                  <Text style={[s.taskMeta, {color: colors.textSecondary}]}>
-                    {a.doctorCarNumber?.trim() || 'Plate not on file'}
-                    {a.doctorCardCode ? `  ·  code ${a.doctorCardCode}` : ''}
+                  {/* Doctors can now say an hour out, and "~60 min" reads
+                      worse than "~1 hr" on a card being scanned at a counter. */}
+                  <Text style={[s.taskStatusTxt, {color: colors.info}]}>
+                    ~{a.eta >= 60 ? `${Math.round(a.eta / 6) / 10} hr` : `${a.eta} min`}
                   </Text>
                 </View>
+                <Text style={[s.taskDoctor, {color: colors.textPrimary}]}>{a.doctorName}</Text>
+                <Text style={[s.taskMeta, {color: colors.textSecondary, marginTop: 2}]} numberOfLines={1}>
+                  {a.doctorCarNumber?.trim() || 'Plate not on file'}
+                </Text>
+                {!!a.doctorCardCode && (
+                  <Text style={[s.taskMeta, {color: colors.textMuted}]}>Code {a.doctorCardCode}</Text>
+                )}
                 {/* Kept from the old home-screen card. "They've arrived"
                     skips typing the code once they're standing here; without
                     a plate on file it still saves re-entering their identity.
@@ -1184,10 +1228,10 @@ export function ValetHomeScreen() {
               <View style={s.jobHead}>
                 <View style={{flex: 1}}>
                   <Text style={[s.jobPlate, {color: colors.textPrimary}]} numberOfLines={1}>{t.carNumber}</Text>
-                  <Text style={[s.jobWho, {color: colors.textSecondary}]} numberOfLines={1}>
-                    {t.doctorName}
-                    {t.slotId ? `  ·  Slot ${t.slotId}` : ''}
-                  </Text>
+                  <Text style={[s.jobWho, {color: colors.textSecondary}]} numberOfLines={1}>{t.doctorName}</Text>
+                  {!!t.slotId && (
+                    <Text style={[s.jobSlot, {color: colors.textMuted}]} numberOfLines={1}>Slot {t.slotId}</Text>
+                  )}
                 </View>
                 <View style={s.jobHeadRight}>
                   <View style={[s.jobTypeTag, {backgroundColor: tc}]}>
@@ -1228,13 +1272,14 @@ export function ValetHomeScreen() {
               {t.type === 'retrieve' && (() => {
                 const en = enRouteSeconds(t, now);
                 const mins = t.plannedDepartureMinutes;
+                const left = minutesUntilDeparture(t.requestedAt, mins, now);
                 if (mins == null && en == null) return null;
                 return (
                   <View style={s.jobClocks}>
                     {mins != null && (
-                      <View style={[s.departureChip, {backgroundColor: departureTone(mins, colors) + '1F'}]}>
-                        <Text style={[s.departureChipTxt, {color: departureTone(mins, colors)}]}>
-                          {plannedDepartureLabel(mins)}
+                      <View style={[s.departureChip, {backgroundColor: departureTone(left, colors) + '1F'}]}>
+                        <Text style={[s.departureChipTxt, {color: departureTone(left, colors)}]}>
+                          {plannedDepartureLabel(t.requestedAt, mins, now)}
                         </Text>
                       </View>
                     )}
@@ -1398,14 +1443,16 @@ const s = StyleSheet.create({
   emptyBox:{borderRadius:14,borderWidth:1,borderStyle:'dashed',padding:24,alignItems:'center',marginBottom:16},
   emptyTxt:{fontSize:13,fontWeight:'600'},
   subContent:{padding:20,paddingBottom:40},
-  confirmCard:{flexDirection:'row',alignItems:'flex-start',gap:12,borderRadius:16,borderWidth:1,padding:14,marginBottom:18},
-  confirmAvatar:{width:44,height:44,borderRadius:14,alignItems:'center',justifyContent:'center'},
+  confirmCard:{borderRadius:18,padding:18,marginBottom:18},
   confirmAvatarTxt:{fontSize:18,fontWeight:'900'},
-  confirmName:{fontSize:16,fontWeight:'900'},
-  confirmMetaRow:{flexDirection:'row',alignItems:'center',gap:5,marginTop:3},
-  confirmMeta:{fontSize:12,fontWeight:'600'},
-  confirmStatusPill:{borderRadius:8,paddingHorizontal:8,paddingVertical:4},
-  confirmStatusTxt:{fontSize:10,fontWeight:'700'},
+  jobSlot:{fontSize:12,fontWeight:'600',marginTop:1},
+  confirmTop:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:10},
+  confirmWho:{flex:1,fontSize:20,fontWeight:'900',letterSpacing:-0.3},
+  confirmSub:{fontSize:13,fontWeight:'700',marginTop:3},
+  confirmFacts:{marginTop:12,paddingTop:10,borderTopWidth:1,gap:7},
+  confirmFactRow:{flexDirection:'row',alignItems:'center'},
+  confirmFactKey:{width:88,fontSize:10,fontWeight:'800',letterSpacing:0.8},
+  confirmFactVal:{flex:1,fontSize:15,fontWeight:'800',fontVariant:['tabular-nums']},
   confirmTypePill:{flexDirection:'row',alignItems:'center',gap:4,borderRadius:8,paddingHorizontal:8,paddingVertical:5},
   confirmTypeTxt:{fontSize:9,fontWeight:'800',letterSpacing:0.5},
   stepLabel:{fontSize:10,fontWeight:'800',letterSpacing:1.5,marginBottom:8},
@@ -1413,7 +1460,6 @@ const s = StyleSheet.create({
   driverSearchRow:{flexDirection:'row',gap:10,marginBottom:16},
   driverSearchBox:{flex:1,flexDirection:'row',alignItems:'center',gap:8,borderRadius:14,borderWidth:1,paddingHorizontal:14,height:48},
   driverSearchInput:{flex:1,fontSize:14,fontWeight:'600',height:48},
-  driverFilterBtn:{width:48,height:48,borderRadius:14,borderWidth:1,alignItems:'center',justifyContent:'center'},
   assignNoteCard:{flexDirection:'row',alignItems:'center',gap:10,borderRadius:14,borderWidth:1,padding:14,marginTop:8},
   assignNoteIconWrap:{width:32,height:32,borderRadius:10,alignItems:'center',justifyContent:'center'},
   assignNoteTxt:{flex:1,fontSize:12,fontWeight:'600',lineHeight:17},

@@ -1,6 +1,7 @@
 import React, {useState, useEffect, useRef} from 'react';
 import {View, Text, StyleSheet, ScrollView, Animated, Modal, Pressable, Easing} from 'react-native';
 import {useDialog} from '../../components/AppDialog';
+import {computeTrip} from '../../utils/geo';
 import {PressableScale} from '../../components/PressableScale';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import LinearGradient from 'react-native-linear-gradient';
@@ -14,14 +15,28 @@ import {BRAND_GRADIENT, BRAND_GRADIENT_DARK} from '../../theme/colors';
 import {Icon} from '../../components/Icon';
 import {SkeletonBlock} from '../../components/Skeleton';
 import {
-  PLANNED_DEPARTURE_OPTIONS, plannedDepartureLabel, enRouteSeconds, fmtDuration,
+  PLANNED_DEPARTURE_OPTIONS, ARRIVAL_ETA_OPTIONS, clockToMinutes, fmtClock12, to12, to24,
+  enRouteSeconds,
 } from '../../utils/retrievalClocks';
 
 // The doctor's PLANNED DEPARTURE — "I intend to leave in X minutes".
 // Never an arrival estimate: the system can't promise when the car turns up.
 const DEPARTURE_OPTIONS = PLANNED_DEPARTURE_OPTIONS;
+// 12-hour clock: 12, 1, 2 … 11, in the order a clock face reads.
+const HOURS_12 = [12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+
+// "Now, rounded up to the next 5 minutes" — the sensible default for a
+// departure picker, and never a time that has already passed.
+function nextFiveMinuteMark(): Date {
+  const d = new Date();
+  d.setMinutes(Math.ceil(d.getMinutes() / 5) * 5, 0, 0);
+  return d;
+}
+// 5-minute steps: a departure plan is not a precise instant, and 60 rows of
+// minutes to scroll would make the common case slower, not more accurate.
+const MINUTES = Array.from({length: 12}, (_, i) => i * 5);
 // The "on my way in" arrival notice is a separate feature with its own scale.
-const ETA_OPTIONS_ARRIVAL = [10, 20, 30, 40];
+const ETA_OPTIONS_ARRIVAL = ARRIVAL_ETA_OPTIONS;
 
 // Modal's own `animationType="fade"` just snaps opacity 0→1 on the whole
 // overlay in one flat step — no easing, no motion — which is why it read as
@@ -78,7 +93,7 @@ function BottomSheetModal({visible, onClose, children}: {visible: boolean; onClo
 export function DoctorHomeScreen() {
   const dialog = useDialog();
   const {user} = useAuth();
-  const {tasks, sendArrivalNotice, hydrated} = useAppState();
+  const {tasks, sendArrivalNotice, cancelMyRetrieval, hydrated} = useAppState();
   const {colors, isDark} = useTheme();
   const navigation = useNavigation<any>();
   const {activeRetrieve, now, requestRetrieval} = useRetrievalRequest();
@@ -87,6 +102,18 @@ export function DoctorHomeScreen() {
   const [showArrivalModal, setShowArrivalModal] = useState(false);
   const [showDepartureModal, setShowDepartureModal] = useState(false);
   const [selectedEta, setSelectedEta]     = useState<number | null>(null);
+  // Custom clock pick. `customOn` is what distinguishes "chose 15 min" from
+  // "chose a time that happens to be 15 minutes away" — without it, opening
+  // the clock and picking the same value as a quick-pick would silently
+  // collapse the two and close the picker under the doctor.
+  const [customOn, setCustomOn]           = useState(false);
+  // Seeded to the next 5-minute mark. Rounding the minutes alone wrapped 58
+  // to 0 without carrying the hour, so opening the picker at 3:58 defaulted to
+  // 3:00 — already past, which clockToMinutes then resolved to TOMORROW,
+  // 23 hours out. setMinutes(60) rolls the hour over properly.
+  const [customH, setCustomH]             = useState(() => nextFiveMinuteMark().getHours());
+  const [customM, setCustomM]             = useState(() => nextFiveMinuteMark().getMinutes());
+  const [cancelling, setCancelling]       = useState(false);
   const [requesting, setRequesting]       = useState(false);
   const [showTracking, setShowTracking]   = useState(false);
   const [arrivalEta, setArrivalEta]       = useState<number | null>(null);
@@ -147,17 +174,53 @@ export function DoctorHomeScreen() {
     }
   };
 
+  // The minutes actually sent. A custom pick is resolved against the clock at
+  // SEND time, not at pick time — a doctor who opens the sheet, picks 18:00
+  // and then takes two minutes to confirm must still get 18:00, not 18:02.
+  const departureMinutes = customOn ? clockToMinutes(customH, customM, Date.now()) : selectedEta;
+
   const handleDeparture = async () => {
-    if (selectedEta == null) return;   // 0 = "Now" is valid, and falsy
+    if (departureMinutes == null) return;   // 0 ("now") is valid, and falsy
     setRequesting(true);
     try {
-      await requestRetrieval(selectedEta);
+      await requestRetrieval(departureMinutes);
       setShowDepartureModal(false);
+      setCustomOn(false); setSelectedEta(null);
     } catch (err: any) {
       dialog.alert(err.message || 'Could not request retrieval', {title: 'Error'});
     } finally {
       setRequesting(false);
     }
+  };
+
+  // Calling off a departure. Confirmed first because a valet may already be
+  // walking to the car, and the backend refuses outright once the driver has
+  // set off — at that point the car is out of its slot and "cancel" would
+  // describe nothing real.
+  const handleCancelRetrieval = () => {
+    if (!activeRetrieve) return;
+    dialog.show({
+      title: 'Cancel your request?',
+      message: `The valet will be told you no longer need ${activeRetrieve.carNumber}. Your car stays parked.`,
+      tone: 'warning',
+      buttons: [
+        {text: 'Keep it', style: 'cancel'},
+        {
+          text: 'Cancel request',
+          style: 'destructive',
+          onPress: async () => {
+            setCancelling(true);
+            try {
+              await cancelMyRetrieval(activeRetrieve.id);
+            } catch (err: any) {
+              dialog.alert(err.message || 'Could not cancel', {title: 'Cannot cancel'});
+            } finally {
+              setCancelling(false);
+            }
+          },
+        },
+      ],
+    });
   };
 
   // Wall-clock time of day, e.g. "3:40 PM" — NOT a duration.
@@ -223,14 +286,26 @@ export function DoctorHomeScreen() {
               'delivered' — the CAR READY AT ENTRANCE banner below already
               covers that, so both wouldn't need to say it at once. */}
           {activeRetrieve && activeRetrieve.status !== 'delivered' && (() => {
-            // The doctor is told what is HAPPENING, never when the car will
-            // arrive. Their planned-departure choice was scheduling
-            // information for the valet team — turning it into a countdown
-            // here would be promising a delivery time the system has no way
-            // to honour. The only clock shown is the real trip, and only
-            // once a driver has actually set off.
+            // The number here is the SAME live GPS estimate the tracking map
+            // shows — real remaining distance to the handover point, divided
+            // by a driving speed. It is not derived from the doctor's planned
+            // departure: that was scheduling information for the valet team,
+            // and rendering it back as a countdown would promise an arrival
+            // time nothing can honour.
+            //
+            // What was here before counted UP in mm:ss — elapsed time since
+            // the driver set off. "02:47" answers a question nobody asked; a
+            // doctor deciding whether to walk down needs time REMAINING.
             const enRoute = enRouteSeconds(activeRetrieve, now);
             const onTheWay = activeRetrieve.status === 'in_transit' && enRoute != null;
+            const trip = onTheWay
+              ? computeTrip({
+                  startLat: activeRetrieve.driverStartLat, startLng: activeRetrieve.driverStartLng,
+                  lat: activeRetrieve.driverLat, lng: activeRetrieve.driverLng,
+                  destinationLat: activeRetrieve.destinationLat, destinationLng: activeRetrieve.destinationLng,
+                  mode: 'drive',
+                })
+              : null;
             return (
               <Animated.View style={{transform: [{scale: onTheWay ? pulse : 1}]}}>
                 <LinearGradient colors={isDark ? BRAND_GRADIENT_DARK : BRAND_GRADIENT} style={s.countdownCard} start={{x:0,y:0}} end={{x:1,y:1}}>
@@ -240,9 +315,22 @@ export function DoctorHomeScreen() {
                         <Icon name="car" size={13} color="rgba(255,255,255,0.8)" />
                         <Text style={s.countdownLabel}>Vehicle on the way</Text>
                       </View>
-                      <Text style={s.countdownTimer}>{fmtDuration(enRoute!)}</Text>
+                      {/* No GPS fix yet means no honest estimate — say that
+                          rather than showing a number the phone cannot back
+                          up, or falling back to the elapsed clock that made
+                          no sense in the first place. */}
+                      {trip ? (
+                        <>
+                          <Text style={s.countdownTimer}>
+                            {trip.etaMinutes <= 0 ? 'Now' : `~${trip.etaMinutes}`}
+                          </Text>
+                          {trip.etaMinutes > 0 && <Text style={s.countdownUnit}>min away</Text>}
+                        </>
+                      ) : (
+                        <Text style={s.countdownLocating}>Locating your car…</Text>
+                      )}
                       <Text style={s.countdownSub}>
-                        {activeRetrieve.driverName ?? 'Your driver'} · collect at the valet counter
+                        {activeRetrieve.driverName ?? 'Your driver'} is bringing it to the valet counter
                       </Text>
                       <PressableScale style={s.countdownTrackBtn} onPress={() => setShowTracking(true)}>
                         <Icon name="map" size={15} color="#fff" />
@@ -257,6 +345,20 @@ export function DoctorHomeScreen() {
                       <Text style={s.sentTitle}>Departure request sent</Text>
                       <Text style={s.sentBody}>The valet team has been notified.</Text>
                       <Text style={s.sentBody}>We'll notify you when your vehicle is on the way.</Text>
+                      {/* Only while the car is still in its slot. Once the
+                          driver sets off the card above switches to the live
+                          trip and this disappears — cancelling then would
+                          describe nothing real, and the backend refuses it
+                          anyway, so offering the button would be a lie. */}
+                      <PressableScale
+                        style={[s.cancelReqBtn, cancelling && {opacity: 0.6}]}
+                        disabled={cancelling}
+                        onPress={handleCancelRetrieval}>
+                        <Icon name="close" size={13} color="#fff" />
+                        <Text style={s.cancelReqBtnTxt}>
+                          {cancelling ? 'Cancelling…' : 'Cancel request'}
+                        </Text>
+                      </PressableScale>
                     </>
                   )}
                 </LinearGradient>
@@ -326,7 +428,7 @@ export function DoctorHomeScreen() {
             <View style={[s.noticeBanner, {backgroundColor: colors.success + '10', borderColor: colors.success + '30'}]}>
               <Icon name="bellAlert" size={16} color={colors.success} />
               <Text style={[s.noticeBannerTxt, {color: colors.success}]}>
-                Valet notified — arriving in ~{arrivalSent} min
+                Valet notified — arriving in ~{arrivalSent >= 60 ? `${arrivalSent / 60} hr` : `${arrivalSent} min`}
               </Text>
             </View>
           )}
@@ -420,7 +522,7 @@ export function DoctorHomeScreen() {
               <Text style={s.departureHeaderTxt}>{arrivalSent ? 'Valet Notified' : 'On Your Way?'}</Text>
               <Text style={s.departureHeaderSub}>
                 {arrivalSent
-                  ? `We told the valet you'll arrive in ~${arrivalSent} min`
+                  ? `We told the valet you'll arrive in ~${arrivalSent >= 60 ? `${arrivalSent / 60} hr` : `${arrivalSent} min`}`
                   : 'Let the valet know before you get here so a driver is ready'}
               </Text>
             </LinearGradient>
@@ -442,8 +544,14 @@ export function DoctorHomeScreen() {
                             borderColor: on ? colors.textPrimary : colors.border,
                           },
                         ]}>
-                        <Text style={[s.etaBtnNum, {color: on ? colors.background : colors.textPrimary}]}>{opt}</Text>
-                        <Text style={[s.etaBtnSub, {color: on ? colors.background + 'AA' : colors.textMuted}]}>min</Text>
+                        {/* 60 reads as "1 hr", not "60 min" — nobody says
+                            sixty minutes, and the unit label has to follow. */}
+                        <Text style={[s.etaBtnNum, {color: on ? colors.background : colors.textPrimary}]}>
+                          {opt >= 60 ? opt / 60 : opt}
+                        </Text>
+                        <Text style={[s.etaBtnSub, {color: on ? colors.background + 'AA' : colors.textMuted}]}>
+                          {opt >= 60 ? 'hr' : 'min'}
+                        </Text>
                       </PressableScale>
                     );
                   })}
@@ -479,11 +587,11 @@ export function DoctorHomeScreen() {
               <Text style={[s.etaQuestion, {color: colors.textMuted}]}>WHEN ARE YOU LEAVING?</Text>
               <View style={s.etaGrid}>
                 {DEPARTURE_OPTIONS.map(opt => {
-                  const on = selectedEta === opt;
+                  const on = !customOn && selectedEta === opt;
                   return (
                     <PressableScale
                       key={opt}
-                      onPress={() => setSelectedEta(opt)}
+                      onPress={() => { setCustomOn(false); setSelectedEta(opt); }}
                       disabled={requesting}
                       style={[
                         s.etaBtn,
@@ -492,30 +600,99 @@ export function DoctorHomeScreen() {
                           borderColor: on ? colors.textPrimary : colors.border,
                         },
                       ]}>
-                      <Text style={[s.etaBtnNum, {color: on ? colors.background : colors.textPrimary}]}>
-                        {opt === 0 ? 'Now' : opt}
-                      </Text>
-                      {opt !== 0 && (
-                        <Text style={[s.etaBtnSub, {color: on ? colors.background + 'AA' : colors.textMuted}]}>min</Text>
-                      )}
+                      <Text style={[s.etaBtnNum, {color: on ? colors.background : colors.textPrimary}]}>{opt}</Text>
+                      <Text style={[s.etaBtnSub, {color: on ? colors.background + 'AA' : colors.textMuted}]}>min</Text>
                     </PressableScale>
                   );
                 })}
+                <PressableScale
+                  onPress={() => { setCustomOn(true); setSelectedEta(null); }}
+                  disabled={requesting}
+                  style={[
+                    s.etaBtn,
+                    {
+                      backgroundColor: customOn ? colors.textPrimary : colors.cardAlt,
+                      borderColor: customOn ? colors.textPrimary : colors.border,
+                    },
+                  ]}>
+                  <Icon name="timer" size={19} color={customOn ? colors.background : colors.textPrimary} />
+                  <Text style={[s.etaBtnSub, {color: customOn ? colors.background + 'AA' : colors.textMuted}]}>custom</Text>
+                </PressableScale>
               </View>
+
+              {/* 24-hour clock, built from plain lists rather than a native
+                  picker so it needs no extra dependency and reads the same on
+                  every device. Whatever is chosen resolves to the NEXT
+                  occurrence of that time, so "within 24 hours" is true by
+                  construction — there is no input that can land outside it,
+                  and therefore nothing to validate or reject. */}
+              {customOn && (() => {
+                // customH is kept as a 24-hour value — one number, so the
+                // conversion to minutes stays unambiguous. The 12-hour hour
+                // and AM/PM shown here are derived from it, and edits are
+                // converted straight back, so 12 AM and 12 PM can never drift.
+                const {h12, pm} = to12(customH);
+                return (
+                  <View style={[s.clockWrap, {borderColor: colors.border, backgroundColor: colors.cardAlt}]}>
+                    <View style={s.clockCols}>
+                      <ScrollView style={s.clockCol} showsVerticalScrollIndicator={false}>
+                        {HOURS_12.map(h => {
+                          const on = h12 === h;
+                          return (
+                            <PressableScale key={h} onPress={() => setCustomH(to24(h, pm))}
+                              style={[s.clockCell, on && {backgroundColor: colors.primary}]}>
+                              <Text style={[s.clockCellTxt, {color: on ? colors.textOnPrimary : colors.textPrimary}]}>{h}</Text>
+                            </PressableScale>
+                          );
+                        })}
+                      </ScrollView>
+                      <Text style={[s.clockColon, {color: colors.textPrimary}]}>:</Text>
+                      <ScrollView style={s.clockCol} showsVerticalScrollIndicator={false}>
+                        {MINUTES.map(m => (
+                          <PressableScale key={m} onPress={() => setCustomM(m)}
+                            style={[s.clockCell, customM === m && {backgroundColor: colors.primary}]}>
+                            <Text style={[s.clockCellTxt, {color: customM === m ? colors.textOnPrimary : colors.textPrimary}]}>
+                              {String(m).padStart(2, '0')}
+                            </Text>
+                          </PressableScale>
+                        ))}
+                      </ScrollView>
+                      <View style={s.meridiemCol}>
+                        {[false, true].map(isPm => {
+                          const on = pm === isPm;
+                          return (
+                            <PressableScale key={String(isPm)} onPress={() => setCustomH(to24(h12, isPm))}
+                              style={[s.meridiemCell, {borderColor: colors.border}, on && {backgroundColor: colors.primary, borderColor: colors.primary}]}>
+                              <Text style={[s.clockCellTxt, {color: on ? colors.textOnPrimary : colors.textPrimary}]}>
+                                {isPm ? 'PM' : 'AM'}
+                              </Text>
+                            </PressableScale>
+                          );
+                        })}
+                      </View>
+                    </View>
+                    <Text style={[s.clockSummary, {color: colors.textSecondary}]}>
+                      Leaving at {fmtClock12(customH, customM)}
+                      {departureMinutes != null && departureMinutes >= 720 ? ' tomorrow' : ''}
+                      {departureMinutes != null && `  ·  in ${Math.floor(departureMinutes / 60)}h ${departureMinutes % 60}m`}
+                    </Text>
+                  </View>
+                );
+              })()}
               {/* No "car ready by <time>" preview — that was an arrival
                   promise dressed up as a confirmation. */}
 
               <PressableScale
                 onPress={handleDeparture}
-                disabled={selectedEta == null || requesting}
+                disabled={departureMinutes == null || requesting}
                 style={[
                   s.etaConfirmBtn,
-                  {backgroundColor: selectedEta != null ? colors.primary : colors.border, opacity: requesting ? 0.6 : 1},
+                  {backgroundColor: departureMinutes != null ? colors.primary : colors.border, opacity: requesting ? 0.6 : 1},
                 ]}>
-                <Text style={[s.etaConfirmTxt, {color: selectedEta != null ? colors.textOnPrimary : colors.textMuted}]}>
-                  {requesting ? 'Sending…' : selectedEta != null ? 'Send departure request' : 'Select a time above'}
+                <Text style={[s.etaConfirmTxt, {color: departureMinutes != null ? colors.textOnPrimary : colors.textMuted}]}>
+                  {requesting ? 'Sending…' : departureMinutes != null ? 'Send departure request' : 'Select a time above'}
                 </Text>
-                {selectedEta != null && !requesting && <Icon name="arrowRight" size={15} color={colors.textOnPrimary} />}
+                {departureMinutes != null && !requesting && <Icon name="arrowRight" size={15} color={colors.textOnPrimary} />}
               </PressableScale>
             </View>
           </View>
@@ -587,10 +764,23 @@ const s = StyleSheet.create({
   countdownLabelRow:{flexDirection:'row',alignItems:'center',gap:6},
   countdownLabel:{color:'rgba(255,255,255,0.8)',fontSize:12,fontWeight:'700'},
   countdownTimer:{color:'#fff',fontSize:56,fontWeight:'900',fontVariant:['tabular-nums'],marginVertical:6},
+  countdownUnit:{color:'rgba(255,255,255,0.75)',fontSize:13,fontWeight:'800',marginTop:-6,marginBottom:6},
+  countdownLocating:{color:'#fff',fontSize:22,fontWeight:'900',marginVertical:14},
   countdownSub:{color:'rgba(255,255,255,0.7)',fontSize:12,textAlign:'center'},
   sentIconWrap:{width:52,height:52,borderRadius:26,backgroundColor:'rgba(255,255,255,0.18)',alignItems:'center',justifyContent:'center',marginBottom:14},
   sentTitle:{color:'#fff',fontSize:18,fontWeight:'900',marginBottom:8,textAlign:'center'},
   sentBody:{color:'rgba(255,255,255,0.75)',fontSize:13,textAlign:'center',lineHeight:19},
+  clockWrap:{marginTop:14,borderWidth:1,borderRadius:14,padding:12},
+  clockCols:{flexDirection:'row',alignItems:'center',justifyContent:'center',gap:8,height:150},
+  meridiemCol:{justifyContent:'center',gap:8,marginLeft:4},
+  meridiemCell:{paddingVertical:10,paddingHorizontal:14,borderRadius:10,borderWidth:1,alignItems:'center'},
+  clockCol:{width:66},
+  clockCell:{paddingVertical:9,alignItems:'center',borderRadius:9,marginVertical:2},
+  clockCellTxt:{fontSize:17,fontWeight:'800',fontVariant:['tabular-nums']},
+  clockColon:{fontSize:20,fontWeight:'800'},
+  clockSummary:{marginTop:10,textAlign:'center',fontSize:12,fontWeight:'700'},
+  cancelReqBtn:{flexDirection:'row',alignItems:'center',justifyContent:'center',gap:7,marginTop:14,paddingVertical:10,paddingHorizontal:18,borderRadius:11,borderWidth:1,borderColor:'rgba(255,255,255,0.35)',backgroundColor:'rgba(0,0,0,0.14)'},
+  cancelReqBtnTxt:{color:'#fff',fontSize:13,fontWeight:'800'},
   countdownTrackBtn:{flexDirection:'row',alignItems:'center',gap:8,marginTop:16,backgroundColor:'rgba(255,255,255,0.2)',borderRadius:12,paddingVertical:12,paddingHorizontal:20,borderWidth:1,borderColor:'rgba(255,255,255,0.3)'},
   countdownTrackBtnTxt:{color:'#fff',fontSize:13,fontWeight:'800'},
 

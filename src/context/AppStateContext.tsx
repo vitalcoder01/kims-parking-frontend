@@ -31,6 +31,10 @@ export interface ParkingTask {
   type: TaskType;
   doctorId: number;
   doctorName: string;
+  // Who the doctor/staff member is, for the valet's dispatch card. No phone
+  // number — serializeTask reaches drivers too.
+  doctorDepartment?: string;
+  doctorEmployeeId?: string;
   carNumber: string;
   slotId?: string; // ParkingSlot's id stays a human-readable code, e.g. "A-001"
   driverId?: number;
@@ -206,6 +210,7 @@ interface AppState {
   addTask: (task: Omit<ParkingTask, 'id'>) => Promise<number>;
   /** plannedDepartureMinutes: 0 | 10 | 20 | 30 | 40 — not an ETA. */
   requestRetrieval: (plannedDepartureMinutes: number) => Promise<number>;
+  cancelMyRetrieval: (taskId: number) => Promise<void>;
   // Doctor/staff: "I'm on my way" — before any car/key exists yet, so this
   // has no task id to hand back, just fires the valet-facing notice + push.
   sendArrivalNotice: (eta: number) => Promise<void>;
@@ -784,6 +789,15 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
   }, []);
 
+  // Doctor/staff: call off a departure request. The valet (and any assigned
+  // driver) are told by the backend inside the same operation, so a doctor
+  // whose phone dies right after tapping this still can't leave a valet
+  // walking out to a car nobody is coming for.
+  const cancelMyRetrieval = useCallback(async (taskId: number) => {
+    const updated = mapTask(await tasksApi.cancelMyRetrieval(taskId));
+    setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
+  }, []);
+
   const assignDriver = useCallback(async (taskId: number, driverId: number) => {
     await stopAssignmentAlarm().catch(() => {});
     // Only a retrieval needs a destination at all — that's the valet's own
@@ -996,7 +1010,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     <Ctx.Provider value={{
       drivers, tasks, slots, visitors, arrivalNotices, notifications, hydrated,
       driverLocations, onlineDriverIds, reassignPrompt, clearReassignPrompt,
-      addTask, requestRetrieval, sendArrivalNotice, acceptRetrieval, dismissArrivalNotice, updateTask, assignDriver, acceptTask, rejectTask, markKeyCollected, markParked, markRetrieved, confirmTaskDelivered, cancelTask, recallTask, markTaskReturned, fetchTaskHistory, reportLocation,
+      addTask, requestRetrieval, cancelMyRetrieval, sendArrivalNotice, acceptRetrieval, dismissArrivalNotice, updateTask, assignDriver, acceptTask, rejectTask, markKeyCollected, markParked, markRetrieved, confirmTaskDelivered, cancelTask, recallTask, markTaskReturned, fetchTaskHistory, reportLocation,
       setDriverStatus, addVisitor,
       assignVisitorDriver, acceptVisitorTask, rejectVisitorTask, cancelVisitor,
       markVisitorPickedUp, markVisitorParked, assignRetrievalDriver, markVisitorRetrieved, confirmVisitorDelivered,
