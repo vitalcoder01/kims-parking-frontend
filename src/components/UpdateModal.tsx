@@ -23,16 +23,21 @@ export function UpdateModal() {
 
   if (!info) return null;
 
+  // Mandatory — no "Later" and no dismiss (back button/backdrop are both
+  // no-ops). An old build left running can drift out of sync with the
+  // backend's current contract and confuses the valet/driver flows for
+  // everyone else, not just the one stale device, so this is a hard gate
+  // rather than a nag banner.
   return (
-    <Modal transparent animationType="fade" visible statusBarTranslucent>
+    <Modal transparent animationType="fade" visible statusBarTranslucent onRequestClose={() => {}}>
       <View style={s.overlay}>
         <View style={[s.card, {backgroundColor: colors.card, borderColor: colors.border}]}>
           <View style={[s.iconWrap, {backgroundColor: colors.primaryLight}]}>
             <Icon name="rocket" size={26} color={colors.primary} />
           </View>
-          <Text style={[s.title, {color: colors.textPrimary}]}>Update Available</Text>
+          <Text style={[s.title, {color: colors.textPrimary}]}>Update Required</Text>
           <Text style={[s.sub, {color: colors.textSecondary}]}>
-            Version {info.latestVersionName} is ready — you're on {APP_VERSION_NAME}.
+            Version {info.latestVersionName} is required to continue — you're on {APP_VERSION_NAME}.
           </Text>
           {info.notes ? (
             <Text style={[s.notes, {color: colors.textMuted, backgroundColor: colors.cardAlt}]}>{info.notes}</Text>
@@ -41,9 +46,6 @@ export function UpdateModal() {
             style={[s.cta, {backgroundColor: colors.primary, shadowColor: colors.primary}]}
             onPress={() => Linking.openURL(info.apkUrl)}>
             <Text style={s.ctaTxt}>Download & Install</Text>
-          </PressableScale>
-          <PressableScale style={s.later} onPress={() => setInfo(null)}>
-            <Text style={[s.laterTxt, {color: colors.textMuted}]}>Later</Text>
           </PressableScale>
         </View>
       </View>
