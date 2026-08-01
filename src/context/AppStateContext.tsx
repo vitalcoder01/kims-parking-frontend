@@ -748,7 +748,11 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
   // emulator's default location was for parking.
   const requestRetrieval = useCallback(async (plannedDepartureMinutes: number) => {
     const created = mapTask(await tasksApi.requestRetrieval({plannedDepartureMinutes}));
-    setTasks(p => [created, ...p]);
+    // upsertById — same reasoning as addVisitor above: the backend's own
+    // task:upsert broadcast for this row can land before this response
+    // does, and a blind prepend didn't check for that already having
+    // happened.
+    setTasks(p => upsertById(p, created));
     // No notification is fired from here. The backend raises it inside the
     // same operation, addressed to the one valet who owns this doctor's
     // parking session. This used to broadcast to the whole `valet` role from
@@ -915,7 +919,14 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
 
   const addVisitor = useCallback(async (v: {name: string; carNumber?: string; mobile: string; vehicleType?: 'car' | 'bike'}) => {
     const created = mapVisitor(await visitorsApi.create(v));
-    setVisitors(p => [...p, created]);
+    // upsertById, not a blind append: the backend broadcasts its own
+    // visitor:upsert for this same row over the socket, and that delta can
+    // land before this call's own response does. A plain [...p, created]
+    // didn't check whether the socket had already added it, so the same
+    // visitor could end up as two separate entries in this array — showing
+    // as duplicate cards with an identical token everywhere the list is
+    // rendered, even though there was only ever one row in the database.
+    setVisitors(p => upsertById(p, created));
     return created;
   }, []);
 
