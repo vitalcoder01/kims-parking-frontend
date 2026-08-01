@@ -65,6 +65,7 @@ export function ValetHomeScreen() {
   const {user} = useAuth();
   const {drivers, tasks, visitors, addTask, addVisitor, markKeyCollected,
     activeTasks, availableDrivers, retrievalRequests, assignTaskDriver, assignVisitorPickupDriver,
+    cancelTaskAssignment,
     confirmTaskDelivered, cancelTask, recallTask, arrivalNotices, dismissArrivalNotice,
     acceptRetrieval, myValetId} = useValetActions();
   const {hydrated} = useAppState();
@@ -111,6 +112,9 @@ export function ValetHomeScreen() {
   // who they want and would rather scan a fixed order than a shifting one.
   const [driverSearch, setDriverSearch] = useState('');
   const [assigningDriverId, setAssigningDriverId] = useState<number | null>(null);
+  // Which job's pending assignment is being cancelled right now — guards
+  // against a double-tap firing the cancel-assignment call twice.
+  const [cancellingAssignmentId, setCancellingAssignmentId] = useState<number | null>(null);
   // Read from async callbacks that would otherwise close over stale values.
   const assigningDriverIdRef = useRef<number | null>(null);
   assigningDriverIdRef.current = assigningDriverId;
@@ -473,6 +477,17 @@ export function ValetHomeScreen() {
         }},
       ],
     });
+  };
+
+  // Give up on a driver who hasn't accepted yet, right now, instead of
+  // waiting out the accept-timeout window — the job itself (and, for a
+  // visitor, their token) is untouched, just back to "needs a driver".
+  const handleCancelAssignment = (taskId: number) => {
+    if (cancellingAssignmentId != null) return;
+    setCancellingAssignmentId(taskId);
+    cancelTaskAssignment(taskId)
+      .catch(err => dialog.alert(err.message || 'Could not cancel the assignment', {title: 'Error'}))
+      .finally(() => setCancellingAssignmentId(null));
   };
 
   // Past the key handover the car is physically with a driver, so it can't
@@ -1399,9 +1414,19 @@ export function ValetHomeScreen() {
               )}
               {t.status === 'assigned' && !needsDriver && t.type === 'park' && (
                 awaitingAccept ? (
-                  <View style={[s.taskActionBtn, s.jobActions, {borderColor: colors.border, backgroundColor: 'transparent'}]}>
-                    <Icon name="timer" size={13} color={colors.textMuted} />
-                    <Text style={[s.taskActionTxt, {color: colors.textMuted}]}>Waiting for driver to accept…</Text>
+                  <View style={[s.jobActions, {flexDirection: 'row', gap: 8}]}>
+                    <View style={[s.taskActionBtn, {flex: 1, borderColor: colors.border, backgroundColor: 'transparent'}]}>
+                      <Icon name="timer" size={13} color={colors.textMuted} />
+                      <Text style={[s.taskActionTxt, {color: colors.textMuted}]} numberOfLines={1}>Waiting to accept…</Text>
+                    </View>
+                    <PressableScale
+                      style={[s.taskActionBtn, {borderColor: colors.border, backgroundColor: colors.cardAlt, paddingHorizontal: 14}]}
+                      disabled={cancellingAssignmentId === t.id}
+                      onPress={() => handleCancelAssignment(t.id)}>
+                      <Text style={[s.taskActionTxt, {color: colors.textSecondary}]}>
+                        {cancellingAssignmentId === t.id ? 'Cancelling…' : 'Cancel Assign'}
+                      </Text>
+                    </PressableScale>
                   </View>
                 ) : (
                   <PressableScale style={[s.taskActionBtn, s.jobActions, {borderColor: 'transparent', backgroundColor: colors.success}]}

@@ -36,8 +36,8 @@ export function isMyJobToRun(t: ParkingTask, myValetId: number | null | undefine
 }
 
 export function useValetActions() {
-  const {drivers, tasks, visitors, arrivalNotices, dismissArrivalNotice, addTask, assignDriver, markKeyCollected, pushNotification, addVisitor,
-    assignVisitorDriver, assignRetrievalDriver, cancelVisitor,
+  const {drivers, tasks, visitors, arrivalNotices, dismissArrivalNotice, addTask, assignDriver, cancelTaskAssignment, markKeyCollected, pushNotification, addVisitor,
+    assignVisitorDriver, cancelVisitorAssignment, assignRetrievalDriver, cancelVisitor,
     confirmTaskDelivered, confirmVisitorDelivered, cancelTask, recallTask, fetchTaskHistory,
     acceptRetrieval} = useAppState();
   const {user} = useAuth();
@@ -96,6 +96,7 @@ export function useValetActions() {
     acceptRetrieval, myValetId,
     activeTasks, availableDrivers, retrievalRequests, activeVisitors, hasActiveRetrievalDriver,
     assignTaskDriver, assignVisitorPickupDriver, assignVisitorRetrievalDriver,
+    cancelTaskAssignment, cancelVisitorAssignment,
     confirmTaskDelivered, confirmVisitorDelivered, cancelTask, recallTask, fetchTaskHistory,
   };
 }

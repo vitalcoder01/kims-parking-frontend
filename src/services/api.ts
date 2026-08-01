@@ -165,6 +165,10 @@ export const tasksApi = {
   // fixed point, so it naturally works whichever valet does the assigning.
   assignDriver: (id: number, driverId: number, coords?: {lat: number; lng: number}) =>
     client.patch(`/tasks/${id}/assign`, {driverId, lat: coords?.lat, lng: coords?.lng}).then(r => r.data.task),
+  // Give up on a driver who hasn't accepted yet, right now, instead of
+  // waiting out the accept-timeout window. Job stays open, driver freed.
+  cancelAssignment: (id: number) =>
+    client.patch(`/tasks/${id}/cancel-assignment`).then(r => r.data.task),
   accept: (id: number) =>
     client.patch(`/tasks/${id}/accept`).then(r => r.data.task),
   reject: (id: number) =>
@@ -231,6 +235,10 @@ export const visitorsApi = {
     client.post('/visitors', data).then(r => r.data.visitor),
   assignDriver: (id: number, driverId: number) =>
     client.patch(`/visitors/${id}/assign`, {driverId}).then(r => r.data.visitor),
+  // Give up on a driver who hasn't accepted this pickup yet, right now,
+  // instead of waiting out the accept-timeout window. Token stays open.
+  cancelAssignment: (id: number) =>
+    client.patch(`/visitors/${id}/cancel-assignment`).then(r => r.data.visitor),
   acceptTask: (id: number) =>
     client.patch(`/visitors/${id}/accept`).then(r => r.data.visitor),
   rejectTask: (id: number) =>

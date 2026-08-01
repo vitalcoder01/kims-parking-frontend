@@ -224,6 +224,8 @@ interface AppState {
   dismissArrivalNotice: (id: number) => Promise<void>;
   updateTask: (id: number, patch: Partial<ParkingTask>) => Promise<void>;
   assignDriver: (taskId: number, driverId: number) => Promise<void>;
+  // Give up on a driver who hasn't accepted yet, right now. Job stays open.
+  cancelTaskAssignment: (taskId: number) => Promise<void>;
   acceptTask: (taskId: number) => Promise<void>;
   rejectTask: (taskId: number) => Promise<void>;
   markKeyCollected: (taskId: number) => Promise<void>;
@@ -240,6 +242,9 @@ interface AppState {
   setDriverStatus: (driverId: number, status: DriverStatus) => Promise<void>;
   addVisitor: (v: {name: string; carNumber?: string; mobile: string; vehicleType?: 'car' | 'bike'}) => Promise<Visitor>;
   assignVisitorDriver: (visitorId: number, driverId: number) => Promise<void>;
+  // Give up on a driver who hasn't accepted this pickup yet, right now.
+  // Token stays open.
+  cancelVisitorAssignment: (visitorId: number) => Promise<void>;
   acceptVisitorTask: (visitorId: number) => Promise<void>;
   rejectVisitorTask: (visitorId: number) => Promise<void>;
   cancelVisitor: (visitorId: number, reason: 'no_show' | 'valet_cancelled' | 'parking_failed') => Promise<void>;
@@ -822,6 +827,16 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'busy', currentTaskId: taskId} : d)));
   }, [tasks]);
 
+  // Valet: give up on a driver who hasn't accepted yet, right now, instead
+  // of waiting out the accept-timeout window. The job itself is untouched —
+  // just back to "needs a driver".
+  const cancelTaskAssignment = useCallback(async (taskId: number) => {
+    const freedDriverId = tasks.find(t => t.id === taskId)?.driverId;
+    const updated = mapTask(await tasksApi.cancelAssignment(taskId));
+    setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
+    if (freedDriverId != null) setDrivers(p => p.map(d => (d.id === freedDriverId ? {...d, status: 'available', currentTaskId: undefined} : d)));
+  }, [tasks]);
+
   // Driver: explicit accept/decline of an assignment (stops the ringing
   // alarm either way; a decline immediately frees this driver and prompts
   // the valet to reassign via the socket needs-reassign event).
@@ -937,6 +952,15 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'busy', currentTaskId: visitorId} : d)));
   }, []);
 
+  // Valet: give up on a driver who hasn't accepted this pickup yet, right
+  // now, instead of waiting out the accept-timeout window. Token untouched.
+  const cancelVisitorAssignment = useCallback(async (visitorId: number) => {
+    const freedDriverId = visitors.find(v => v.id === visitorId)?.driverId;
+    const updated = mapVisitor(await visitorsApi.cancelAssignment(visitorId));
+    setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
+    if (freedDriverId != null) setDrivers(p => p.map(d => (d.id === freedDriverId ? {...d, status: 'available', currentTaskId: undefined} : d)));
+  }, [visitors]);
+
   const acceptVisitorTask = useCallback(async (visitorId: number) => {
     await stopAssignmentAlarm().catch(() => {});
     const updated = mapVisitor(await visitorsApi.acceptTask(visitorId));
@@ -1028,9 +1052,9 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     <Ctx.Provider value={{
       drivers, tasks, slots, visitors, arrivalNotices, notifications, hydrated,
       driverLocations, onlineDriverIds, reassignPrompt, clearReassignPrompt,
-      addTask, requestRetrieval, cancelMyRetrieval, sendArrivalNotice, acceptRetrieval, dismissArrivalNotice, updateTask, assignDriver, acceptTask, rejectTask, markKeyCollected, markParked, markRetrieved, confirmTaskDelivered, cancelTask, recallTask, markTaskReturned, fetchTaskHistory, reportLocation,
+      addTask, requestRetrieval, cancelMyRetrieval, sendArrivalNotice, acceptRetrieval, dismissArrivalNotice, updateTask, assignDriver, cancelTaskAssignment, acceptTask, rejectTask, markKeyCollected, markParked, markRetrieved, confirmTaskDelivered, cancelTask, recallTask, markTaskReturned, fetchTaskHistory, reportLocation,
       setDriverStatus, addVisitor,
-      assignVisitorDriver, acceptVisitorTask, rejectVisitorTask, cancelVisitor,
+      assignVisitorDriver, cancelVisitorAssignment, acceptVisitorTask, rejectVisitorTask, cancelVisitor,
       markVisitorPickedUp, markVisitorParked, assignRetrievalDriver, markVisitorRetrieved, confirmVisitorDelivered,
       pushNotification, markNotificationRead, clearNotifications, refreshTasks: fetchAll,
     }}>
