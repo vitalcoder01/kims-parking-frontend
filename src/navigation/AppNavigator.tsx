@@ -8,8 +8,6 @@ import {useAuth} from '../context/AuthContext';
 import {Icon, IconName} from '../components/Icon';
 
 import {LoginScreen}             from '../screens/auth/LoginScreen';
-import {SignUpScreen}            from '../screens/auth/SignUpScreen';
-import {DesignationScreen}       from '../screens/auth/DesignationScreen';
 import {DoctorHomeScreen}        from '../screens/doctor/DoctorHomeScreen';
 import {VirtualCardScreen}       from '../screens/doctor/VirtualCardScreen';
 import {VehicleSetupScreen}      from '../screens/doctor/VehicleSetupScreen';
@@ -126,7 +124,7 @@ function RoleRouter() {
 
 export function AppNavigator() {
   const {colors, isDark} = useTheme();
-  const {user, isLoading, needsDesignation} = useAuth();
+  const {user, isLoading} = useAuth();
 
   if (isLoading) {
     return (
@@ -150,15 +148,8 @@ export function AppNavigator() {
     <NavigationContainer theme={navTheme}>
       <Stack.Navigator screenOptions={{headerShown: false}}>
         {user
-          ? (needsDesignation
-              ? <Stack.Screen name="Designation" component={DesignationScreen} />
-              : <Stack.Screen name="App" component={RoleRouter} />)
-          : (
-            <>
-              <Stack.Screen name="Login"  component={LoginScreen} />
-              <Stack.Screen name="SignUp" component={SignUpScreen} />
-            </>
-          )
+          ? <Stack.Screen name="App"   component={RoleRouter}  />
+          : <Stack.Screen name="Login" component={LoginScreen} />
         }
       </Stack.Navigator>
     </NavigationContainer>

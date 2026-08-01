@@ -44,7 +44,7 @@ async function forgetAccount(username: string) {
   await AsyncStorage.setItem(SAVED_ACCOUNTS_KEY, JSON.stringify(existing.filter(a => a.username !== username)));
 }
 
-export function LoginScreen({navigation}: {navigation: any}) {
+export function LoginScreen() {
   const {login} = useAuth();
   const {colors, isDark} = useTheme();
   const [username, setUsername] = useState('');
@@ -224,10 +224,6 @@ export function LoginScreen({navigation}: {navigation: any}) {
               </LinearGradient>
             </PressableScale>
 
-            <PressableScale style={s.signUpRow} onPress={() => navigation.navigate('SignUp')}>
-              <Text style={[s.signUpTxt, {color: colors.textMuted}]}>New here? <Text style={{color: colors.primary, fontWeight: '800'}}>Create an account</Text></Text>
-            </PressableScale>
-
           </Animated.View>
 
           <View style={s.footer}>
@@ -274,9 +270,6 @@ const s = StyleSheet.create({
   errorTxt: {fontSize: 13, fontWeight: '600'},
   loginBtn: {borderRadius: 16, height: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 20},
   loginBtnTxt: {color: '#fff', fontSize: 16, fontWeight: '800', letterSpacing: 0.5},
-
-  signUpRow: {alignItems: 'center', marginTop: 18},
-  signUpTxt: {fontSize: 13, fontWeight: '600'},
 
   keepRow: {flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginTop: 18},
   checkbox: {width: 20, height: 20, borderRadius: 5, borderWidth: 2, alignItems: 'center', justifyContent: 'center', marginTop: 1},
