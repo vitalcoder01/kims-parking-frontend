@@ -20,7 +20,7 @@ interface ThemeContextValue {
 }
 
 const ThemeContext = createContext<ThemeContextValue>({
-  mode: 'system',
+  mode: 'light',
   isDark: false,
   colors: lightColors,
   setMode: () => {},
@@ -31,7 +31,10 @@ const STORAGE_KEY = '@kims_theme_mode';
 
 export function ThemeProvider({children}: {children: React.ReactNode}) {
   const systemScheme = useColorScheme();
-  const [mode, setModeState] = useState<ThemeMode>('system');
+  // Default light — regardless of the device's OS dark-mode setting. A
+  // saved user preference (including an explicit 'system' pick) still
+  // always wins once loaded below.
+  const [mode, setModeState] = useState<ThemeMode>('light');
 
   // Load saved preference on mount
   useEffect(() => {
