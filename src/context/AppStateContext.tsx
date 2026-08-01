@@ -245,13 +245,8 @@ interface AppState {
   // Give up on a driver who hasn't accepted this pickup yet, right now.
   // Token stays open.
   cancelVisitorAssignment: (visitorId: number) => Promise<void>;
-  acceptVisitorTask: (visitorId: number) => Promise<void>;
-  rejectVisitorTask: (visitorId: number) => Promise<void>;
   cancelVisitor: (visitorId: number, reason: 'no_show' | 'valet_cancelled' | 'parking_failed') => Promise<void>;
-  markVisitorPickedUp: (visitorId: number) => Promise<void>;
-  markVisitorParked: (visitorId: number) => Promise<void>;
   assignRetrievalDriver: (visitorId: number, driverId: number) => Promise<void>;
-  markVisitorRetrieved: (visitorId: number) => Promise<void>;
   confirmVisitorDelivered: (visitorId: number) => Promise<void>;
   pushNotification: (n: Omit<Notification, 'id' | 'createdAt' | 'read'>) => Promise<void>;
   /** Re-read everything from the server. For the rare case a client knows its
@@ -961,46 +956,11 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     if (freedDriverId != null) setDrivers(p => p.map(d => (d.id === freedDriverId ? {...d, status: 'available', currentTaskId: undefined} : d)));
   }, [visitors]);
 
-  const acceptVisitorTask = useCallback(async (visitorId: number) => {
-    await stopAssignmentAlarm().catch(() => {});
-    const updated = mapVisitor(await visitorsApi.acceptTask(visitorId));
-    setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
-  }, []);
-
-  const rejectVisitorTask = useCallback(async (visitorId: number) => {
-    await stopAssignmentAlarm().catch(() => {});
-    const existing = visitors.find(v => v.id === visitorId);
-    const updated = mapVisitor(await visitorsApi.rejectTask(visitorId));
-    setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
-    const driverId = existing?.driverId;
-    if (driverId) setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'available', currentTaskId: undefined} : d)));
-  }, [visitors]);
-
   const cancelVisitor = useCallback(async (visitorId: number, reason: 'no_show' | 'valet_cancelled' | 'parking_failed') => {
     const existing = visitors.find(v => v.id === visitorId);
     const updated = mapVisitor(await visitorsApi.cancel(visitorId, reason));
     setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
     const driverId = existing?.driverId;
-    if (driverId) setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'available', currentTaskId: undefined} : d)));
-  }, [visitors]);
-
-  const markVisitorPickedUp = useCallback(async (visitorId: number) => {
-    await stopAssignmentAlarm().catch(() => {});
-    const updated = mapVisitor(await visitorsApi.pickUp(visitorId));
-    setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
-  }, []);
-
-  // No slotId param — the backend auto-assigns the next free slot and
-  // returns it on `updated.slotId`.
-  const markVisitorParked = useCallback(async (visitorId: number) => {
-    await stopAssignmentAlarm().catch(() => {});
-    const existing = visitors.find(v => v.id === visitorId);
-    const updated = mapVisitor(await visitorsApi.park(visitorId));
-    setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
-    if (updated.slotId) {
-      setSlots(p => p.map(s => (s.id === updated.slotId ? {...s, status: 'occupied', carNumber: updated.carNumber} : s)));
-    }
-    const driverId = updated.driverId ?? existing?.driverId;
     if (driverId) setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'available', currentTaskId: undefined} : d)));
   }, [visitors]);
 
@@ -1010,17 +970,6 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
     setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'busy', currentTaskId: visitorId} : d)));
   }, []);
-
-  const markVisitorRetrieved = useCallback(async (visitorId: number) => {
-    await stopAssignmentAlarm().catch(() => {});
-    const existing = visitors.find(v => v.id === visitorId);
-    const updated = mapVisitor(await visitorsApi.retrieve(visitorId));
-    setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
-    const freedSlotId = existing?.slotId;
-    if (freedSlotId) setSlots(p => p.map(s => (s.id === freedSlotId ? {...s, status: 'free', taskId: undefined, carNumber: undefined, doctorId: undefined} : s)));
-    const driverId = existing?.driverId;
-    if (driverId) setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'available', currentTaskId: undefined} : d)));
-  }, [visitors]);
 
   // Valet: confirms the visitor actually took the car — mirrors
   // confirmTaskDelivered above for the staff/doctor flow.
@@ -1054,8 +1003,8 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
       driverLocations, onlineDriverIds, reassignPrompt, clearReassignPrompt,
       addTask, requestRetrieval, cancelMyRetrieval, sendArrivalNotice, acceptRetrieval, dismissArrivalNotice, updateTask, assignDriver, cancelTaskAssignment, acceptTask, rejectTask, markKeyCollected, markParked, markRetrieved, confirmTaskDelivered, cancelTask, recallTask, markTaskReturned, fetchTaskHistory, reportLocation,
       setDriverStatus, addVisitor,
-      assignVisitorDriver, cancelVisitorAssignment, acceptVisitorTask, rejectVisitorTask, cancelVisitor,
-      markVisitorPickedUp, markVisitorParked, assignRetrievalDriver, markVisitorRetrieved, confirmVisitorDelivered,
+      assignVisitorDriver, cancelVisitorAssignment, cancelVisitor,
+      assignRetrievalDriver, confirmVisitorDelivered,
       pushNotification, markNotificationRead, clearNotifications, refreshTasks: fetchAll,
     }}>
       {children}

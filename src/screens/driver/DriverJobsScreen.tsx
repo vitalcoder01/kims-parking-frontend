@@ -16,9 +16,8 @@ import {SkeletonCard} from '../../components/Skeleton';
 export function DriverJobsScreen() {
   const dialog = useDialog();
   const {user} = useAuth();
-  const {tasks, slots, visitors, markParked, markRetrieved, updateTask, pushNotification,
+  const {tasks, slots, markParked, markRetrieved, updateTask, pushNotification,
     acceptTask, rejectTask, fetchTaskHistory, markTaskReturned,
-    acceptVisitorTask, rejectVisitorTask, markVisitorPickedUp, markVisitorParked, markVisitorRetrieved,
     hydrated, refreshTasks} = useAppState();
   const {colors: c, isDark} = useTheme();
 
@@ -31,8 +30,6 @@ export function DriverJobsScreen() {
   // so it shouldn't keep sitting here as this driver's "current job".
   const myTasks = tasks.filter(t => isMyJob(t.driverId, myDriverId) && t.status !== 'completed' && t.status !== 'delivered' && t.status !== 'cancelled');
   const activeTask = myTasks[0] ?? null;
-  const myVisitors = visitors.filter(v => isMyJob(v.driverId, myDriverId)
-    && (v.status === 'pending' || (v.status === 'parked' && v.retrievalRequested)));
 
   // The live `tasks` array is bounded to "at most one row per doctor" now —
   // a completed job vanishes from it the moment that doctor's next car comes
@@ -159,55 +156,6 @@ export function DriverJobsScreen() {
     } catch (err: any) {
       dialog.alert(err.message || 'Could not mark retrieved', {title: 'Error'});
       return;
-    }
-  };
-
-  const handleAcceptVisitorTask = async (visitorId: number) => {
-    try {
-      await acceptVisitorTask(visitorId);
-    } catch (err: any) {
-      dialog.alert(err.message || 'Could not accept task', {title: 'Error'});
-    }
-  };
-
-  const handleRejectVisitorTask = async (visitorId: number) => {
-    try {
-      await rejectVisitorTask(visitorId);
-    } catch (err: any) {
-      dialog.alert(err.message || 'Could not reject task', {title: 'Error'});
-    }
-  };
-
-  const handleMarkVisitorPickedUp = async (visitorId: number) => {
-    try {
-      await markVisitorPickedUp(visitorId);
-    } catch (err: any) {
-      dialog.alert(err.message || 'Could not mark picked up', {title: 'Error'});
-    }
-  };
-
-  const handleMarkVisitorParked = async (visitorId: number) => {
-    try {
-      await markVisitorParked(visitorId);
-    } catch (err: any) {
-      dialog.alert(err.message || 'Could not mark parked', {title: 'Error'});
-    }
-  };
-
-  const handleMarkVisitorRetrieved = async (visitorId: number) => {
-    try {
-      await markVisitorRetrieved(visitorId);
-      // Visitors already carry an owning valet (visitor.valetId, the same
-      // field jobAlerts escalates on) — this alarm just wasn't using it.
-      const vOwner = visitors.find(v => v.id === visitorId)?.valetId;
-      pushNotification({
-        targetRole: vOwner ? `valet:${vOwner}` : 'valet',
-        title: '🔔 Car at the counter',
-        body: `Brought back by ${user?.name}. Confirm once the visitor has taken it.`,
-        type: 'alarm',
-      });
-    } catch (err: any) {
-      dialog.alert(err.message || 'Could not mark retrieved', {title: 'Error'});
     }
   };
 
@@ -426,63 +374,6 @@ export function DriverJobsScreen() {
           </View>
         )}
 
-        {/* Visitor/patient pickups */}
-        {myVisitors.length > 0 && (
-          <>
-            <Text style={[s.sectionTitle, {color: c.primary}]}>Visitor pickups ({myVisitors.length})</Text>
-            {myVisitors.map(v => (
-              <View key={v.id} style={[s.visitorCard, {backgroundColor: c.surface, borderColor: c.border}]}>
-                <View style={s.visitorHead}>
-                  <Icon name={v.vehicleType === 'bike' ? 'carSide' : 'car'} size={16} color={c.textSecondary} />
-                  <Text style={[s.completedTitle, {color: c.primary}]}>{v.name} · {v.carNumber ?? 'no plate'}</Text>
-                </View>
-                {v.status === 'pending' && !v.acceptedAt ? (
-                  <View style={{flexDirection: 'row', gap: 8, marginTop: 10}}>
-                    <PressableScale
-                      style={[s.parkBtn, {backgroundColor: c.cardAlt, flex: 1}]}
-                      onPress={() => handleRejectVisitorTask(v.id)}
-                    >
-                      <Icon name="close" size={15} color={c.primary} />
-                      <Text style={[s.parkBtnTxt, {color: c.primary}]}>Reject</Text>
-                    </PressableScale>
-                    <PressableScale
-                      style={[s.parkBtn, {backgroundColor: c.primary, flex: 1}]}
-                      onPress={() => handleAcceptVisitorTask(v.id)}
-                    >
-                      <Icon name="check" size={15} color={c.textOnPrimary} />
-                      <Text style={[s.parkBtnTxt, {color: c.textOnPrimary}]}>Accept</Text>
-                    </PressableScale>
-                  </View>
-                ) : v.status === 'pending' && !v.pickedUpAt ? (
-                  <PressableScale
-                    style={[s.parkBtn, {backgroundColor: c.primary, alignSelf: 'stretch', marginTop: 10}]}
-                    onPress={() => handleMarkVisitorPickedUp(v.id)}
-                  >
-                    <Icon name="carKey" size={15} color={c.textOnPrimary} />
-                    <Text style={[s.parkBtnTxt, {color: c.textOnPrimary}]}>Picked up vehicle</Text>
-                  </PressableScale>
-                ) : v.status === 'pending' ? (
-                  <PressableScale
-                    style={[s.parkBtn, {backgroundColor: c.primary, alignSelf: 'stretch', marginTop: 10}]}
-                    onPress={() => handleMarkVisitorParked(v.id)}
-                  >
-                    <Icon name="check" size={15} color={c.textOnPrimary} />
-                    <Text style={[s.parkBtnTxt, {color: c.textOnPrimary}]}>Mark parked</Text>
-                  </PressableScale>
-                ) : v.retrievalRequested ? (
-                  <PressableScale style={[s.retrieveBtn, {backgroundColor: c.primary, marginTop: 10}]}
-                    onPress={() => handleMarkVisitorRetrieved(v.id)}>
-                    <Icon name="check" size={16} color={c.textOnPrimary} />
-                    <Text style={[s.retrieveBtnTxt, {color: c.textOnPrimary}]}>Delivered to counter</Text>
-                  </PressableScale>
-                ) : (
-                  <Text style={[s.completedMeta, {color: c.textSecondary, marginTop: 6}]}>Parked at {v.slotId} · awaiting pickup request</Text>
-                )}
-              </View>
-            ))}
-          </>
-        )}
-
         {/* Completed today */}
         {completedToday.length > 0 && (
           <>
@@ -562,8 +453,6 @@ const s = StyleSheet.create({
   idleDesc:{fontSize:13,textAlign:'center',lineHeight:19},
 
   sectionTitle:{fontSize:15,fontWeight:'800',marginBottom:12},
-  visitorCard:{borderRadius:16,borderWidth:1,padding:14,marginBottom:10},
-  visitorHead:{flexDirection:'row',alignItems:'center',gap:8},
   completedRow:{flexDirection:'row',alignItems:'center',borderRadius:16,borderWidth:1,padding:14,marginBottom:8,gap:12},
   completedIconWrap:{width:30,height:30,borderRadius:9,alignItems:'center',justifyContent:'center'},
   completedTitle:{fontSize:13,fontWeight:'700'},

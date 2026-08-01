@@ -239,21 +239,10 @@ export const visitorsApi = {
   // instead of waiting out the accept-timeout window. Token stays open.
   cancelAssignment: (id: number) =>
     client.patch(`/visitors/${id}/cancel-assignment`).then(r => r.data.visitor),
-  acceptTask: (id: number) =>
-    client.patch(`/visitors/${id}/accept`).then(r => r.data.visitor),
-  rejectTask: (id: number) =>
-    client.patch(`/visitors/${id}/reject`).then(r => r.data.visitor),
   cancel: (id: number, reason: 'no_show' | 'valet_cancelled' | 'parking_failed') =>
     client.patch(`/visitors/${id}/cancel`, {reason}).then(r => r.data.visitor),
-  pickUp: (id: number) =>
-    client.patch(`/visitors/${id}/pickup`).then(r => r.data.visitor),
-  // No slotId — the backend auto-assigns the next free slot.
-  park: (id: number) =>
-    client.patch(`/visitors/${id}/park`).then(r => r.data.visitor),
   assignRetrievalDriver: (id: number, driverId: number) =>
     client.patch(`/visitors/${id}/assign-retrieval`, {driverId}).then(r => r.data.visitor),
-  retrieve: (id: number) =>
-    client.patch(`/visitors/${id}/retrieve`).then(r => r.data.visitor),
   confirmDelivered: (id: number) =>
     client.patch(`/visitors/${id}/confirm-delivered`).then(r => r.data.visitor),
 };
