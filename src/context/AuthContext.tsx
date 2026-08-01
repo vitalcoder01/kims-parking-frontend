@@ -25,8 +25,16 @@ interface AuthContextValue {
   user: CurrentUser | null;
   isLoading: boolean;
   login: (username: string, password: string) => Promise<CurrentUser>;
+  register: (name: string, phone: string, password: string) => Promise<CurrentUser>;
   logout: () => Promise<void>;
   updateProfile: (patch: Partial<CurrentUser>) => void;
+  // True for the single moment between a fresh self-registration and the
+  // user picking Doctor/Staff on the one-time designation screen. Deliberately
+  // in-memory only (not persisted) — if the app is killed before it's
+  // answered, the account just stays at its 'doctor' default, which is a
+  // safe, fully-usable fallback, not a broken state.
+  needsDesignation: boolean;
+  clearNeedsDesignation: () => void;
 }
 
 const SESSION_KEY = '@kims_session';
@@ -36,13 +44,17 @@ const Ctx = createContext<AuthContextValue>({
   user: null,
   isLoading: true,
   login: async () => ({} as CurrentUser),
+  register: async () => ({} as CurrentUser),
   logout: async () => {},
   updateProfile: () => {},
+  needsDesignation: false,
+  clearNeedsDesignation: () => {},
 });
 
 export function AuthProvider({children}: {children: React.ReactNode}) {
   const [user, setUser]         = useState<CurrentUser | null>(null);
   const [isLoading, setLoading] = useState(true);
+  const [needsDesignation, setNeedsDesignation] = useState(false);
   const tokenRef = useRef<string | null>(null);
 
   const logout = useCallback(async () => {
@@ -110,6 +122,20 @@ export function AuthProvider({children}: {children: React.ReactNode}) {
     return withTime;
   }, []);
 
+  const register = useCallback(async (name: string, phone: string, password: string) => {
+    const {token, user: newUser} = await authApi.register(name, phone, password);
+    const withTime: CurrentUser = {...newUser, loginTime: Date.now()};
+    tokenRef.current = token;
+    setAuthToken(token);
+    clearConditionalGetCache();
+    setUser(withTime);
+    await AsyncStorage.setItem(SESSION_KEY, JSON.stringify({user: withTime, token, loginTime: Date.now()}));
+    setNeedsDesignation(true);
+    return withTime;
+  }, []);
+
+  const clearNeedsDesignation = useCallback(() => setNeedsDesignation(false), []);
+
   const updateProfile = useCallback((patch: Partial<CurrentUser>) => {
     setUser(prev => {
       if (!prev) return prev;
@@ -123,7 +149,7 @@ export function AuthProvider({children}: {children: React.ReactNode}) {
   }, []);
 
   return (
-    <Ctx.Provider value={{user, isLoading, login, logout, updateProfile}}>
+    <Ctx.Provider value={{user, isLoading, login, register, logout, updateProfile, needsDesignation, clearNeedsDesignation}}>
       {children}
     </Ctx.Provider>
   );
