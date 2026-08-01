@@ -181,7 +181,20 @@ export function DialogProvider({children}: {children: React.ReactNode}) {
                 return (
                   <PressableScale
                     key={`${b.text}-${i}`}
-                    style={[s.btn, {backgroundColor: bg, borderColor: isCancel ? colors.border : 'transparent'}]}
+                    // flex: 1 (from s.btn) only makes sense in the row layout,
+                    // where it splits the row's already-known width evenly.
+                    // Stacked (column, 3+ buttons) has no defined total height
+                    // to divide — flex: 1 there is a classic Yoga trap: the
+                    // button's own padding still paints a coloured bar, but
+                    // its Text child can end up laid out with no resolvable
+                    // height and never actually paints, which is exactly what
+                    // made these buttons look blank. width: '100%' gets the
+                    // same full-width look without that ambiguity.
+                    style={[
+                      s.btn,
+                      buttons.length > 2 && s.btnStacked,
+                      {backgroundColor: bg, borderColor: isCancel ? colors.border : 'transparent'},
+                    ]}
                     onPress={() => { dismiss(); b.onPress?.(); }}>
                     <Text style={[s.btnTxt, {color: fg}]}>{b.text}</Text>
                   </PressableScale>
@@ -206,5 +219,8 @@ const s = StyleSheet.create({
   actions: {flexDirection: 'row', gap: 10, marginTop: 22, alignSelf: 'stretch'},
   actionsStacked: {flexDirection: 'column'},
   btn: {flex: 1, borderRadius: 14, borderWidth: 1, paddingVertical: 14, alignItems: 'center', justifyContent: 'center'},
+  // Overrides flex:1 for the stacked (column) case — see the comment where
+  // this is applied.
+  btnStacked: {flex: 0, width: '100%'},
   btnTxt: {fontSize: 14, fontWeight: '800'},
 });
