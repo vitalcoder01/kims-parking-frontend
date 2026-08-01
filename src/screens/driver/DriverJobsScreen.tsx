@@ -22,6 +22,9 @@ export function DriverJobsScreen() {
   const {colors: c, isDark} = useTheme();
 
   const [slotInput, setSlotInput] = useState('');
+  // Guards handleMarkParked against a double-tap firing the same "mark
+  // parked" call twice while the first is still in flight.
+  const [markingParked, setMarkingParked] = useState(false);
   const carAnim = useRef(new Animated.Value(0)).current;
 
   const myDriverId = useMyDriverId();
@@ -99,7 +102,8 @@ export function DriverJobsScreen() {
   };
 
   const handleMarkParked = async () => {
-    if (!activeTask || !slotInput.trim()) return;
+    if (!activeTask || !slotInput.trim() || markingParked) return;
+    setMarkingParked(true);
     try {
       await markParked(activeTask.id, slotInput.trim().toUpperCase());
       pushNotification({
@@ -121,7 +125,8 @@ export function DriverJobsScreen() {
       setSlotInput('');
     } catch (err: any) {
       dialog.alert(err.message || 'Could not mark parked', {title: 'Error'});
-      return;
+    } finally {
+      setMarkingParked(false);
     }
   };
 
@@ -316,11 +321,11 @@ export function DriverJobsScreen() {
                       />
                     </View>
                     <PressableScale
-                      style={[s.parkBtn, {backgroundColor: c.primary, opacity: slotInput.trim() ? 1 : 0.35}]}
-                      onPress={handleMarkParked} disabled={!slotInput.trim()}
+                      style={[s.parkBtn, {backgroundColor: c.primary, opacity: (slotInput.trim() && !markingParked) ? 1 : 0.35}]}
+                      onPress={handleMarkParked} disabled={!slotInput.trim() || markingParked}
                     >
                       <Icon name="check" size={15} color={c.textOnPrimary} />
-                      <Text style={[s.parkBtnTxt, {color: c.textOnPrimary}]}>Mark parked</Text>
+                      <Text style={[s.parkBtnTxt, {color: c.textOnPrimary}]}>{markingParked ? 'Marking…' : 'Mark parked'}</Text>
                     </PressableScale>
                   </View>
                   {freeSlots.length > 0 && (

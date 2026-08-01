@@ -355,6 +355,12 @@ export function ValetHomeScreen() {
   const handleAddVisitor = async () => {
     // Name is optional; the mobile number and the plate are not.
     if (!canCheckIn) { setMobileTouched(true); setCarTouched(true); return; }
+    // Blocks a fast double-tap from firing two check-ins for the same
+    // visitor — unlike handleScanCode/handleKeyReceived (staff), this had no
+    // guard at all, client or server, so a slow response left the button
+    // tappable and a second tap created a genuine second Visitor row.
+    if (submitting) return;
+    setSubmitting(true);
     try {
       const visitor = await addVisitor({
         name: vName.trim(),
@@ -379,6 +385,8 @@ export function ValetHomeScreen() {
       setScreen('assign');
     } catch (err: any) {
       dialog.alert(err.message || 'Something went wrong', {title: 'Error'});
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -1096,11 +1104,13 @@ export function ValetHomeScreen() {
             </Text>
           </View>
           <PressableScale
-            style={[s.actionBtn, {backgroundColor: canCheckIn ? colors.primary : colors.cardAlt, marginTop: 8}]}
-            onPress={handleAddVisitor} disabled={!canCheckIn}
+            style={[s.actionBtn, {backgroundColor: canCheckIn ? colors.primary : colors.cardAlt, marginTop: 8, opacity: submitting ? 0.6 : 1}]}
+            onPress={handleAddVisitor} disabled={!canCheckIn || submitting}
           >
             <Icon name="whatsapp" size={17} color={canCheckIn ? colors.textOnPrimary : colors.textMuted} />
-            <Text style={[s.actionBtnTxt, {color: canCheckIn ? colors.textOnPrimary : colors.textMuted}]}>Check In</Text>
+            <Text style={[s.actionBtnTxt, {color: canCheckIn ? colors.textOnPrimary : colors.textMuted}]}>
+              {submitting ? 'Checking in…' : 'Check In'}
+            </Text>
           </PressableScale>
         </ScrollView>
       </SafeAreaView>
