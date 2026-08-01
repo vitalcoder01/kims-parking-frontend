@@ -1,5 +1,6 @@
 import React, {useEffect, useState} from 'react';
-import {View, Text, StyleSheet, Linking, ActivityIndicator} from 'react-native';
+import {View, Text, StyleSheet, Linking, ActivityIndicator, Platform} from 'react-native';
+import ReactNativeBlobUtil from 'react-native-blob-util';
 import {PressableScale} from './PressableScale';
 import {useTheme} from '../context/ThemeContext';
 import {appApi} from '../services/api';
@@ -8,6 +9,29 @@ import {APP_VERSION_CODE, APP_VERSION_NAME} from '../config/version';
 
 type UpdateInfo = {latestVersionCode: number; latestVersionName: string; apkUrl: string; notes?: string};
 type GateState = {status: 'checking'} | {status: 'ok'} | {status: 'blocked'; info: UpdateInfo};
+type DownloadState = {phase: 'idle'} | {phase: 'downloading'; pct: number} | {phase: 'error'};
+
+// Downloads the update APK straight into the app's own cache dir and hands
+// it to Android's package installer directly — no trip through the browser
+// to fetch it, then hunting it down in Downloads to open it. Falls back to
+// the old "open the link" behavior if the in-app download fails for any
+// reason (odd storage state, permission quirk, etc.) so an update is never
+// completely unreachable.
+async function downloadAndInstall(apkUrl: string, onProgress: (pct: number) => void) {
+  const {config, fs} = ReactNativeBlobUtil;
+  const targetPath = `${fs.dirs.CacheDir}/kims-parking-update.apk`;
+  const res = await config({
+    path: targetPath,
+    overwrite: true,
+    indicator: true,
+  })
+    .fetch('GET', apkUrl)
+    .progress((received: string, total: string) => {
+      const r = Number(received), t = Number(total);
+      if (t > 0) onProgress(r / t);
+    });
+  await ReactNativeBlobUtil.android.actionViewIntent(res.path(), 'application/vnd.android.package-archive');
+}
 
 // Replaces the app's entire content — not an overlay on top of it — until
 // the version check has actually resolved. A Modal rendered as a SIBLING of
@@ -19,6 +43,7 @@ type GateState = {status: 'checking'} | {status: 'ok'} | {status: 'blocked'; inf
 export function UpdateGate({children}: {children: React.ReactNode}) {
   const {colors} = useTheme();
   const [state, setState] = useState<GateState>({status: 'checking'});
+  const [download, setDownload] = useState<DownloadState>({phase: 'idle'});
 
   useEffect(() => {
     let cancelled = false;
@@ -48,6 +73,29 @@ export function UpdateGate({children}: {children: React.ReactNode}) {
   if (state.status === 'ok') return <>{children}</>;
 
   const {info} = state;
+
+  const handlePress = async () => {
+    if (Platform.OS !== 'android') {
+      // No in-app installer path off Android (App Store builds don't ship
+      // sideloaded APKs) — keep the old browser hand-off there.
+      Linking.openURL(info.apkUrl);
+      return;
+    }
+    setDownload({phase: 'downloading', pct: 0});
+    try {
+      await downloadAndInstall(info.apkUrl, pct => setDownload({phase: 'downloading', pct}));
+      // Once the installer screen is up, this component may keep rendering
+      // behind it (the user hasn't left the app) — reset so a cancelled
+      // install can be retried without looking stuck at 100%.
+      setDownload({phase: 'idle'});
+    } catch {
+      setDownload({phase: 'error'});
+    }
+  };
+
+  const downloading = download.phase === 'downloading';
+  const pct = download.phase === 'downloading' ? Math.round(download.pct * 100) : 0;
+
   return (
     <View style={[s.center, {backgroundColor: colors.background}]}>
       <View style={[s.card, {backgroundColor: colors.card, borderColor: colors.border}]}>
@@ -61,11 +109,23 @@ export function UpdateGate({children}: {children: React.ReactNode}) {
         {info.notes ? (
           <Text style={[s.notes, {color: colors.textMuted, backgroundColor: colors.cardAlt}]}>{info.notes}</Text>
         ) : null}
-        <PressableScale
-          style={[s.cta, {backgroundColor: colors.primary, shadowColor: colors.primary}]}
-          onPress={() => Linking.openURL(info.apkUrl)}>
-          <Text style={s.ctaTxt}>Download & Install</Text>
-        </PressableScale>
+        {download.phase === 'error' && (
+          <Text style={[s.errorTxt, {color: colors.error}]}>
+            Couldn't download the update in-app — tap below to open it in your browser instead.
+          </Text>
+        )}
+        {downloading ? (
+          <View style={[s.progressTrack, {backgroundColor: colors.cardAlt}]}>
+            <View style={[s.progressFill, {backgroundColor: colors.primary, width: `${Math.max(pct, 4)}%`}]} />
+            <Text style={[s.progressTxt, {color: colors.textPrimary}]}>{pct}%</Text>
+          </View>
+        ) : (
+          <PressableScale
+            style={[s.cta, {backgroundColor: colors.primary, shadowColor: colors.primary}]}
+            onPress={download.phase === 'error' ? () => Linking.openURL(info.apkUrl) : handlePress}>
+            <Text style={s.ctaTxt}>{download.phase === 'error' ? 'Open in Browser' : 'Download & Install'}</Text>
+          </PressableScale>
+        )}
       </View>
     </View>
   );
@@ -78,9 +138,16 @@ const s = StyleSheet.create({
   title: {fontSize: 19, fontWeight: '900'},
   sub: {fontSize: 13, textAlign: 'center', marginTop: 6, lineHeight: 19},
   notes: {fontSize: 12, borderRadius: 12, padding: 12, marginTop: 14, lineHeight: 17, alignSelf: 'stretch'},
+  errorTxt: {fontSize: 12, textAlign: 'center', marginTop: 14, lineHeight: 17},
   cta: {
     marginTop: 20, borderRadius: 14, paddingVertical: 15, alignSelf: 'stretch', alignItems: 'center',
     shadowOffset: {width: 0, height: 6}, shadowOpacity: 0.25, shadowRadius: 12, elevation: 6,
   },
+  progressTrack: {
+    marginTop: 20, borderRadius: 14, height: 46, alignSelf: 'stretch', overflow: 'hidden',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  progressFill: {position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: 14},
+  progressTxt: {fontSize: 13, fontWeight: '800'},
   ctaTxt: {color: '#fff', fontSize: 14, fontWeight: '900'},
 });

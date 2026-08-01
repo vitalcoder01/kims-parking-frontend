@@ -14,6 +14,10 @@
     <!-- Re-arm push delivery + scheduled alarms after the phone reboots -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Lets the app launch Android's package installer directly for the
+         update APK it downloads itself, instead of only being able to hand
+         the file off to some other app to open. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
       android:name=".MainApplication"
@@ -42,5 +46,10 @@
             <category android:name="android.intent.category.LAUNCHER" />
         </intent-filter>
       </activity>
+      <!-- react-native-blob-util's own AndroidManifest already declares the
+           FileProvider (authority ${applicationId}.provider) that exposes
+           the downloaded update APK to the system installer via a
+           content:// URI — this app only needs to supply the matching
+           @xml/provider_paths resource (see res/xml/provider_paths.xml). -->
     </application>
 </manifest>
