@@ -89,21 +89,11 @@ export function ValetRecordsScreen() {
     .filter(v => statusFilter === 'all' || (statusFilter === 'completed' ? v.status === 'retrieved' : v.status !== 'retrieved'))
     .filter(v => !q || v.name?.toLowerCase().includes(q) || v.carNumber?.toLowerCase().includes(q) || v.token.toLowerCase().includes(q));
 
-  // Staff/doctor tab is the actual "how many doctors" record — every park +
-  // retrieve task, not just the ones still in progress (that live view is
-  // the Home tab's Job Queue; this one's a searchable log). Visitor-linked
-  // tasks are excluded — they already have their own tab, and an unscoped
-  // history fetch returns every task ever, staff and visitor alike.
-  const staffFiltered = staffHistory
-    .filter(t => !t.isVisitor)
-    .filter(t => statusFilter === 'all' || (statusFilter === 'completed' ? t.status === 'completed' : t.status !== 'completed' && t.status !== 'cancelled'))
-    .filter(t => !q || t.doctorName?.toLowerCase().includes(q) || t.carNumber?.toLowerCase().includes(q));
-
-  // A doctor's most recent task tells us whether they're currently parked
-  // with nothing pending: history has every session ever, so "parked, no
-  // retrieval requested yet" is only true when the LATEST row for that
-  // doctor is a completed park (a later retrieve row, of any status, means
-  // one's already in flight or done).
+  // A doctor's most recent task tells us whether their session is still
+  // open: history has every park + retrieve row ever, staff and visitor
+  // alike, so "parked, nothing pending" is only true when the LATEST row
+  // for that doctor is a completed park (a later retrieve row, of any
+  // status, means one's already in flight or done).
   const latestTaskByDoctor = new Map<number, ParkingTask>();
   for (const t of staffHistory) {
     if (t.isVisitor) continue;
@@ -112,6 +102,29 @@ export function ValetRecordsScreen() {
   }
   const canRequestStaffRetrieval = (t: ParkingTask) =>
     t.type === 'park' && t.status === 'completed' && latestTaskByDoctor.get(t.doctorId)?.id === t.id;
+
+  // Active/Completed here means "is the car back with its owner yet", not
+  // the raw per-row status — a park row's own status turns 'completed' the
+  // moment the car is PARKED, well before anyone's picked it up again. A
+  // park row stays Active while it's still the doctor's open session (see
+  // canRequestStaffRetrieval); a retrieve row is Active until the valet
+  // actually confirms the handover (status -> 'completed'), which is also
+  // the moment its paired park row stops being "latest" and flips too.
+  const isStaffRowActive = (t: ParkingTask) => {
+    if (t.status === 'cancelled') return false; // same convention as elsewhere: cancelled only shows under "All"
+    if (t.type === 'retrieve') return t.status !== 'completed';
+    return t.status !== 'completed' || latestTaskByDoctor.get(t.doctorId)?.id === t.id;
+  };
+
+  // Staff/doctor tab is the actual "how many doctors" record — every park +
+  // retrieve task, not just the ones still in progress (that live view is
+  // the Home tab's Job Queue; this one's a searchable log). Visitor-linked
+  // tasks are excluded — they already have their own tab, and an unscoped
+  // history fetch returns every task ever, staff and visitor alike.
+  const staffFiltered = staffHistory
+    .filter(t => !t.isVisitor)
+    .filter(t => statusFilter === 'all' || (statusFilter === 'completed' ? !isStaffRowActive(t) && t.status !== 'cancelled' : isStaffRowActive(t)))
+    .filter(t => !q || t.doctorName?.toLowerCase().includes(q) || t.carNumber?.toLowerCase().includes(q));
 
   const pendingVisitor = pendingVisitorId ? activeVisitors.find(v => v.id === pendingVisitorId) ?? null : null;
   const pendingDoctorTask = pendingDoctorTaskId ? staffHistory.find(t => t.id === pendingDoctorTaskId) ?? null : null;
@@ -347,7 +360,17 @@ export function ValetRecordsScreen() {
             <Text style={[s.carReg, {color: colors.textSecondary}]}>{t.carNumber}</Text>
           </View>
 
-          {!!t.driverName && <Text style={[s.driverTxt, {color: colors.textMuted}]}>Driver: {t.driverName}</Text>}
+          {(!!t.driverName || (t.type === 'park' && !!t.completedAt)) && (
+            <View style={s.metaRow}>
+              {!!t.driverName && <Text style={[s.driverTxt, {color: colors.textMuted}]}>Driver: {t.driverName}</Text>}
+              {/* Arrival time — when the driver actually parked the car, not
+                  when the job was created/assigned. Only meaningful for a
+                  park task that's actually reached that point. */}
+              {t.type === 'park' && !!t.completedAt && (
+                <Text style={[s.driverTxt, {color: colors.textMuted}]}>Parked at {fmtTime(t.completedAt)}</Text>
+              )}
+            </View>
+          )}
 
           {canRetrieve && (
             <PressableScale style={[s.actionBtn, {backgroundColor: colors.primary}]}
@@ -566,7 +589,8 @@ const s = StyleSheet.create({
   carRow: {flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 7},
   carSwatch: {width: 22, height: 10, borderRadius: 3},
   carReg: {fontSize: 13, fontWeight: '700', letterSpacing: 1.2},
-  driverTxt: {fontSize: 12, fontWeight: '600', marginTop: 8},
+  metaRow: {marginTop: 8, gap: 2},
+  driverTxt: {fontSize: 12, fontWeight: '600'},
   actionBtn: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, height: 46, borderRadius: 14, marginTop: 14},
   actionGhost: {backgroundColor: 'transparent', borderWidth: 1.5},
   actionTxt: {fontSize: 14, fontWeight: '700'},
