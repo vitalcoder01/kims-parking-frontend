@@ -9,7 +9,6 @@ import {Icon} from '../../components/Icon';
 import {PressableScale} from '../../components/PressableScale';
 import {SkeletonBlock} from '../../components/Skeleton';
 import {useNavigation} from '@react-navigation/native';
-import {NotificationSheet, unreadNotificationCount} from '../../components/NotificationList';
 
 const DAY_LETTERS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 
@@ -57,9 +56,7 @@ function isToday(ms?: number) {
 
 export function DriverDashboardScreen() {
   const {user} = useAuth();
-  const {tasks, visitors, fetchTaskHistory, hydrated, notifications} = useAppState();
-  const [notifsOpen, setNotifsOpen] = useState(false);
-  const unreadNotifs = unreadNotificationCount(notifications, user ?? null);
+  const {tasks, visitors, fetchTaskHistory, hydrated} = useAppState();
   const {colors: c, isDark} = useTheme();
   const navigation = useNavigation<any>();
   const g = greeting();
@@ -103,16 +100,6 @@ export function DriverDashboardScreen() {
             <Icon name={g.icon} size={15} color={c.textPrimary} />
           </View>
           <Text style={[st.greeting, {color: c.textPrimary}]}>{g.text}</Text>
-          {/* Notifications first, avatar next to it — the bell opens a
-              fixed bottom sheet with the stacked list, no floating overlay. */}
-          <PressableScale style={[st.driverBell, {backgroundColor: c.surface, borderColor: c.border}]} onPress={() => setNotifsOpen(true)}>
-            <Icon name="bell" size={17} color={c.textPrimary} />
-            {unreadNotifs > 0 && (
-              <View style={st.driverBellBadge}>
-                <Text style={st.driverBellBadgeTxt}>{unreadNotifs > 9 ? '9+' : unreadNotifs}</Text>
-              </View>
-            )}
-          </PressableScale>
           <View style={[st.avatar, {backgroundColor: c.primary}]}>
             <Text style={[st.avatarTxt, {color: c.textOnPrimary}]}>{(user?.name ?? 'D').charAt(0).toUpperCase()}</Text>
           </View>
@@ -210,7 +197,6 @@ export function DriverDashboardScreen() {
           ))
         )}
       </ScrollView>
-      <NotificationSheet visible={notifsOpen} onClose={() => setNotifsOpen(false)} />
     </SafeAreaView>
   );
 }
@@ -224,9 +210,6 @@ const st = StyleSheet.create({
   greeting: {flex: 1, fontSize: 22, fontWeight: '800'},
   avatar: {width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center'},
   avatarTxt: {fontSize: 14, fontWeight: '800'},
-  driverBell: {width: 34, height: 34, borderRadius: 17, borderWidth: 1, alignItems: 'center', justifyContent: 'center'},
-  driverBellBadge: {position: 'absolute', top: -4, right: -4, minWidth: 16, height: 16, borderRadius: 8, paddingHorizontal: 4, backgroundColor: '#E53935', alignItems: 'center', justifyContent: 'center'},
-  driverBellBadgeTxt: {color: '#fff', fontSize: 9.5, fontWeight: '800'},
 
   weekRow: {flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20},
   dayCell: {width: 38, height: 52, borderRadius: 12, borderWidth: 1, borderColor: 'transparent', alignItems: 'center', justifyContent: 'center', gap: 4},
