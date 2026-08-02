@@ -9,7 +9,21 @@ import {APP_VERSION_CODE, APP_VERSION_NAME} from '../config/version';
 
 type UpdateInfo = {latestVersionCode: number; latestVersionName: string; apkUrl: string; notes?: string};
 type GateState = {status: 'checking'} | {status: 'ok'} | {status: 'blocked'; info: UpdateInfo};
-type DownloadState = {phase: 'idle'} | {phase: 'downloading'; pct: number} | {phase: 'error'; message: string};
+type DownloadState = {phase: 'idle'} | {phase: 'downloading'; pct: number; attempt: number} | {phase: 'error'; message: string};
+
+const MAX_DOWNLOAD_ATTEMPTS = 3;
+
+// "Download interrupted." comes from the library's own byte-count check
+// (bytesDownloaded === contentLength) after the underlying OkHttp stream
+// threw mid-transfer — a genuine dropped/reset connection, not a logic bug;
+// the library just swallows the real IOException and reports this generic
+// message instead. A ~68MB download over a weak mobile connection hitting
+// this occasionally is expected, so it's worth one silent retry before
+// bothering the user with it.
+function isTransientDownloadFailure(err: any): boolean {
+  const msg = String(err?.message ?? err ?? '');
+  return /interrupted/i.test(msg) || /network/i.test(msg) || /timeout/i.test(msg);
+}
 
 // Downloads the update APK straight into the app's own cache dir and hands
 // it to Android's package installer directly — no trip through the browser
@@ -17,10 +31,12 @@ type DownloadState = {phase: 'idle'} | {phase: 'downloading'; pct: number} | {ph
 // the old "open the link" behavior if the in-app download fails for any
 // reason (odd storage state, permission quirk, etc.) so an update is never
 // completely unreachable.
-async function downloadAndInstall(apkUrl: string, onProgress: (pct: number) => void) {
+async function downloadOnce(apkUrl: string, onProgress: (pct: number) => void) {
   const {config, fs} = ReactNativeBlobUtil;
   const targetPath = `${fs.dirs.CacheDir}/kims-parking-update.apk`;
   const res = await config({
+    // overwrite: true means each retry starts the file fresh rather than
+    // appending onto a truncated previous attempt.
     path: targetPath,
     overwrite: true,
     indicator: true,
@@ -40,6 +56,24 @@ async function downloadAndInstall(apkUrl: string, onProgress: (pct: number) => v
   // different way). Omitting the title goes straight to the package
   // installer with the flags intact.
   await ReactNativeBlobUtil.android.actionViewIntent(res.path(), 'application/vnd.android.package-archive');
+}
+
+async function downloadAndInstall(
+  apkUrl: string,
+  onProgress: (pct: number, attempt: number) => void,
+) {
+  for (let attempt = 1; attempt <= MAX_DOWNLOAD_ATTEMPTS; attempt++) {
+    onProgress(0, attempt); // immediate feedback that a (re)try has started, before the first progress tick arrives
+    try {
+      await downloadOnce(apkUrl, pct => onProgress(pct, attempt));
+      return;
+    } catch (err) {
+      const isLastAttempt = attempt === MAX_DOWNLOAD_ATTEMPTS;
+      if (isLastAttempt || !isTransientDownloadFailure(err)) throw err;
+      // Otherwise loop and try again — a dropped connection on one attempt
+      // says nothing about the next one.
+    }
+  }
 }
 
 // Replaces the app's entire content — not an overlay on top of it — until
@@ -90,9 +124,9 @@ export function UpdateGate({children}: {children: React.ReactNode}) {
       Linking.openURL(info.apkUrl);
       return;
     }
-    setDownload({phase: 'downloading', pct: 0});
+    setDownload({phase: 'downloading', pct: 0, attempt: 1});
     try {
-      await downloadAndInstall(info.apkUrl, pct => setDownload({phase: 'downloading', pct}));
+      await downloadAndInstall(info.apkUrl, (pct, attempt) => setDownload({phase: 'downloading', pct, attempt}));
       // Once the installer screen is up, this component may keep rendering
       // behind it (the user hasn't left the app) — reset so a cancelled
       // install can be retried without looking stuck at 100%.
@@ -133,10 +167,17 @@ export function UpdateGate({children}: {children: React.ReactNode}) {
           </>
         )}
         {downloading ? (
-          <View style={[s.progressTrack, {backgroundColor: colors.cardAlt}]}>
-            <View style={[s.progressFill, {backgroundColor: colors.primary, width: `${Math.max(pct, 4)}%`}]} />
-            <Text style={[s.progressTxt, {color: colors.textPrimary}]}>{pct}%</Text>
-          </View>
+          <>
+            <View style={[s.progressTrack, {backgroundColor: colors.cardAlt}]}>
+              <View style={[s.progressFill, {backgroundColor: colors.primary, width: `${Math.max(pct, 4)}%`}]} />
+              <Text style={[s.progressTxt, {color: colors.textPrimary}]}>{pct}%</Text>
+            </View>
+            {download.phase === 'downloading' && download.attempt > 1 && (
+              <Text style={[s.errorDetail, {color: colors.textMuted, backgroundColor: 'transparent', paddingHorizontal: 0}]}>
+                Connection dropped — retrying (attempt {download.attempt} of {MAX_DOWNLOAD_ATTEMPTS})…
+              </Text>
+            )}
+          </>
         ) : (
           <PressableScale
             style={[s.cta, {backgroundColor: colors.primary, shadowColor: colors.primary}]}
