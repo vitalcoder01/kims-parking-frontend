@@ -16,6 +16,7 @@ import {useValetActions, isMyJobToRun} from './useValetActions';
 import type {ParkingTask} from '../../context/AppStateContext';
 import {useAppState} from '../../context/AppStateContext';
 import {SkeletonCard} from '../../components/Skeleton';
+import {NotificationList, relevantNotifications, unreadNotificationCount} from '../../components/NotificationList';
 import {
   plannedDepartureLabel, departurePriority, minutesUntilDeparture, departureClockLabel,
   enRouteSeconds, agoLabel, fmtDuration,
@@ -26,7 +27,7 @@ type Screen = 'home' | 'scan' | 'assign' | 'visitor' | 'retrievals';
 
 type InboxTab = 'all' | 'now' | 'soon' | 'later';
 type QueueTab = 'mine' | 'team';
-type InboxSection = 'retrievals' | 'arrivals';
+type InboxSection = 'retrievals' | 'arrivals' | 'notifications';
 const INBOX_TABS: {key: InboxTab; label: string}[] = [
   {key: 'all',   label: 'All'},
   {key: 'now',   label: 'Now'},
@@ -67,7 +68,9 @@ export function ValetHomeScreen() {
     cancelTaskAssignment,
     confirmTaskDelivered, cancelTask, recallTask, arrivalNotices, dismissArrivalNotice,
     acceptRetrieval, myValetId} = useValetActions();
-  const {hydrated} = useAppState();
+  const {hydrated, notifications} = useAppState();
+  const inboxNotifications = relevantNotifications(notifications, user ?? null);
+  const unreadNotifs = unreadNotificationCount(notifications, user ?? null);
   const {colors, isDark} = useTheme();
 
   const [screen, setScreen] = useState<Screen>('home');
@@ -779,8 +782,9 @@ export function ValetHomeScreen() {
             someone is waiting for, blue is only a heads-up. */}
         <View style={[s.inboxTabs, {borderBottomColor: colors.border}]}>
           {([
-            ['retrievals', 'Retrieval Requests', retrievalRequests.length, colors.error],
-            ['arrivals', 'Expected Arrivals', arrivalNotices.length, colors.info],
+            ['retrievals', 'Retrievals', retrievalRequests.length, colors.error],
+            ['arrivals', 'Arrivals', arrivalNotices.length, colors.info],
+            ['notifications', 'Notifications', unreadNotifs, colors.warning],
           ] as const).map(([key, label, count, tint]) => {
             const active = inboxSection === key;
             return (
@@ -1018,6 +1022,15 @@ export function ValetHomeScreen() {
             ))}
           </ScrollView>
         </>)}
+
+        {inboxSection === 'notifications' && (
+          <View style={{flex: 1, paddingHorizontal: 16, paddingTop: 12}}>
+            <NotificationList
+              notifications={inboxNotifications}
+              emptyLabel="No notifications yet. Alerts about jobs and status changes will show up here."
+            />
+          </View>
+        )}
       </SafeAreaView>
     );
   }

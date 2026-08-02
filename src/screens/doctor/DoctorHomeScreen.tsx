@@ -14,6 +14,7 @@ import {useRetrievalRequest} from '../../hooks/useRetrievalRequest';
 import {BRAND_GRADIENT, BRAND_GRADIENT_DARK} from '../../theme/colors';
 import {Icon} from '../../components/Icon';
 import {SkeletonBlock} from '../../components/Skeleton';
+import {NotificationBellButton, NotificationSheet, unreadNotificationCount} from '../../components/NotificationList';
 import {
   PLANNED_DEPARTURE_OPTIONS, ARRIVAL_ETA_OPTIONS, clockToMinutes, fmtClock12, to12, to24,
   enRouteSeconds,
@@ -93,7 +94,9 @@ function BottomSheetModal({visible, onClose, children}: {visible: boolean; onClo
 export function DoctorHomeScreen() {
   const dialog = useDialog();
   const {user} = useAuth();
-  const {tasks, sendArrivalNotice, cancelMyRetrieval, hydrated} = useAppState();
+  const {tasks, sendArrivalNotice, cancelMyRetrieval, hydrated, notifications} = useAppState();
+  const [notifsOpen, setNotifsOpen] = useState(false);
+  const unreadNotifs = unreadNotificationCount(notifications, user ?? null);
   const {colors, isDark} = useTheme();
   const navigation = useNavigation<any>();
   const {activeRetrieve, now, requestRetrieval} = useRetrievalRequest();
@@ -265,13 +268,18 @@ export function DoctorHomeScreen() {
               <Text style={s.headerDept}>{user?.department}</Text>
             </View>
             <View style={{alignItems: 'flex-end', gap: 10}}>
-              <PressableScale style={s.cardCodeBox} onPress={() => navigation.navigate('Card')}>
-                <Text style={s.cardCodeNum}>{user?.cardCode ?? '---'}</Text>
-                <View style={s.cardCodeLblRow}>
-                  <Text style={s.cardCodeLbl}>VALET CODE</Text>
-                  <Icon name="chevronRight" size={11} color="rgba(255,255,255,0.7)" />
-                </View>
-              </PressableScale>
+              <View style={{flexDirection: 'row', alignItems: 'center', gap: 10}}>
+                {/* Notifications bell — opens a bottom-sheet with a fixed
+                    stacked list; no floating overlays, no random pop-ins. */}
+                <NotificationBellButton count={unreadNotifs} onPress={() => setNotifsOpen(true)} />
+                <PressableScale style={s.cardCodeBox} onPress={() => navigation.navigate('Card')}>
+                  <Text style={s.cardCodeNum}>{user?.cardCode ?? '---'}</Text>
+                  <View style={s.cardCodeLblRow}>
+                    <Text style={s.cardCodeLbl}>VALET CODE</Text>
+                    <Icon name="chevronRight" size={11} color="rgba(255,255,255,0.7)" />
+                  </View>
+                </PressableScale>
+              </View>
             </View>
           </View>
         </LinearGradient>
@@ -515,6 +523,11 @@ export function DoctorHomeScreen() {
           </PressableScale>
         </View>
       </ScrollView>
+
+      {/* Notifications sheet — fixed stacked list, swipe rows to dismiss.
+          Only visible when the doctor explicitly taps the bell; never
+          overlays content otherwise. */}
+      <NotificationSheet visible={notifsOpen} onClose={() => setNotifsOpen(false)} />
 
       {/* Arrival popup — sits over Home; Home itself never unmounts. */}
       <BottomSheetModal visible={showArrivalModal} onClose={() => setShowArrivalModal(false)}>
