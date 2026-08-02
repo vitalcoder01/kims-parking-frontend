@@ -30,7 +30,12 @@ async function downloadAndInstall(apkUrl: string, onProgress: (pct: number) => v
       const r = Number(received), t = Number(total);
       if (t > 0) onProgress(r / t);
     });
-  await ReactNativeBlobUtil.android.actionViewIntent(res.path(), 'application/vnd.android.package-archive');
+  // chooserTitle is a required third argument on this codegen-typed native
+  // method (New Architecture) — omitting it isn't just ignored, it fails at
+  // the native bridge's argument marshaling and throws, which is why every
+  // in-app download landed on the "couldn't download" fallback instead of
+  // ever reaching the installer.
+  await ReactNativeBlobUtil.android.actionViewIntent(res.path(), 'application/vnd.android.package-archive', 'Install update');
 }
 
 // Replaces the app's entire content — not an overlay on top of it — until
