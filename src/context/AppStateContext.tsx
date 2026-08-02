@@ -83,9 +83,10 @@ export interface ParkingTask {
   // The doctor's planned departure in minutes (0 = now). Valet-side
   // planning information only — never rendered to the doctor as an ETA.
   plannedDepartureMinutes?: number;
-  // Absolute departure time, and when the request becomes actionable
-  // (departure minus the configured lead time). Before readyAt the request is
-  // SCHEDULED: informational only, no actions.
+  // Absolute departure time, and (departure minus the configured lead time)
+  // the moment the AUTOMATIC alert fires — a valet who opens the inbox
+  // before then can still assign a driver right away, this only paces the
+  // unattended push.
   plannedDepartureAt?: number;
   retrievalReadyAt?: number;
   trackingProgress?: number; // 0-1

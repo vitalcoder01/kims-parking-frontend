@@ -120,34 +120,6 @@ export function to24(h12: number, pm: boolean): number {
   return (h12 % 12) + (pm ? 12 : 0);
 }
 
-/**
- * SCHEDULED vs READY.
- *
- * A departure booked for later sits on the Retrieval Requests page as an
- * informational row until its lead time is reached. The server decides the
- * moment (retrievalReadyAt) and enforces it; this only decides what to draw,
- * so the two can never disagree about WHEN — only about how fast the screen
- * notices, which the ticking clock handles.
- *
- * A row with no readyAt predates scheduling and is treated as ready, matching
- * the migration's backfill.
- */
-export function isScheduled(readyAt: number | undefined, now: number): boolean {
-  return readyAt != null && readyAt > now;
-}
-
-/** "Starts in 35 min" / "Starts in 2 hr 5 min" — time until it goes READY. */
-export function startsInLabel(readyAt: number | undefined, now: number): string {
-  if (readyAt == null) return '';
-  const mins = Math.max(0, Math.round((readyAt - now) / 60000));
-  if (mins === 0) return 'Starting now';
-  const h = Math.floor(mins / 60);
-  const m = mins % 60;
-  if (h === 0) return `Starts in ${m} min`;
-  if (m === 0) return `Starts in ${h} hr`;
-  return `Starts in ${h} hr ${m} min`;
-}
-
 /** The wall-clock time a departure lands on. */
 export function departureClockLabel(
   requestedAt: number | undefined,
