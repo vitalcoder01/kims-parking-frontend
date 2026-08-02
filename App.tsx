@@ -6,7 +6,6 @@ import {ThemeProvider, useTheme} from './src/context/ThemeContext';
 import {AuthProvider} from './src/context/AuthContext';
 import {AppStateProvider} from './src/context/AppStateContext';
 import {AppNavigator} from './src/navigation/AppNavigator';
-import {NotificationBanner} from './src/components/NotificationBanner';
 import {UpdateGate} from './src/components/UpdateGate';
 import {DialogProvider} from './src/components/AppDialog';
 import {initNotifications} from './src/services/notifications';
@@ -25,9 +24,11 @@ function AppContent() {
         backgroundColor="transparent"
         translucent
       />
+      {/* No in-app notification overlay. Alerts fire on the OS notification
+          tray (via notifee — see src/services/notifications.ts) which is
+          where iOS/Android natively show them; the app itself stays clean. */}
       <UpdateGate>
         <AppNavigator />
-        <NotificationBanner />
       </UpdateGate>
     </View>
   );
