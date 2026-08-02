@@ -318,7 +318,14 @@ export function ValetRecordsScreen() {
   // actions here would just be the same "two places for one job" problem
   // this whole redesign was meant to get rid of).
   const renderStaffTicket = (t: ParkingTask) => {
-    const needsDriver = t.status === 'assigned' && !t.driverId;
+    // 'requested'/'accepted' are the same "no driver yet" state as 'assigned'
+    // with no driverId — the Home tab's Job Queue keeps them out of the queue
+    // entirely (they live in the Retrieval Requests inbox instead) and
+    // assignDriver always flips status straight to 'assigned' once a driver
+    // is actually picked, so a requested/accepted row here always means
+    // nobody's been assigned. Missing these two fell through to the "Driver
+    // assigned" default below, which said the opposite of what was true.
+    const needsDriver = (t.status === 'assigned' || t.status === 'requested' || t.status === 'accepted') && !t.driverId;
     const delivered = t.status === 'delivered';
     const cancelled = t.status === 'cancelled';
     const canRetrieve = canRequestStaffRetrieval(t);
