@@ -11,35 +11,50 @@ type UpdateInfo = {latestVersionCode: number; latestVersionName: string; apkUrl:
 type GateState = {status: 'checking'} | {status: 'ok'} | {status: 'blocked'; info: UpdateInfo};
 type DownloadState = {phase: 'idle'} | {phase: 'downloading'; pct: number; attempt: number} | {phase: 'error'; message: string};
 
-const MAX_DOWNLOAD_ATTEMPTS = 3;
+const MAX_DOWNLOAD_ATTEMPTS = 2;
 
-// "Download interrupted." comes from the library's own byte-count check
-// (bytesDownloaded === contentLength) after the underlying OkHttp stream
-// threw mid-transfer — a genuine dropped/reset connection, not a logic bug;
-// the library just swallows the real IOException and reports this generic
-// message instead. A ~68MB download over a weak mobile connection hitting
-// this occasionally is expected, so it's worth one silent retry before
-// bothering the user with it.
-function isTransientDownloadFailure(err: any): boolean {
-  const msg = String(err?.message ?? err ?? '');
-  return /interrupted/i.test(msg) || /network/i.test(msg) || /timeout/i.test(msg);
-}
-
-// Downloads the update APK straight into the app's own cache dir and hands
-// it to Android's package installer directly — no trip through the browser
-// to fetch it, then hunting it down in Downloads to open it. Falls back to
-// the old "open the link" behavior if the in-app download fails for any
-// reason (odd storage state, permission quirk, etc.) so an update is never
-// completely unreachable.
-async function downloadOnce(apkUrl: string, onProgress: (pct: number) => void) {
+// Downloads the update APK via Android's own DownloadManager (not a raw
+// in-process fetch) and hands the result straight to the package installer —
+// no trip through the browser to fetch it, then hunting it down in Downloads
+// to open it.
+//
+// This used to be a plain OkHttp fetch, retried in JS up to 3 times on
+// "Download interrupted." (the library's byte-count check — bytesDownloaded
+// !== contentLength — after the stream broke mid-transfer). That still hit
+// the same error on a ~68MB download over a weak connection even across
+// retries, because every retry started the ~68MB file over from byte zero:
+// three shots at completing the whole thing in one uninterrupted go is still
+// just one shot at a connection that stays up that long.
+//
+// DownloadManager is the actual fix, not another retry: it's a system
+// service built exactly for "large file, may take a while, may drop and
+// reconnect" — it resumes a broken transfer with an HTTP Range request
+// instead of restarting (the release APK host serves `Accept-Ranges:
+// bytes`), and it keeps running even if this app is backgrounded or the
+// screen locks mid-download, neither of which a raw fetch survived.
+async function downloadOnce(
+  apkUrl: string,
+  latestVersionName: string,
+  onProgress: (pct: number) => void,
+) {
   const {config, fs} = ReactNativeBlobUtil;
-  const targetPath = `${fs.dirs.CacheDir}/kims-parking-update.apk`;
+  // addAndroidDownloads requires a path outside CacheDir/DocumentDir — this
+  // is the app's own external-files "Download" folder, which (unlike the
+  // public Downloads directory) needs no storage permission on any modern
+  // Android version.
+  const targetPath = `${fs.dirs.DownloadDir}/kims-parking-update.apk`;
+  // DownloadManager errors out if the destination already exists — clear out
+  // whatever a previous attempt (or a previous version's update) left behind.
+  if (await fs.exists(targetPath)) await fs.unlink(targetPath).catch(() => {});
   const res = await config({
-    // overwrite: true means each retry starts the file fresh rather than
-    // appending onto a truncated previous attempt.
-    path: targetPath,
-    overwrite: true,
-    indicator: true,
+    addAndroidDownloads: {
+      useDownloadManager: true,
+      notification: true,
+      title: 'KIMS Parking Update',
+      description: `Downloading version ${latestVersionName}`,
+      mime: 'application/vnd.android.package-archive',
+      path: targetPath,
+    },
   })
     .fetch('GET', apkUrl)
     .progress((received: string, total: string) => {
@@ -60,18 +75,21 @@ async function downloadOnce(apkUrl: string, onProgress: (pct: number) => void) {
 
 async function downloadAndInstall(
   apkUrl: string,
+  latestVersionName: string,
   onProgress: (pct: number, attempt: number) => void,
 ) {
   for (let attempt = 1; attempt <= MAX_DOWNLOAD_ATTEMPTS; attempt++) {
     onProgress(0, attempt); // immediate feedback that a (re)try has started, before the first progress tick arrives
     try {
-      await downloadOnce(apkUrl, pct => onProgress(pct, attempt));
+      await downloadOnce(apkUrl, latestVersionName, pct => onProgress(pct, attempt));
       return;
     } catch (err) {
-      const isLastAttempt = attempt === MAX_DOWNLOAD_ATTEMPTS;
-      if (isLastAttempt || !isTransientDownloadFailure(err)) throw err;
-      // Otherwise loop and try again — a dropped connection on one attempt
-      // says nothing about the next one.
+      // A genuine DownloadManager failure (STATUS_FAILED — bad storage
+      // state, host rejected the request, etc.) rather than the old
+      // mid-transfer symptom DownloadManager itself now absorbs. Worth one
+      // retry since the underlying cause is still usually transient, but not
+      // worth the 3 attempts the old restart-from-scratch retry needed.
+      if (attempt === MAX_DOWNLOAD_ATTEMPTS) throw err;
     }
   }
 }
@@ -126,7 +144,7 @@ export function UpdateGate({children}: {children: React.ReactNode}) {
     }
     setDownload({phase: 'downloading', pct: 0, attempt: 1});
     try {
-      await downloadAndInstall(info.apkUrl, (pct, attempt) => setDownload({phase: 'downloading', pct, attempt}));
+      await downloadAndInstall(info.apkUrl, info.latestVersionName, (pct, attempt) => setDownload({phase: 'downloading', pct, attempt}));
       // Once the installer screen is up, this component may keep rendering
       // behind it (the user hasn't left the app) — reset so a cancelled
       // install can be retried without looking stuck at 100%.
@@ -174,7 +192,7 @@ export function UpdateGate({children}: {children: React.ReactNode}) {
             </View>
             {download.phase === 'downloading' && download.attempt > 1 && (
               <Text style={[s.errorDetail, {color: colors.textMuted, backgroundColor: 'transparent', paddingHorizontal: 0}]}>
-                Connection dropped — retrying (attempt {download.attempt} of {MAX_DOWNLOAD_ATTEMPTS})…
+                Download failed to start — retrying (attempt {download.attempt} of {MAX_DOWNLOAD_ATTEMPTS})…
               </Text>
             )}
           </>
