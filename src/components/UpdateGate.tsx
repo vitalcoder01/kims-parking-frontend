@@ -9,7 +9,7 @@ import {APP_VERSION_CODE, APP_VERSION_NAME} from '../config/version';
 
 type UpdateInfo = {latestVersionCode: number; latestVersionName: string; apkUrl: string; notes?: string};
 type GateState = {status: 'checking'} | {status: 'ok'} | {status: 'blocked'; info: UpdateInfo};
-type DownloadState = {phase: 'idle'} | {phase: 'downloading'; pct: number} | {phase: 'error'};
+type DownloadState = {phase: 'idle'} | {phase: 'downloading'; pct: number} | {phase: 'error'; message: string};
 
 // Downloads the update APK straight into the app's own cache dir and hands
 // it to Android's package installer directly — no trip through the browser
@@ -93,8 +93,12 @@ export function UpdateGate({children}: {children: React.ReactNode}) {
       // behind it (the user hasn't left the app) — reset so a cancelled
       // install can be retried without looking stuck at 100%.
       setDownload({phase: 'idle'});
-    } catch {
-      setDownload({phase: 'error'});
+    } catch (err: any) {
+      // Surfaced on screen (not just logged) so a real-device failure can be
+      // read/screenshotted directly — the previous silent catch here made
+      // every distinct failure mode look identical and undiagnosable.
+      const message = err?.message || err?.description || (typeof err === 'string' ? err : JSON.stringify(err)) || 'Unknown error';
+      setDownload({phase: 'error', message});
     }
   };
 
@@ -115,9 +119,14 @@ export function UpdateGate({children}: {children: React.ReactNode}) {
           <Text style={[s.notes, {color: colors.textMuted, backgroundColor: colors.cardAlt}]}>{info.notes}</Text>
         ) : null}
         {download.phase === 'error' && (
-          <Text style={[s.errorTxt, {color: colors.error}]}>
-            Couldn't download the update in-app — tap below to open it in your browser instead.
-          </Text>
+          <>
+            <Text style={[s.errorTxt, {color: colors.error}]}>
+              Couldn't download the update in-app — tap below to open it in your browser instead.
+            </Text>
+            <Text style={[s.errorDetail, {color: colors.textMuted, backgroundColor: colors.cardAlt}]} selectable>
+              {download.message}
+            </Text>
+          </>
         )}
         {downloading ? (
           <View style={[s.progressTrack, {backgroundColor: colors.cardAlt}]}>
@@ -144,6 +153,7 @@ const s = StyleSheet.create({
   sub: {fontSize: 13, textAlign: 'center', marginTop: 6, lineHeight: 19},
   notes: {fontSize: 12, borderRadius: 12, padding: 12, marginTop: 14, lineHeight: 17, alignSelf: 'stretch'},
   errorTxt: {fontSize: 12, textAlign: 'center', marginTop: 14, lineHeight: 17},
+  errorDetail: {fontSize: 11, textAlign: 'left', marginTop: 8, lineHeight: 15, borderRadius: 10, padding: 10, alignSelf: 'stretch', fontFamily: Platform.OS === 'android' ? 'monospace' : undefined},
   cta: {
     marginTop: 20, borderRadius: 14, paddingVertical: 15, alignSelf: 'stretch', alignItems: 'center',
     shadowOffset: {width: 0, height: 6}, shadowOpacity: 0.25, shadowRadius: 12, elevation: 6,
