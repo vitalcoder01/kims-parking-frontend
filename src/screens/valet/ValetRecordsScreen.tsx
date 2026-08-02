@@ -1,5 +1,5 @@
 import React, {useState, useEffect} from 'react';
-import {View, Text, StyleSheet, ScrollView, TextInput, StatusBar} from 'react-native';
+import {View, Text, StyleSheet, ScrollView, TextInput, StatusBar, ActivityIndicator} from 'react-native';
 import {useDialog} from '../../components/AppDialog';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useTheme} from '../../context/ThemeContext';
@@ -40,7 +40,7 @@ type StatusFilter = 'all' | 'active' | 'completed';
 export function ValetRecordsScreen() {
   const dialog = useDialog();
   const {colors, isDark} = useTheme();
-  const {activeVisitors, availableDrivers, hasActiveRetrievalDriver,
+  const {tasks, activeVisitors, availableDrivers, hasActiveRetrievalDriver,
     assignVisitorPickupDriver, assignVisitorRetrievalDriver, cancelVisitor, confirmVisitorDelivered,
     confirmTaskDelivered, fetchTaskHistory} = useValetActions();
 
@@ -49,15 +49,27 @@ export function ValetRecordsScreen() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('active');
   const [pendingVisitorId, setPendingVisitorId] = useState<number | null>(null);
   const [pendingMode, setPendingMode] = useState<'park' | 'retrieve' | null>(null);
+  const [assigningDriverId, setAssigningDriverId] = useState<number | null>(null);
+  const [confirmingVisitorId, setConfirmingVisitorId] = useState<number | null>(null);
+  const [confirmingTaskId, setConfirmingTaskId] = useState<number | null>(null);
   // Every staff/doctor session ever, not just each doctor's single current
   // one — the live `tasks` array is deliberately bounded to "at most one row
   // per doctor" now, so this tab's actual record view needs its own fetch.
   const [staffHistory, setStaffHistory] = useState<ParkingTask[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   useEffect(() => {
     if (tab !== 'staff') return;
-    fetchTaskHistory().then(setStaffHistory).catch(() => {});
-  }, [tab, fetchTaskHistory]);
+    setHistoryLoading(true);
+    fetchTaskHistory().then(setStaffHistory).catch(() => {}).finally(() => setHistoryLoading(false));
+    // This screen used to fetch history ONCE, on tab entry, and never again —
+    // a check-in or status change that happened while a valet was already
+    // sitting on this tab just never appeared until they left and came back.
+    // `tasks` (the live, socket-fed current-tasks list from AppStateContext)
+    // changing is our proxy for "something happened" — history itself isn't
+    // pushed over the socket, so this piggybacks on the one realtime signal
+    // that already exists, and the backend response is cheap/cached anyway.
+  }, [tab, fetchTaskHistory, tasks]);
 
   const q = query.trim().toLowerCase();
 
@@ -76,28 +88,40 @@ export function ValetRecordsScreen() {
 
   const handleAssign = async (driverId: number) => {
     if (!pendingVisitorId || !pendingMode) return;
+    if (assigningDriverId != null) return;
+    setAssigningDriverId(driverId);
     try {
       if (pendingMode === 'retrieve') await assignVisitorRetrievalDriver(pendingVisitorId, driverId);
       else await assignVisitorPickupDriver(pendingVisitorId, driverId);
       setPendingVisitorId(null); setPendingMode(null);
     } catch (err: any) {
       dialog.alert(err.message || 'Something went wrong', {title: 'Error'});
+    } finally {
+      setAssigningDriverId(null);
     }
   };
 
   const handleConfirmVisitorDelivered = async (visitorId: number) => {
+    if (confirmingVisitorId != null) return;
+    setConfirmingVisitorId(visitorId);
     try {
       await confirmVisitorDelivered(visitorId);
     } catch (err: any) {
       dialog.alert(err.message || 'Could not confirm handover', {title: 'Error'});
+    } finally {
+      setConfirmingVisitorId(null);
     }
   };
 
   const handleConfirmTaskDelivered = async (taskId: number) => {
+    if (confirmingTaskId != null) return;
+    setConfirmingTaskId(taskId);
     try {
       await confirmTaskDelivered(taskId);
     } catch (err: any) {
       dialog.alert(err.message || 'Could not confirm handover', {title: 'Error'});
+    } finally {
+      setConfirmingTaskId(null);
     }
   };
 
@@ -126,7 +150,7 @@ export function ValetRecordsScreen() {
               ? `Assign a driver to retrieve ${pendingVisitor.carNumber} from slot ${pendingVisitor.slotId} for ${pendingVisitor.name}`
               : `Tap a driver to collect the key and park ${pendingVisitor.name}'s car (${pendingVisitor.carNumber})`}
           </Text>
-          <DriverPickerList drivers={availableDrivers} onAssign={handleAssign} />
+          <DriverPickerList drivers={availableDrivers} onAssign={handleAssign} assigningId={assigningDriverId} />
         </ScrollView>
       </SafeAreaView>
     );
@@ -199,10 +223,16 @@ export function ValetRecordsScreen() {
             </View>
           )}
           {delivered && (
-            <PressableScale style={[s.actionBtn, {backgroundColor: colors.success}]}
+            <PressableScale
+              style={[s.actionBtn, {backgroundColor: colors.success, opacity: confirmingVisitorId === v.id ? 0.6 : 1}]}
+              disabled={confirmingVisitorId === v.id}
               onPress={() => handleConfirmVisitorDelivered(v.id)}>
-              <Icon name="checkBold" size={15} color="#fff" />
-              <Text style={[s.actionTxt, {color: '#fff'}]}>Confirm handed to owner</Text>
+              {confirmingVisitorId === v.id
+                ? <ActivityIndicator color="#fff" size="small" />
+                : <Icon name="checkBold" size={15} color="#fff" />}
+              <Text style={[s.actionTxt, {color: '#fff'}]}>
+                {confirmingVisitorId === v.id ? 'Please wait…' : 'Confirm handed to owner'}
+              </Text>
             </PressableScale>
           )}
           {v.status === 'pending' && (
@@ -271,10 +301,16 @@ export function ValetRecordsScreen() {
           {!!t.driverName && <Text style={[s.driverTxt, {color: colors.textMuted}]}>Driver: {t.driverName}</Text>}
 
           {delivered && (
-            <PressableScale style={[s.actionBtn, {backgroundColor: colors.success}]}
+            <PressableScale
+              style={[s.actionBtn, {backgroundColor: colors.success, opacity: confirmingTaskId === t.id ? 0.6 : 1}]}
+              disabled={confirmingTaskId === t.id}
               onPress={() => handleConfirmTaskDelivered(t.id)}>
-              <Icon name="checkBold" size={15} color="#fff" />
-              <Text style={[s.actionTxt, {color: '#fff'}]}>Confirm handed to owner</Text>
+              {confirmingTaskId === t.id
+                ? <ActivityIndicator color="#fff" size="small" />
+                : <Icon name="checkBold" size={15} color="#fff" />}
+              <Text style={[s.actionTxt, {color: '#fff'}]}>
+                {confirmingTaskId === t.id ? 'Please wait…' : 'Confirm handed to owner'}
+              </Text>
             </PressableScale>
           )}
         </View>
@@ -352,7 +388,12 @@ export function ValetRecordsScreen() {
       </View>
 
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
-        {filtered.length === 0 ? (
+        {tab === 'staff' && historyLoading && staffHistory.length === 0 ? (
+          <View style={s.emptyWrap}>
+            <ActivityIndicator color={colors.primary} />
+            <Text style={[s.emptySub, {color: colors.textMuted, marginTop: 10}]}>Loading staff records…</Text>
+          </View>
+        ) : filtered.length === 0 ? (
           <View style={s.emptyWrap}>
             <Text style={[s.emptyTitle, {color: colors.textSecondary}]}>{q ? 'No match found' : `No ${tab} records`}</Text>
             <Text style={[s.emptySub, {color: colors.textMuted}]}>

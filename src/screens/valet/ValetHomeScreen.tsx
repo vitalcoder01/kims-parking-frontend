@@ -1,5 +1,5 @@
 import React, {useState, useRef, useEffect} from 'react';
-import {View, Text, StyleSheet, ScrollView, TextInput, StatusBar} from 'react-native';
+import {View, Text, StyleSheet, ScrollView, TextInput, StatusBar, ActivityIndicator} from 'react-native';
 import {useDialog} from '../../components/AppDialog';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import LinearGradient from 'react-native-linear-gradient';
@@ -115,6 +115,15 @@ export function ValetHomeScreen() {
   // Which job's pending assignment is being cancelled right now — guards
   // against a double-tap firing the cancel-assignment call twice.
   const [cancellingAssignmentId, setCancellingAssignmentId] = useState<number | null>(null);
+  // Same guard pattern for the other one-tap job actions that had none at
+  // all — a slow response left the button tappable and a second tap either
+  // fired a genuine duplicate (arrival -> two key tasks) or hit the server
+  // after the first tap already finished the job ("task is currently
+  // completed"), which is confusing rather than informative.
+  const [confirmingTaskId, setConfirmingTaskId] = useState<number | null>(null);
+  const [collectingKeyTaskId, setCollectingKeyTaskId] = useState<number | null>(null);
+  const [arrivingId, setArrivingId] = useState<number | null>(null);
+  const [assigningToId, setAssigningToId] = useState<number | null>(null);
   // Read from async callbacks that would otherwise close over stale values.
   const assigningDriverIdRef = useRef<number | null>(null);
   assigningDriverIdRef.current = assigningDriverId;
@@ -391,10 +400,14 @@ export function ValetHomeScreen() {
   };
 
   const handleConfirmTaskDelivered = async (taskId: number) => {
+    if (confirmingTaskId != null) return;
+    setConfirmingTaskId(taskId);
     try {
       await confirmTaskDelivered(taskId);
     } catch (err: any) {
       dialog.alert(err.message || 'Could not confirm handover', {title: 'Error'});
+    } finally {
+      setConfirmingTaskId(null);
     }
   };
 
@@ -422,6 +435,12 @@ export function ValetHomeScreen() {
   // every other valet's screen. Skipping it would leave the request live to
   // the whole team while this valet stands there choosing a driver.
   const handleAssignDriverTo = (t: ParkingTask) => {
+    // Guards only the background claim below, not the navigation — the
+    // screen change itself already takes the button off-screen on the next
+    // render, but two taps landing in the same JS tick (before that commits)
+    // could otherwise both fire acceptRetrieval for the same job.
+    if (assigningToId === t.id) return;
+    setAssigningToId(t.id);
     setPendingTaskId(t.id);
     setScreen('assign');
 
@@ -439,23 +458,25 @@ export function ValetHomeScreen() {
       && myValetId != null
       && (t.status === 'requested' || t.status === 'accepted')
       && t.retrievalOwnerValetId !== myValetId;
-    if (!claimable) return;
+    if (!claimable) { setAssigningToId(null); return; }
 
-    acceptRetrieval(t.id).catch((err: any) => {
-      // Lost the race. Two ways this screen can already be gone, and
-      // reporting a second time would stack a dialog behind the first:
-      //  - an assignment is in flight (assignDriver claims too, and reports
-      //    its own failure) — leave it alone;
-      //  - the socket's task:restrict already pulled the job from our list
-      //    and the close-effect closed us with its own message.
-      if (assigningDriverIdRef.current != null) return;
-      if (screenRef.current !== 'assign' || pendingTaskIdRef.current !== t.id) return;
-      setPendingTaskId(null);
-      setScreen('home');
-      dialog.alert(err?.message || 'This retrieval request has already been accepted.', {
-        title: 'Already taken', tone: 'info',
-      });
-    });
+    acceptRetrieval(t.id)
+      .catch((err: any) => {
+        // Lost the race. Two ways this screen can already be gone, and
+        // reporting a second time would stack a dialog behind the first:
+        //  - an assignment is in flight (assignDriver claims too, and reports
+        //    its own failure) — leave it alone;
+        //  - the socket's task:restrict already pulled the job from our list
+        //    and the close-effect closed us with its own message.
+        if (assigningDriverIdRef.current != null) return;
+        if (screenRef.current !== 'assign' || pendingTaskIdRef.current !== t.id) return;
+        setPendingTaskId(null);
+        setScreen('home');
+        dialog.alert(err?.message || 'This retrieval request has already been accepted.', {
+          title: 'Already taken', tone: 'info',
+        });
+      })
+      .finally(() => setAssigningToId(null));
   };
 
   // Path B — the valet already knows who this is from the arrival card, so
@@ -463,13 +484,19 @@ export function ValetHomeScreen() {
   // straight to driver assignment (same as the "already known" branch of
   // handleScanCode); otherwise drop into the scan screen's step 2 with the
   // identity pre-filled, so the valet only has to type the plate in.
-  const handleArrivalArrived = async (a: {doctorId: number; doctorName: string; doctorCarNumber?: string; doctorDepartment?: string; doctorEmployeeId?: string}) => {
-    if (a.doctorCarNumber?.trim()) {
-      await createKeyTask({id: a.doctorId, name: a.doctorName}, a.doctorCarNumber.trim());
-    } else {
+  const handleArrivalArrived = async (a: {id: number; doctorId: number; doctorName: string; doctorCarNumber?: string; doctorDepartment?: string; doctorEmployeeId?: string}) => {
+    if (arrivingId != null) return;
+    if (!a.doctorCarNumber?.trim()) {
       setFoundUser({id: a.doctorId, name: a.doctorName, department: a.doctorDepartment, employeeId: a.doctorEmployeeId});
       setCarNumber('');
       setScreen('scan');
+      return;
+    }
+    setArrivingId(a.id);
+    try {
+      await createKeyTask({id: a.doctorId, name: a.doctorName}, a.doctorCarNumber.trim());
+    } finally {
+      setArrivingId(null);
     }
   };
 
@@ -981,10 +1008,16 @@ export function ValetHomeScreen() {
                     when a key is taken, so without it a doctor who never
                     turns up leaves the blue count permanently wrong. */}
                 <View style={{flexDirection: 'row', gap: 8}}>
-                  <PressableScale style={[s.taskActionBtn, {flex: 1, borderColor: 'transparent', backgroundColor: colors.primary}]}
+                  <PressableScale
+                    style={[s.taskActionBtn, {flex: 1, borderColor: 'transparent', backgroundColor: colors.primary, opacity: arrivingId === a.id ? 0.6 : 1}]}
+                    disabled={arrivingId === a.id}
                     onPress={() => handleArrivalArrived(a)}>
-                    <Icon name="key" size={13} color={colors.textOnPrimary} />
-                    <Text style={[s.taskActionTxt, {color: colors.textOnPrimary}]}>They've arrived</Text>
+                    {arrivingId === a.id
+                      ? <ActivityIndicator color={colors.textOnPrimary} size="small" />
+                      : <Icon name="key" size={13} color={colors.textOnPrimary} />}
+                    <Text style={[s.taskActionTxt, {color: colors.textOnPrimary}]}>
+                      {arrivingId === a.id ? 'Please wait…' : "They've arrived"}
+                    </Text>
                   </PressableScale>
                   <PressableScale style={[s.taskActionBtn, {borderColor: colors.border, backgroundColor: colors.cardAlt, paddingHorizontal: 14}]}
                     onPress={() => dismissArrivalNotice(a.id)}>
@@ -1439,10 +1472,26 @@ export function ValetHomeScreen() {
                     </PressableScale>
                   </View>
                 ) : (
-                  <PressableScale style={[s.taskActionBtn, s.jobActions, {borderColor: 'transparent', backgroundColor: colors.success}]}
-                    onPress={() => markKeyCollected(t.id)}>
-                    <Icon name="check" size={14} color="#fff" />
-                    <Text style={[s.taskActionTxt, {color: '#fff'}]}>Key handed over</Text>
+                  <PressableScale
+                    style={[s.taskActionBtn, s.jobActions, {borderColor: 'transparent', backgroundColor: colors.success, opacity: collectingKeyTaskId === t.id ? 0.6 : 1}]}
+                    disabled={collectingKeyTaskId === t.id}
+                    onPress={async () => {
+                      if (collectingKeyTaskId != null) return;
+                      setCollectingKeyTaskId(t.id);
+                      try {
+                        await markKeyCollected(t.id);
+                      } catch (err: any) {
+                        dialog.alert(err.message || 'Could not mark key handed over', {title: 'Error'});
+                      } finally {
+                        setCollectingKeyTaskId(null);
+                      }
+                    }}>
+                    {collectingKeyTaskId === t.id
+                      ? <ActivityIndicator color="#fff" size="small" />
+                      : <Icon name="check" size={14} color="#fff" />}
+                    <Text style={[s.taskActionTxt, {color: '#fff'}]}>
+                      {collectingKeyTaskId === t.id ? 'Please wait…' : 'Key handed over'}
+                    </Text>
                   </PressableScale>
                 )
               )}
@@ -1460,11 +1509,15 @@ export function ValetHomeScreen() {
                 </View>
               )}
               {needsConfirm && (
-                <PressableScale style={[s.taskActionBtn, s.jobActions, {borderColor: 'transparent', backgroundColor: colors.success}]}
+                <PressableScale
+                  style={[s.taskActionBtn, s.jobActions, {borderColor: 'transparent', backgroundColor: colors.success, opacity: confirmingTaskId === t.id ? 0.6 : 1}]}
+                  disabled={confirmingTaskId === t.id}
                   onPress={() => handleConfirmTaskDelivered(t.id)}>
-                  <Icon name="checkBold" size={14} color="#fff" />
+                  {confirmingTaskId === t.id
+                    ? <ActivityIndicator color="#fff" size="small" />
+                    : <Icon name="checkBold" size={14} color="#fff" />}
                   <Text style={[s.taskActionTxt, {color: '#fff'}]}>
-                    {recalled ? 'Confirm car returned' : 'Confirm handover'}
+                    {confirmingTaskId === t.id ? 'Please wait…' : (recalled ? 'Confirm car returned' : 'Confirm handover')}
                   </Text>
                 </PressableScale>
               )}

@@ -25,6 +25,13 @@ export function DriverJobsScreen() {
   // Guards handleMarkParked against a double-tap firing the same "mark
   // parked" call twice while the first is still in flight.
   const [markingParked, setMarkingParked] = useState(false);
+  // Shared guard for the rest of the one-tap job actions below (accept,
+  // reject, start retrieval, mark returned, mark retrieved) — only one of
+  // them is ever visible at a time for a given task stage, so a single flag
+  // is enough. None of these had any guard at all before: a slow response
+  // left the button tappable, and a second tap either fired the same action
+  // twice or landed after the job had already moved past that stage.
+  const [actionBusy, setActionBusy] = useState(false);
   const carAnim = useRef(new Animated.Value(0)).current;
 
   const myDriverId = useMyDriverId();
@@ -75,29 +82,38 @@ export function DriverJobsScreen() {
   };
 
   const handleAcceptTask = async () => {
-    if (!activeTask) return;
+    if (!activeTask || actionBusy) return;
+    setActionBusy(true);
     try {
       await acceptTask(activeTask.id);
     } catch (err: any) {
       await handleStaleJob(err, 'Could not accept task');
+    } finally {
+      setActionBusy(false);
     }
   };
 
   const handleRejectTask = async () => {
-    if (!activeTask) return;
+    if (!activeTask || actionBusy) return;
+    setActionBusy(true);
     try {
       await rejectTask(activeTask.id);
     } catch (err: any) {
       await handleStaleJob(err, 'Could not reject task');
+    } finally {
+      setActionBusy(false);
     }
   };
 
   const handleStartRetrieval = async () => {
-    if (!activeTask) return;
+    if (!activeTask || actionBusy) return;
+    setActionBusy(true);
     try {
       await updateTask(activeTask.id, {status: 'in_transit'});
     } catch (err: any) {
       dialog.alert(err.message || 'Could not start retrieval', {title: 'Error'});
+    } finally {
+      setActionBusy(false);
     }
   };
 
@@ -133,16 +149,20 @@ export function DriverJobsScreen() {
   // Valet pulled this park job back mid-drive — the car goes back to the
   // counter instead of into a slot. They still have to confirm receipt.
   const handleMarkReturned = async () => {
-    if (!activeTask) return;
+    if (!activeTask || actionBusy) return;
+    setActionBusy(true);
     try {
       await markTaskReturned(activeTask.id);
     } catch (err: any) {
       dialog.alert(err.message || 'Could not mark returned', {title: 'Error'});
+    } finally {
+      setActionBusy(false);
     }
   };
 
   const handleMarkRetrieved = async () => {
-    if (!activeTask) return;
+    if (!activeTask || actionBusy) return;
+    setActionBusy(true);
     try {
       await markRetrieved(activeTask.id);
       // Alarm-grade — a car is now sitting at the counter waiting on the
@@ -161,6 +181,8 @@ export function DriverJobsScreen() {
     } catch (err: any) {
       dialog.alert(err.message || 'Could not mark retrieved', {title: 'Error'});
       return;
+    } finally {
+      setActionBusy(false);
     }
   };
 
@@ -238,15 +260,15 @@ export function DriverJobsScreen() {
               {activeTask.status === 'assigned' && !activeTask.acceptedAt && (
                 <View style={{flexDirection: 'row', gap: 8}}>
                   <PressableScale
-                    style={[s.parkBtn, {backgroundColor: c.cardAlt, flex: 1}]}
-                    onPress={handleRejectTask}
+                    style={[s.parkBtn, {backgroundColor: c.cardAlt, flex: 1, opacity: actionBusy ? 0.6 : 1}]}
+                    onPress={handleRejectTask} disabled={actionBusy}
                   >
                     <Icon name="close" size={15} color={c.primary} />
                     <Text style={[s.parkBtnTxt, {color: c.primary}]}>Reject</Text>
                   </PressableScale>
                   <PressableScale
-                    style={[s.parkBtn, {backgroundColor: c.primary, flex: 1}]}
-                    onPress={handleAcceptTask}
+                    style={[s.parkBtn, {backgroundColor: c.primary, flex: 1, opacity: actionBusy ? 0.6 : 1}]}
+                    onPress={handleAcceptTask} disabled={actionBusy}
                   >
                     <Icon name="check" size={15} color={c.textOnPrimary} />
                     <Text style={[s.parkBtnTxt, {color: c.textOnPrimary}]}>Accept</Text>
@@ -296,11 +318,11 @@ export function DriverJobsScreen() {
                     </Text>
                   </View>
                   <PressableScale
-                    style={[s.retrieveBtn, {backgroundColor: c.primary}]}
-                    onPress={handleMarkReturned}
+                    style={[s.retrieveBtn, {backgroundColor: c.primary, opacity: actionBusy ? 0.6 : 1}]}
+                    onPress={handleMarkReturned} disabled={actionBusy}
                   >
                     <Icon name="check" size={16} color={c.textOnPrimary} />
-                    <Text style={[s.retrieveBtnTxt, {color: c.textOnPrimary}]}>Returned to counter</Text>
+                    <Text style={[s.retrieveBtnTxt, {color: c.textOnPrimary}]}>{actionBusy ? 'Please wait…' : 'Returned to counter'}</Text>
                   </PressableScale>
                 </View>
               )}
@@ -351,20 +373,20 @@ export function DriverJobsScreen() {
 
               {activeTask.type === 'retrieve' && activeTask.status === 'assigned' && !!activeTask.acceptedAt && (
                 <PressableScale
-                  style={[s.retrieveBtn, {backgroundColor: c.primary}]}
-                  onPress={handleStartRetrieval}
+                  style={[s.retrieveBtn, {backgroundColor: c.primary, opacity: actionBusy ? 0.6 : 1}]}
+                  onPress={handleStartRetrieval} disabled={actionBusy}
                 >
                   <Icon name="carKey" size={16} color={c.textOnPrimary} />
-                  <Text style={[s.retrieveBtnTxt, {color: c.textOnPrimary}]}>Start retrieval</Text>
+                  <Text style={[s.retrieveBtnTxt, {color: c.textOnPrimary}]}>{actionBusy ? 'Please wait…' : 'Start retrieval'}</Text>
                 </PressableScale>
               )}
               {activeTask.type === 'retrieve' && activeTask.status === 'in_transit' && (
                 <PressableScale
-                  style={[s.retrieveBtn, {backgroundColor: c.primary}]}
-                  onPress={handleMarkRetrieved}
+                  style={[s.retrieveBtn, {backgroundColor: c.primary, opacity: actionBusy ? 0.6 : 1}]}
+                  onPress={handleMarkRetrieved} disabled={actionBusy}
                 >
                   <Icon name="check" size={16} color={c.textOnPrimary} />
-                  <Text style={[s.retrieveBtnTxt, {color: c.textOnPrimary}]}>Delivered to counter</Text>
+                  <Text style={[s.retrieveBtnTxt, {color: c.textOnPrimary}]}>{actionBusy ? 'Please wait…' : 'Delivered to counter'}</Text>
                 </PressableScale>
               )}
             </View>
