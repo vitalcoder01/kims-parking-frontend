@@ -1,0 +1,29 @@
+diff --git a/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/ReactNativeBlobUtilImpl.java b/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/ReactNativeBlobUtilImpl.java
+index e629bba..8dd67f2 100644
+--- a/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/ReactNativeBlobUtilImpl.java
++++ b/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/ReactNativeBlobUtilImpl.java
+@@ -117,6 +117,11 @@ class ReactNativeBlobUtilImpl {
+ 
+             if (chooserTitle != null) {
+                 intent = Intent.createChooser(intent, chooserTitle);
++                // createChooser returns a NEW intent that does not inherit
++                // FLAG_ACTIVITY_NEW_TASK from the wrapped target — without
++                // re-adding it, startActivity from this non-Activity context
++                // throws AndroidRuntimeException and the promise rejects.
++                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+             }
+ 
+             try {
+diff --git a/node_modules/react-native-blob-util/codegenSpecs/NativeBlobUtils.js b/node_modules/react-native-blob-util/codegenSpecs/NativeBlobUtils.js
+index a8da97f..2ca4fb8 100644
+--- a/node_modules/react-native-blob-util/codegenSpecs/NativeBlobUtils.js
++++ b/node_modules/react-native-blob-util/codegenSpecs/NativeBlobUtils.js
+@@ -64,7 +64,7 @@ export interface Spec extends TurboModule {
+     +df: (callback: (value: Array<any>) => void) => void;
+     +emitExpiredEvent: (callback: (value: string) => void) => void; // The callback is not really used here
+     // Android Only APIs
+-    +actionViewIntent: (path: string, mime: string, chooserTitle: string) => Promise<void>;
++    +actionViewIntent: (path: string, mime: string, chooserTitle: ?string) => Promise<void>;
+     +addCompleteDownload: (config: Object) => Promise<void>;
+     +copyToInternal: (contentUri: string, destpath: string) => Promise<string>;
+     +copyToMediaStore: (filedata: Object, mt: string, path: string) => Promise<string>;

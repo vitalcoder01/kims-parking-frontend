@@ -30,12 +30,16 @@ async function downloadAndInstall(apkUrl: string, onProgress: (pct: number) => v
       const r = Number(received), t = Number(total);
       if (t > 0) onProgress(r / t);
     });
-  // chooserTitle is a required third argument on this codegen-typed native
-  // method (New Architecture) — omitting it isn't just ignored, it fails at
-  // the native bridge's argument marshaling and throws, which is why every
-  // in-app download landed on the "couldn't download" fallback instead of
-  // ever reaching the installer.
-  await ReactNativeBlobUtil.android.actionViewIntent(res.path(), 'application/vnd.android.package-archive', 'Install update');
+  // Deliberately NO chooser title: the library's chooser branch wraps the
+  // intent in Intent.createChooser, which drops FLAG_ACTIVITY_NEW_TASK and
+  // throws from a non-Activity context (patched in
+  // patches/react-native-blob-util+*.patch as belt-and-braces, alongside
+  // making the codegen spec accept null here — the unpatched spec typed
+  // chooserTitle as a non-nullable string, so BOTH the two-arg and
+  // three-arg forms of this call failed on the New Architecture, each in a
+  // different way). Omitting the title goes straight to the package
+  // installer with the flags intact.
+  await ReactNativeBlobUtil.android.actionViewIntent(res.path(), 'application/vnd.android.package-archive');
 }
 
 // Replaces the app's entire content — not an overlay on top of it — until
