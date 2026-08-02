@@ -137,8 +137,18 @@ export const authApi = {
 export const usersApi = {
   lookupByCardCode: (code: string) =>
     client.get(`/users/by-card/${code}`).then(r => r.data.user),
-  updateMe: (patch: {carNumber?: string; phone?: string; carModel?: string; carColor?: string; vehicleType?: 'car' | 'bike'}) =>
+  // Every field is optional — the backend only updates what's present, so
+  // an "edit name" flow sends just {name}, "edit vehicle" sends just
+  // {carNumber, ...}, etc. Server does the real validation; the client
+  // just makes sure the shape is right.
+  updateMe: (patch: {carNumber?: string; phone?: string; carModel?: string; carColor?: string; vehicleType?: 'car' | 'bike'; name?: string; username?: string}) =>
     client.patch('/users/me', patch).then(r => r.data.user),
+  // Password change: always requires the current password, always on its
+  // own call (never bundled with updateMe) so the security guarantee is
+  // impossible to skip by accident. Returns nothing on success — the
+  // caller keeps their existing session.
+  changeMyPassword: (currentPassword: string, newPassword: string) =>
+    client.post('/users/me/password', {currentPassword, newPassword}).then(() => undefined),
 };
 
 // ── Tasks ────────────────────────────────────────────────────────────────

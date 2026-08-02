@@ -11,6 +11,7 @@ import {Icon, IconName} from '../../components/Icon';
 import {typography, spacing, radius} from '../../theme';
 import {APP_VERSION_NAME, APP_VERSION_CODE} from '../../config/version';
 import {adminApi} from '../../services/api';
+import {EditProfileSheet, EditProfileMode} from '../../components/EditProfileSheet';
 
 type ThemeMode = 'light' | 'dark' | 'system';
 
@@ -73,6 +74,10 @@ export function SharedSettingsScreen() {
   const [notifUpdates,  setNotifUpdates]  = React.useState(false);
   const [biometrics,    setBiometrics]    = React.useState(true);
 
+  // Which self-service edit sheet is open, if any. One state variable so
+  // opening a second field cleanly replaces the first instead of stacking.
+  const [editMode, setEditMode] = React.useState<EditProfileMode | null>(null);
+
   const modeOptions: {value: ThemeMode; label: string; icon: IconName}[] = [
     {value: 'light', label: 'Light', icon: 'sun'},
     {value: 'dark',  label: 'Dark',  icon: 'moon'},
@@ -102,6 +107,35 @@ export function SharedSettingsScreen() {
             </Text>
             <Text style={[styles.profileId, {color: colors.primary}]}>{user?.employeeId ?? '—'}</Text>
           </View>
+        </Card>
+
+        {/* Account — self-service edits for name, login username, and
+            password. Each row opens its own bottom sheet so a mistap on
+            one field cannot accidentally rewrite another. */}
+        <Text style={[styles.sectionTitle, {color: colors.textMuted}]}>ACCOUNT</Text>
+        <Card style={{padding: 0, overflow: 'hidden'}}>
+          {([
+            {mode: 'name' as const,     label: 'Display name', value: user?.name ?? '—',     icon: 'user' as IconName},
+            {mode: 'username' as const, label: 'Login username', value: user?.username ?? '—', icon: 'userCard' as IconName},
+            {mode: 'password' as const, label: 'Password',      value: '••••••••',           icon: 'lock' as IconName},
+          ]).map((row, i, arr) => (
+            <PressableScale
+              key={row.mode}
+              onPress={() => setEditMode(row.mode)}
+              style={[
+                styles.accountRow,
+                i < arr.length - 1 && {borderBottomColor: colors.divider, borderBottomWidth: 1},
+              ]}>
+              <View style={[styles.accountIconWrap, {backgroundColor: colors.cardAlt}]}>
+                <Icon name={row.icon} size={16} color={colors.textPrimary} />
+              </View>
+              <View style={{flex: 1}}>
+                <Text style={[styles.accountRowLabel, {color: colors.textMuted}]}>{row.label}</Text>
+                <Text style={[styles.accountRowValue, {color: colors.textPrimary}]} numberOfLines={1}>{row.value}</Text>
+              </View>
+              <Icon name="chevronRight" size={16} color={colors.textMuted} />
+            </PressableScale>
+          ))}
         </Card>
 
         {/* Appearance */}
@@ -253,6 +287,14 @@ export function SharedSettingsScreen() {
         </PressableScale>
 
       </ScrollView>
+
+      <EditProfileSheet
+        visible={editMode !== null}
+        mode={editMode}
+        onClose={() => setEditMode(null)}
+        onSuccess={(msg) => dialog.alert(msg, {tone: 'success', title: 'Saved'})}
+        onError={(msg) => dialog.alert(msg, {tone: 'error', title: "Couldn't save"})}
+      />
     </SafeAreaView>
   );
 }
@@ -306,4 +348,12 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.base, alignItems: 'center', marginTop: spacing.sm,
   },
   logoutText: {fontSize: typography.sizes.base, fontWeight: typography.weights.black},
+
+  accountRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+    paddingHorizontal: spacing.base, paddingVertical: 14,
+  },
+  accountIconWrap: {width: 34, height: 34, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center'},
+  accountRowLabel: {fontSize: 11, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase'},
+  accountRowValue: {fontSize: typography.sizes.sm, fontWeight: typography.weights.bold, marginTop: 2},
 });
