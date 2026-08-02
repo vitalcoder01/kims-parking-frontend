@@ -9,9 +9,9 @@ const {width: SCREEN_W} = Dimensions.get('window');
 // How far (or how fast) a drag has to go before it counts as "let go of
 // this" rather than "just nudged it" — sideways off either edge, or a flick
 // upward back toward the status bar it dropped in from.
-const H_DISMISS_DIST = 90;
-const V_DISMISS_DIST = -60;
-const FLING_VELOCITY = 0.5;
+const H_DISMISS_DIST = 60;
+const V_DISMISS_DIST = -50;
+const FLING_VELOCITY = 0.35;
 
 export function NotificationBanner() {
   const {notifications, markNotificationRead} = useAppState();
@@ -78,30 +78,48 @@ export function NotificationBanner() {
   }, [unread.length]);
 
   // Swipe sideways off either edge, or flick it back up toward the status
-  // bar — either dismisses it outright. Anything short of that (a nudge that
-  // doesn't clear the distance/velocity bar) springs right back, and the
-  // auto-hide clock — paused for the duration of the touch — picks back up
-  // from a fresh full delay rather than wherever it left off, since a card
-  // someone just touched is a card someone was just reading.
+  // bar — either dismisses it outright, same as a regular OS notification.
+  // Anything short of that (a nudge that doesn't clear the distance/velocity
+  // bar) springs right back, and the auto-hide clock — paused for the
+  // duration of the touch — picks back up from a fresh full delay rather
+  // than wherever it left off, since a card someone just touched is a card
+  // someone was just reading.
+  const settleOrDismiss = (g: {dx: number; dy: number; vx: number; vy: number}) => {
+    if (!current) return;
+    const flungSideways = Math.abs(g.dx) > H_DISMISS_DIST || Math.abs(g.vx) > FLING_VELOCITY;
+    const flungUp = g.dy < V_DISMISS_DIST || g.vy < -FLING_VELOCITY;
+    if (flungSideways || flungUp) {
+      const toX = flungUp ? 0 : g.dx > 0 ? SCREEN_W : -SCREEN_W;
+      const toY = flungUp ? -300 : 0;
+      Animated.timing(pan, {toValue: {x: toX, y: toY}, duration: 220, useNativeDriver: true})
+        .start(() => finalizeDismiss(current.id));
+    } else {
+      Animated.spring(pan, {toValue: {x: 0, y: 0}, useNativeDriver: true, friction: 7}).start();
+      scheduleAutoHide(current, current.type === 'alarm' ? 8000 : 4000);
+    }
+  };
+
   const panResponder = useRef(
     PanResponder.create({
+      // Claim the gesture in the CAPTURE phase, before it reaches the
+      // ScrollView this card floats on top of — without this, the
+      // ScrollView periodically won responder mid-swipe (its own
+      // onMoveShouldSetPanResponder kicking in), which fired
+      // onPanResponderTerminate instead of onPanResponderRelease and left
+      // the card frozen wherever the drag had gotten to instead of either
+      // dismissing or springing back.
+      onStartShouldSetPanResponderCapture: () => false,
+      onMoveShouldSetPanResponderCapture: (_evt, g) => Math.abs(g.dx) > 6 || g.dy < -6,
       onMoveShouldSetPanResponder: (_evt, g) => Math.abs(g.dx) > 6 || g.dy < -6,
       onPanResponderGrant: clearAutoHide,
       onPanResponderMove: Animated.event([null, {dx: pan.x, dy: pan.y}], {useNativeDriver: false}),
-      onPanResponderRelease: (_evt, g) => {
-        if (!current) return;
-        const flungSideways = Math.abs(g.dx) > H_DISMISS_DIST || Math.abs(g.vx) > FLING_VELOCITY;
-        const flungUp = g.dy < V_DISMISS_DIST || g.vy < -FLING_VELOCITY;
-        if (flungSideways || flungUp) {
-          const toX = flungUp ? 0 : g.dx > 0 ? SCREEN_W : -SCREEN_W;
-          const toY = flungUp ? -300 : 0;
-          Animated.timing(pan, {toValue: {x: toX, y: toY}, duration: 220, useNativeDriver: true})
-            .start(() => finalizeDismiss(current.id));
-        } else {
-          Animated.spring(pan, {toValue: {x: 0, y: 0}, useNativeDriver: true, friction: 7}).start();
-          scheduleAutoHide(current, current.type === 'alarm' ? 8000 : 4000);
-        }
-      },
+      onPanResponderRelease: (_evt, g) => settleOrDismiss(g),
+      // Once we own the gesture, keep it — a swipe-to-dismiss card losing
+      // the gesture partway is exactly the "stuck mid-swipe" bug above.
+      onPanResponderTerminationRequest: () => false,
+      // Belt-and-braces: if something terminates us anyway, treat it the
+      // same as a release rather than leaving the card wherever it was.
+      onPanResponderTerminate: (_evt, g) => settleOrDismiss(g),
     }),
   ).current;
 
