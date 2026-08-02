@@ -1210,21 +1210,41 @@ export function ValetHomeScreen() {
         </LinearGradient>
 
         <View style={s.body}>
-        {/* Retrieval requests now live on their own page — see the inbox
-            icon (with badge count) in the header above, and the
-            screen === 'retrievals' block. */}
-
-        {/* Primary CTA buttons */}
-        <View style={s.primaryRow}>
-          <PressableScale style={[s.primaryBtn, {backgroundColor: colors.primary}]} onPress={() => setScreen('scan')}>
-            <View style={s.primaryIconWrap}><Icon name="key" size={26} color="#fff" /></View>
-            <Text style={s.primaryBtnTxt}>Staff</Text>
-            <Text style={s.primaryBtnSub} numberOfLines={2}>Collect key from doctor / staff</Text>
+        {/* Primary action grid — 2x2, same dark card language throughout
+            (the badge colour carries the "needs attention" signal, not the
+            card background, so nothing here introduces a new colour). The
+            inbox icon in the header above still works as a quick-glance
+            entry point; these two cards are the primary, always-visible one. */}
+        <View style={s.actionGrid}>
+          <PressableScale style={[s.actionCard, {backgroundColor: colors.primary}]} onPress={() => setScreen('scan')}>
+            <View style={s.actionIconWrap}><Icon name="key" size={24} color="#fff" /></View>
+            <Text style={s.actionCardTxt}>Staff</Text>
+            <Text style={s.actionCardSub} numberOfLines={2}>Collect key from doctor / staff</Text>
           </PressableScale>
-          <PressableScale style={[s.primaryBtn, {backgroundColor: colors.accent}]} onPress={() => setScreen('visitor')}>
-            <View style={s.primaryIconWrap}><Icon name="ticket" size={26} color="#fff" /></View>
-            <Text style={s.primaryBtnTxt}>Visitor</Text>
-            <Text style={s.primaryBtnSub} numberOfLines={2}>Patient / VIP token</Text>
+          <PressableScale style={[s.actionCard, {backgroundColor: colors.primary}]} onPress={() => setScreen('visitor')}>
+            <View style={s.actionIconWrap}><Icon name="ticket" size={24} color="#fff" /></View>
+            <Text style={s.actionCardTxt}>Visitor</Text>
+            <Text style={s.actionCardSub} numberOfLines={2}>Patient / VIP token</Text>
+          </PressableScale>
+          <PressableScale
+            style={[s.actionCard, {backgroundColor: colors.primary}]}
+            onPress={() => { setInboxSection('retrievals'); setScreen('retrievals'); }}>
+            <View style={s.actionIconWrap}><Icon name="inbox" size={24} color="#fff" /></View>
+            <Text style={s.actionCardTxt}>Retrieval Requests</Text>
+            <Text style={s.actionCardSub} numberOfLines={2}>Cars waiting to leave</Text>
+            <View style={[s.actionBadge, {backgroundColor: retrievalRequests.length > 0 ? '#E53935' : 'rgba(255,255,255,0.14)'}]}>
+              <Text style={s.actionBadgeTxt}>{retrievalRequests.length} Pending</Text>
+            </View>
+          </PressableScale>
+          <PressableScale
+            style={[s.actionCard, {backgroundColor: colors.primary}]}
+            onPress={() => { setInboxSection('arrivals'); setScreen('retrievals'); }}>
+            <View style={s.actionIconWrap}><Icon name="bellAlert" size={24} color="#fff" /></View>
+            <Text style={s.actionCardTxt}>Expected Arrivals</Text>
+            <Text style={s.actionCardSub} numberOfLines={2}>Heads-up, on the way in</Text>
+            <View style={[s.actionBadge, {backgroundColor: arrivalNotices.length > 0 ? '#2F6FA8' : 'rgba(255,255,255,0.14)'}]}>
+              <Text style={s.actionBadgeTxt}>{arrivalNotices.length} Today</Text>
+            </View>
           </PressableScale>
         </View>
 
@@ -1554,11 +1574,16 @@ const s = StyleSheet.create({
   backTxt:{fontSize:13,fontWeight:'700'},
   headerTitle:{fontSize:17,fontWeight:'900'},
 
-  primaryRow:{flexDirection:'row',gap:12,marginBottom:24},
-  primaryBtn:{flex:1,borderRadius:18,padding:20,alignItems:'center'},
-  primaryIconWrap:{width:52,height:52,borderRadius:16,backgroundColor:'rgba(255,255,255,0.18)',alignItems:'center',justifyContent:'center',marginBottom:8},
-  primaryBtnTxt:{color:'#fff',fontSize:15,fontWeight:'800'},
-  primaryBtnSub:{color:'rgba(255,255,255,0.7)',fontSize:11,lineHeight:14,marginTop:4,height:28,textAlign:'center'},
+  // 2x2 action grid — two equal cards per row, wrapping to a second row.
+  // `(100% - gap) / 2` via percentage width keeps it responsive across phone
+  // sizes without a hardcoded pixel width like the old 2-card row had.
+  actionGrid:{flexDirection:'row',flexWrap:'wrap',justifyContent:'space-between',rowGap:12,marginBottom:24},
+  actionCard:{width:'48.5%',borderRadius:22,padding:18,minHeight:148,alignItems:'center',shadowColor:'#000',shadowOffset:{width:0,height:6},shadowOpacity:0.16,shadowRadius:10,elevation:4},
+  actionIconWrap:{width:46,height:46,borderRadius:14,backgroundColor:'rgba(255,255,255,0.18)',alignItems:'center',justifyContent:'center',marginBottom:10},
+  actionCardTxt:{color:'#fff',fontSize:15,fontWeight:'800',textAlign:'center'},
+  actionCardSub:{color:'rgba(255,255,255,0.65)',fontSize:11,lineHeight:14,marginTop:4,textAlign:'center'},
+  actionBadge:{alignSelf:'center',borderRadius:99,paddingHorizontal:9,paddingVertical:4,marginTop:10},
+  actionBadgeTxt:{color:'#fff',fontSize:10.5,fontWeight:'800'},
   sectionTitle:{fontSize:14,fontWeight:'800',marginBottom:12},
   driverPill:{borderRadius:16,borderWidth:1,width:128,overflow:'hidden'},
   driverPillTop:{flexDirection:'row',alignItems:'center',gap:8,padding:12,borderBottomWidth:1},
