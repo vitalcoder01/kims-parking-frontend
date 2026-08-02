@@ -396,32 +396,36 @@ export function DoctorHomeScreen() {
               so at most one card ever renders; neither renders "blocked"
               anymore since a card only shows up when it's actually usable. */}
           {!hydrated && (
-            <View style={s.primaryRow}>
-              <SkeletonBlock height={116} radius={18} style={{flex: 1}} />
-              <SkeletonBlock height={116} radius={18} style={{flex: 1}} />
-            </View>
+            <SkeletonBlock height={148} radius={22} style={{marginBottom: 4}} />
           )}
-          {hydrated && (showEmptyState || (carIsParked && !activeRetrieve)) && (
-            <View style={s.primaryRow}>
-              {showEmptyState && (
-                <PressableScale
-                  onPress={() => setShowArrivalModal(true)}
-                  style={[s.primaryBtn, {backgroundColor: colors.primary}]}>
-                  <View style={s.primaryIconWrap}><Icon name="bellAlert" size={26} color="#fff" /></View>
-                  <Text style={s.primaryBtnTxt}>Arrival</Text>
-                  <Text style={s.primaryBtnSub} numberOfLines={2}>Let valet know you're coming</Text>
-                </PressableScale>
-              )}
-              {carIsParked && !activeRetrieve && (
-                <PressableScale
-                  onPress={() => setShowDepartureModal(true)}
-                  style={[s.primaryBtn, {backgroundColor: colors.accent}]}>
-                  <View style={s.primaryIconWrap}><Icon name="car" size={26} color="#fff" /></View>
-                  <Text style={s.primaryBtnTxt}>Departure</Text>
-                  <Text style={s.primaryBtnSub} numberOfLines={2}>Request your car back</Text>
-                </PressableScale>
-              )}
-            </View>
+          {/* Same premium card language as the valet's action grid (rounded
+              22px, soft shadow, icon in a rounded square) — sized as one
+              full-width card rather than a 2-slot row, since Arrival and
+              Departure are mutually exclusive states and only one is ever
+              relevant at a time. */}
+          {hydrated && showEmptyState && (
+            <PressableScale
+              onPress={() => setShowArrivalModal(true)}
+              style={[s.requestCard, {backgroundColor: colors.primary}]}>
+              <View style={s.requestIconWrap}><Icon name="bellAlert" size={24} color="#fff" /></View>
+              <View style={{flex: 1}}>
+                <Text style={s.requestCardTxt}>Arrival</Text>
+                <Text style={s.requestCardSub}>Let the valet know you're coming</Text>
+              </View>
+              <Icon name="arrowRight" size={18} color="rgba(255,255,255,0.6)" />
+            </PressableScale>
+          )}
+          {hydrated && carIsParked && !activeRetrieve && (
+            <PressableScale
+              onPress={() => setShowDepartureModal(true)}
+              style={[s.requestCard, {backgroundColor: colors.primary}]}>
+              <View style={s.requestIconWrap}><Icon name="car" size={24} color="#fff" /></View>
+              <View style={{flex: 1}}>
+                <Text style={s.requestCardTxt}>Departure</Text>
+                <Text style={s.requestCardSub}>Request your car back</Text>
+              </View>
+              <Icon name="arrowRight" size={18} color="rgba(255,255,255,0.6)" />
+            </PressableScale>
           )}
 
           {arrivalSent && showEmptyState && (
@@ -732,11 +736,14 @@ const s = StyleSheet.create({
   historyLink:{flexDirection:'row',alignItems:'center',gap:10,borderRadius:16,borderWidth:1,padding:14},
   historyLinkTxt:{flex:1,fontSize:13,fontWeight:'700'},
 
-  primaryRow:{flexDirection:'row',gap:12},
-  primaryBtn:{flex:1,borderRadius:18,padding:20,alignItems:'center'},
-  primaryIconWrap:{width:52,height:52,borderRadius:16,backgroundColor:'rgba(255,255,255,0.18)',alignItems:'center',justifyContent:'center',marginBottom:8},
-  primaryBtnTxt:{color:'#fff',fontSize:15,fontWeight:'800'},
-  primaryBtnSub:{color:'rgba(255,255,255,0.7)',fontSize:11,lineHeight:14,marginTop:4,height:28,textAlign:'center'},
+  // Same visual DNA as the valet's action grid (rounded 22px, soft shadow,
+  // icon in a rounded square) — a horizontal solo-card layout rather than a
+  // centered vertical stack, since a square grid tile sitting alone in a
+  // wide row would leave visible empty space next to it.
+  requestCard:{flexDirection:'row',alignItems:'center',gap:14,borderRadius:22,padding:18,shadowColor:'#000',shadowOffset:{width:0,height:6},shadowOpacity:0.16,shadowRadius:10,elevation:4},
+  requestIconWrap:{width:46,height:46,borderRadius:14,backgroundColor:'rgba(255,255,255,0.18)',alignItems:'center',justifyContent:'center'},
+  requestCardTxt:{color:'#fff',fontSize:15,fontWeight:'800'},
+  requestCardSub:{color:'rgba(255,255,255,0.65)',fontSize:11.5,marginTop:2},
 
   noticeBanner:{flexDirection:'row',alignItems:'center',gap:8,borderRadius:14,borderWidth:1,padding:12},
   noticeBannerTxt:{flex:1,fontSize:12,fontWeight:'700'},
