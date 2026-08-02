@@ -3,7 +3,6 @@ import {View, Text, StyleSheet, ScrollView, TextInput, StatusBar, Dimensions, Mo
 import {useDialog} from '../../components/AppDialog';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {WebView} from 'react-native-webview';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import {useNavigation} from '@react-navigation/native';
 import {useTheme} from '../../context/ThemeContext';
 import {useAuth} from '../../context/AuthContext';
@@ -300,25 +299,18 @@ export function VehicleSetupScreen() {
   const navigation = useNavigation<any>();
   const webRef = useRef<any>(null);
   const phoneRef = useRef<TextInput>(null);
+  const modelRef = useRef<TextInput>(null);
   const [vehicleNumber, setVehicleNumber] = useState(user?.carNumber ?? '');
   const [phone, setPhone] = useState(user?.phone ?? '');
-  const [selectedColor, setSelectedColor] = useState(COLORS[1].hex);
+  const [vehicleModel, setVehicleModel] = useState(user?.carModel ?? '');
+  const [vehicleType, setVehicleType] = useState<'car' | 'bike'>(user?.vehicleType ?? 'car');
+  const [selectedColor, setSelectedColor] = useState(user?.carColor || COLORS[1].hex);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   // Already saved a vehicle number before -> land on the summary view
   // instead of re-asking for the same details every time this tab opens;
   // "Edit" is the only way back into the form.
   const [mode, setMode] = useState<'view' | 'edit'>(user?.carNumber ? 'view' : 'edit');
-
-  const colorStorageKey = `@vehicle_color_${user?.id ?? 'anon'}`;
-
-  // The backend has no body-colour column — it's a purely cosmetic touch
-  // for the 3D preview, so it's kept locally per account instead.
-  useEffect(() => {
-    AsyncStorage.getItem(colorStorageKey).then(saved => {
-      if (saved) setSelectedColor(saved);
-    });
-  }, [colorStorageKey]);
 
   useEffect(() => {
     webRef.current?.postMessage(JSON.stringify({type: 'setColor', color: selectedColor}));
@@ -335,9 +327,17 @@ export function VehicleSetupScreen() {
     }
     setSaving(true);
     try {
-      const updated = await usersApi.updateMe({carNumber: vehicleNumber.trim(), phone: phone.trim() || undefined});
-      updateProfile({carNumber: updated.carNumber, phone: updated.phone});
-      await AsyncStorage.setItem(colorStorageKey, selectedColor);
+      const updated = await usersApi.updateMe({
+        carNumber: vehicleNumber.trim(),
+        phone: phone.trim() || undefined,
+        carModel: vehicleModel.trim() || undefined,
+        carColor: selectedColor,
+        vehicleType,
+      });
+      updateProfile({
+        carNumber: updated.carNumber, phone: updated.phone,
+        carModel: updated.carModel, carColor: updated.carColor, vehicleType: updated.vehicleType,
+      });
       setMode('view');
     } catch (err: any) {
       dialog.alert(err.message || 'Could not save vehicle details', {title: 'Error'});
@@ -392,6 +392,8 @@ export function VehicleSetupScreen() {
             <View style={[s.summarySheet, {backgroundColor: colors.surface, borderColor: colors.border}]}>
               {[
                 {icon: 'car' as const, label: 'Vehicle Number', value: vehicleNumber || '—'},
+                {icon: 'car' as const, label: 'Vehicle Model', value: vehicleModel || '—'},
+                {icon: vehicleType === 'bike' ? 'bike' as const : 'car' as const, label: 'Vehicle Type', value: vehicleType === 'bike' ? 'Bike' : 'Car'},
                 {icon: 'phone' as const, label: 'Phone Number', value: phone || '—'},
                 {icon: 'car' as const, label: 'Body Colour', value: colorName},
               ].map((row, i, arr) => (
@@ -428,8 +430,41 @@ export function VehicleSetupScreen() {
                 autoCapitalize="characters"
                 returnKeyType="next"
                 blurOnSubmit={false}
+                onSubmitEditing={() => modelRef.current?.focus()}
+              />
+            </View>
+
+            <Text style={[s.fieldLabel, {color: colors.textMuted}]}>VEHICLE MODEL (OPTIONAL)</Text>
+            <View style={[s.inputRow, {borderColor: colors.border, backgroundColor: colors.surface}]}>
+              <View style={[s.inputIconWrap, {backgroundColor: colors.cardAlt}]}>
+                <Icon name="car" size={16} color={colors.textPrimary} />
+              </View>
+              <TextInput
+                ref={modelRef}
+                style={[s.input, {color: colors.textPrimary}]}
+                value={vehicleModel}
+                onChangeText={setVehicleModel}
+                placeholder="e.g. Maruti Swift"
+                placeholderTextColor={colors.textMuted}
+                autoCapitalize="words"
+                returnKeyType="next"
+                blurOnSubmit={false}
                 onSubmitEditing={() => phoneRef.current?.focus()}
               />
+            </View>
+
+            <Text style={[s.fieldLabel, {color: colors.textMuted}]}>VEHICLE TYPE</Text>
+            <View style={s.typeRow}>
+              {(['car', 'bike'] as const).map(t => {
+                const on = vehicleType === t;
+                return (
+                  <PressableScale key={t} onPress={() => setVehicleType(t)}
+                    style={[s.typeSegment, {backgroundColor: on ? colors.primary : colors.surface, borderColor: on ? colors.primary : colors.border}]}>
+                    <Icon name={t === 'car' ? 'car' : 'bike'} size={16} color={on ? colors.textOnPrimary : colors.textSecondary} />
+                    <Text style={[s.typeSegmentTxt, {color: on ? colors.textOnPrimary : colors.textSecondary}]}>{t === 'car' ? 'Car' : 'Bike'}</Text>
+                  </PressableScale>
+                );
+              })}
             </View>
 
             <Text style={[s.fieldLabel, {color: colors.textMuted}]}>PHONE NUMBER</Text>
@@ -557,6 +592,10 @@ const s = StyleSheet.create({
   },
   inputIconWrap: {width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginRight: 10},
   input: {flex: 1, fontSize: 15, fontWeight: '600'},
+
+  typeRow: {flexDirection: 'row', gap: 10, marginBottom: 16},
+  typeSegment: {flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderWidth: 1.5, borderRadius: 14, height: 50},
+  typeSegmentTxt: {fontSize: 14, fontWeight: '700'},
 
   colorGrid: {flexDirection: 'row', flexWrap: 'wrap', columnGap: GRID_GAP, rowGap: 18, marginBottom: 24},
   swatchWrap: {alignItems: 'center', gap: 6},

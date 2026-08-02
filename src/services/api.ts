@@ -137,7 +137,7 @@ export const authApi = {
 export const usersApi = {
   lookupByCardCode: (code: string) =>
     client.get(`/users/by-card/${code}`).then(r => r.data.user),
-  updateMe: (patch: {carNumber?: string; phone?: string}) =>
+  updateMe: (patch: {carNumber?: string; phone?: string; carModel?: string; carColor?: string; vehicleType?: 'car' | 'bike'}) =>
     client.patch('/users/me', patch).then(r => r.data.user),
 };
 
