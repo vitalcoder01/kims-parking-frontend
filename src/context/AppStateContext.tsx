@@ -31,6 +31,10 @@ export interface ParkingTask {
   type: TaskType;
   doctorId: number;
   doctorName: string;
+  // Set instead of doctorId when this task belongs to a visitor/patient
+  // check-in rather than a staff/doctor session — see serializeTask.
+  visitorId?: number;
+  isVisitor?: boolean;
   // Who the doctor/staff member is, for the valet's dispatch card. No phone
   // number — serializeTask reaches drivers too.
   doctorDepartment?: string;
@@ -247,6 +251,7 @@ interface AppState {
   cancelVisitorAssignment: (visitorId: number) => Promise<void>;
   cancelVisitor: (visitorId: number, reason: 'no_show' | 'valet_cancelled' | 'parking_failed') => Promise<void>;
   assignRetrievalDriver: (visitorId: number, driverId: number) => Promise<void>;
+  assignStaffRetrievalDriver: (doctorId: number, driverId: number) => Promise<void>;
   confirmVisitorDelivered: (visitorId: number) => Promise<void>;
   pushNotification: (n: Omit<Notification, 'id' | 'createdAt' | 'read'>) => Promise<void>;
   /** Re-read everything from the server. For the rare case a client knows its
@@ -971,6 +976,23 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'busy', currentTaskId: visitorId} : d)));
   }, []);
 
+  // Valet-initiated "Request retrieval" for a staff/doctor member — the
+  // staff/doctor equivalent of assignRetrievalDriver above. Captures the
+  // valet's own live location the same way the regular assignDriver does for
+  // a retrieve task: that's the real physical handover point the driver is
+  // bringing the car back to. Uses upsertById (not a targeted map) because
+  // this can create a brand-new retrieve task that isn't in local state yet,
+  // not just update an existing one.
+  const assignStaffRetrievalDriver = useCallback(async (doctorId: number, driverId: number) => {
+    await stopAssignmentAlarm().catch(() => {});
+    const coords = await getCurrentPositionSafe();
+    const updated = mapTask(await tasksApi.assignRetrievalDriverForDoctor(
+      doctorId, driverId, coords ? {lat: coords.lat, lng: coords.lng} : undefined,
+    ));
+    setTasks(p => upsertById(p, updated));
+    setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'busy', currentTaskId: updated.id} : d)));
+  }, []);
+
   // Valet: confirms the visitor actually took the car — mirrors
   // confirmTaskDelivered above for the staff/doctor flow.
   const confirmVisitorDelivered = useCallback(async (visitorId: number) => {
@@ -1004,7 +1026,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
       addTask, requestRetrieval, cancelMyRetrieval, sendArrivalNotice, acceptRetrieval, dismissArrivalNotice, updateTask, assignDriver, cancelTaskAssignment, acceptTask, rejectTask, markKeyCollected, markParked, markRetrieved, confirmTaskDelivered, cancelTask, recallTask, markTaskReturned, fetchTaskHistory, reportLocation,
       setDriverStatus, addVisitor,
       assignVisitorDriver, cancelVisitorAssignment, cancelVisitor,
-      assignRetrievalDriver, confirmVisitorDelivered,
+      assignRetrievalDriver, assignStaffRetrievalDriver, confirmVisitorDelivered,
       pushNotification, markNotificationRead, clearNotifications, refreshTasks: fetchAll,
     }}>
       {children}

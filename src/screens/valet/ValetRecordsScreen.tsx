@@ -1,5 +1,5 @@
 import React, {useState, useEffect} from 'react';
-import {View, Text, StyleSheet, ScrollView, TextInput, StatusBar, ActivityIndicator} from 'react-native';
+import {View, Text, StyleSheet, ScrollView, TextInput, StatusBar, ActivityIndicator, Modal, Pressable} from 'react-native';
 import {useDialog} from '../../components/AppDialog';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useTheme} from '../../context/ThemeContext';
@@ -8,6 +8,11 @@ import {Icon} from '../../components/Icon';
 import {PressableScale} from '../../components/PressableScale';
 import {DriverPickerList} from '../../components/DriverPickerList';
 import {useValetActions} from './useValetActions';
+
+function fmtTime(ms?: number) {
+  if (!ms) return null;
+  return new Date(ms).toLocaleString(undefined, {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'});
+}
 
 const STUB_W = 78;
 const NOTCH = 18;
@@ -41,7 +46,7 @@ export function ValetRecordsScreen() {
   const dialog = useDialog();
   const {colors, isDark} = useTheme();
   const {tasks, activeVisitors, availableDrivers, hasActiveRetrievalDriver,
-    assignVisitorPickupDriver, assignVisitorRetrievalDriver, cancelVisitor, confirmVisitorDelivered,
+    assignVisitorPickupDriver, assignVisitorRetrievalDriver, assignStaffRetrievalDriver, cancelVisitor, confirmVisitorDelivered,
     confirmTaskDelivered, fetchTaskHistory} = useValetActions();
 
   const [tab, setTab] = useState<RecordsTab>('visitors');
@@ -49,9 +54,16 @@ export function ValetRecordsScreen() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('active');
   const [pendingVisitorId, setPendingVisitorId] = useState<number | null>(null);
   const [pendingMode, setPendingMode] = useState<'park' | 'retrieve' | null>(null);
+  // The staff/doctor equivalent of pendingVisitorId — set when the valet taps
+  // "Request retrieval" on a staff ticket, so the same driver-assign screen
+  // below can serve both flows.
+  const [pendingDoctorTaskId, setPendingDoctorTaskId] = useState<number | null>(null);
   const [assigningDriverId, setAssigningDriverId] = useState<number | null>(null);
   const [confirmingVisitorId, setConfirmingVisitorId] = useState<number | null>(null);
   const [confirmingTaskId, setConfirmingTaskId] = useState<number | null>(null);
+  // Detail sheet — shared by both tabs, holds whichever ticket was tapped.
+  const [detailVisitor, setDetailVisitor] = useState<Visitor | null>(null);
+  const [detailTask, setDetailTask] = useState<ParkingTask | null>(null);
   // Every staff/doctor session ever, not just each doctor's single current
   // one — the live `tasks` array is deliberately bounded to "at most one row
   // per doctor" now, so this tab's actual record view needs its own fetch.
@@ -79,27 +91,52 @@ export function ValetRecordsScreen() {
 
   // Staff/doctor tab is the actual "how many doctors" record — every park +
   // retrieve task, not just the ones still in progress (that live view is
-  // the Home tab's Job Queue; this one's a searchable log).
+  // the Home tab's Job Queue; this one's a searchable log). Visitor-linked
+  // tasks are excluded — they already have their own tab, and an unscoped
+  // history fetch returns every task ever, staff and visitor alike.
   const staffFiltered = staffHistory
+    .filter(t => !t.isVisitor)
     .filter(t => statusFilter === 'all' || (statusFilter === 'completed' ? t.status === 'completed' : t.status !== 'completed' && t.status !== 'cancelled'))
     .filter(t => !q || t.doctorName?.toLowerCase().includes(q) || t.carNumber?.toLowerCase().includes(q));
 
+  // A doctor's most recent task tells us whether they're currently parked
+  // with nothing pending: history has every session ever, so "parked, no
+  // retrieval requested yet" is only true when the LATEST row for that
+  // doctor is a completed park (a later retrieve row, of any status, means
+  // one's already in flight or done).
+  const latestTaskByDoctor = new Map<number, ParkingTask>();
+  for (const t of staffHistory) {
+    if (t.isVisitor) continue;
+    const prev = latestTaskByDoctor.get(t.doctorId);
+    if (!prev || t.id > prev.id) latestTaskByDoctor.set(t.doctorId, t);
+  }
+  const canRequestStaffRetrieval = (t: ParkingTask) =>
+    t.type === 'park' && t.status === 'completed' && latestTaskByDoctor.get(t.doctorId)?.id === t.id;
+
   const pendingVisitor = pendingVisitorId ? activeVisitors.find(v => v.id === pendingVisitorId) ?? null : null;
+  const pendingDoctorTask = pendingDoctorTaskId ? staffHistory.find(t => t.id === pendingDoctorTaskId) ?? null : null;
 
   const handleAssign = async (driverId: number) => {
-    if (!pendingVisitorId || !pendingMode) return;
+    if (!pendingVisitorId && !pendingDoctorTaskId) return;
     if (assigningDriverId != null) return;
     setAssigningDriverId(driverId);
     try {
-      if (pendingMode === 'retrieve') await assignVisitorRetrievalDriver(pendingVisitorId, driverId);
-      else await assignVisitorPickupDriver(pendingVisitorId, driverId);
-      setPendingVisitorId(null); setPendingMode(null);
+      if (pendingDoctorTaskId != null) {
+        if (!pendingDoctorTask) return;
+        await assignStaffRetrievalDriver(pendingDoctorTask.doctorId, driverId);
+        setPendingDoctorTaskId(null);
+      } else if (pendingVisitorId != null) {
+        if (pendingMode === 'retrieve') await assignVisitorRetrievalDriver(pendingVisitorId, driverId);
+        else await assignVisitorPickupDriver(pendingVisitorId, driverId);
+        setPendingVisitorId(null); setPendingMode(null);
+      }
     } catch (err: any) {
       dialog.alert(err.message || 'Something went wrong', {title: 'Error'});
     } finally {
       setAssigningDriverId(null);
     }
   };
+
 
   const handleConfirmVisitorDelivered = async (visitorId: number) => {
     if (confirmingVisitorId != null) return;
@@ -133,12 +170,14 @@ export function ValetRecordsScreen() {
     ]});
   };
 
-  if (pendingVisitor) {
+  if (pendingVisitor || pendingDoctorTask) {
     return (
       <SafeAreaView edges={['top','bottom','left','right']} style={[s.safe, {backgroundColor: colors.background}]}>
         <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={colors.background} />
         <View style={s.header}>
-          <PressableScale onPress={() => { setPendingVisitorId(null); setPendingMode(null); }} style={[s.skipBtn, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+          <PressableScale
+            onPress={() => { setPendingVisitorId(null); setPendingMode(null); setPendingDoctorTaskId(null); }}
+            style={[s.skipBtn, {backgroundColor: colors.surface, borderColor: colors.border}]}>
             <Text style={[s.skipTxt, {color: colors.textPrimary}]}>Cancel</Text>
           </PressableScale>
           <Text style={[s.headerTitle, {color: colors.textPrimary}]}>Assign Driver</Text>
@@ -146,9 +185,11 @@ export function ValetRecordsScreen() {
         </View>
         <ScrollView contentContainerStyle={s.scroll}>
           <Text style={[s.stepDesc, {color: colors.textPrimary}]}>
-            {pendingMode === 'retrieve'
-              ? `Assign a driver to retrieve ${pendingVisitor.carNumber} from slot ${pendingVisitor.slotId} for ${pendingVisitor.name}`
-              : `Tap a driver to collect the key and park ${pendingVisitor.name}'s car (${pendingVisitor.carNumber})`}
+            {pendingDoctorTask
+              ? `Assign a driver to retrieve ${pendingDoctorTask.carNumber} for ${pendingDoctorTask.doctorName}`
+              : pendingMode === 'retrieve'
+              ? `Assign a driver to retrieve ${pendingVisitor!.carNumber} from slot ${pendingVisitor!.slotId} for ${pendingVisitor!.name}`
+              : `Tap a driver to collect the key and park ${pendingVisitor!.name}'s car (${pendingVisitor!.carNumber})`}
           </Text>
           <DriverPickerList drivers={availableDrivers} onAssign={handleAssign} assigningId={assigningDriverId} />
         </ScrollView>
@@ -191,11 +232,14 @@ export function ValetRecordsScreen() {
         {/* main body */}
         <View style={s.ticketBody}>
           <View style={s.nameRow}>
-            <Text style={[s.name, {color: colors.textPrimary}]}>{v.name}</Text>
+            <Text style={[s.name, {color: colors.textPrimary}]}>{v.name || 'Visitor'}</Text>
             <View style={[s.chip, {backgroundColor: chipBg}]}>
               <View style={[s.chipDot, {backgroundColor: chipTone}]} />
               <Text style={[s.chipTxt, {color: chipTone}]}>{chipLabel}</Text>
             </View>
+            <PressableScale style={[s.infoBtn, {backgroundColor: colors.cardAlt}]} onPress={() => setDetailVisitor(v)}>
+              <Icon name="info" size={13} color={colors.textSecondary} />
+            </PressableScale>
           </View>
 
           <View style={s.carRow}>
@@ -264,9 +308,11 @@ export function ValetRecordsScreen() {
     const needsDriver = t.status === 'assigned' && !t.driverId;
     const delivered = t.status === 'delivered';
     const cancelled = t.status === 'cancelled';
+    const canRetrieve = canRequestStaffRetrieval(t);
     const chipTone = t.status === 'completed' ? colors.success : cancelled ? colors.textMuted : colors.warning;
     const chipBg = t.status === 'completed' ? colors.successLight : cancelled ? colors.cardAlt : colors.warningLight;
-    const chipLabel = t.status === 'completed' ? (t.type === 'park' ? `Parked · ${t.slotId ?? ''}` : 'Retrieved')
+    const chipLabel = t.status === 'completed'
+      ? (t.type === 'park' ? (canRetrieve ? `Parked · ${t.slotId ?? ''}` : 'Completed') : 'Retrieved')
       : cancelled ? 'Cancelled'
       : delivered ? 'Awaiting pickup confirmation'
       : needsDriver ? 'Awaiting driver'
@@ -291,6 +337,9 @@ export function ValetRecordsScreen() {
               <View style={[s.chipDot, {backgroundColor: chipTone}]} />
               <Text style={[s.chipTxt, {color: chipTone}]}>{chipLabel}</Text>
             </View>
+            <PressableScale style={[s.infoBtn, {backgroundColor: colors.cardAlt}]} onPress={() => setDetailTask(t)}>
+              <Icon name="info" size={13} color={colors.textSecondary} />
+            </PressableScale>
           </View>
 
           <View style={s.carRow}>
@@ -299,6 +348,14 @@ export function ValetRecordsScreen() {
           </View>
 
           {!!t.driverName && <Text style={[s.driverTxt, {color: colors.textMuted}]}>Driver: {t.driverName}</Text>}
+
+          {canRetrieve && (
+            <PressableScale style={[s.actionBtn, {backgroundColor: colors.primary}]}
+              onPress={() => setPendingDoctorTaskId(t.id)}>
+              <Text style={[s.actionTxt, {color: colors.textOnPrimary}]}>Request retrieval</Text>
+              <Icon name="arrowRight" size={15} color={colors.textOnPrimary} />
+            </PressableScale>
+          )}
 
           {delivered && (
             <PressableScale
@@ -402,6 +459,61 @@ export function ValetRecordsScreen() {
           </View>
         ) : tab === 'visitors' ? (filtered as Visitor[]).map(renderVisitorTicket) : (filtered as ParkingTask[]).map(renderStaffTicket)}
       </ScrollView>
+
+      {/* Detail sheet — small extra context beyond what fits on the ticket
+          card itself, for either tab. Read-only; the actual actions stay on
+          the card so there's still exactly one place to do anything. */}
+      <Modal visible={!!(detailVisitor || detailTask)} transparent animationType="fade" onRequestClose={() => { setDetailVisitor(null); setDetailTask(null); }}>
+        <Pressable style={s.modalOverlay} onPress={() => { setDetailVisitor(null); setDetailTask(null); }}>
+          <Pressable style={[s.modalCard, {backgroundColor: colors.surface}]} onPress={() => {}}>
+            <View style={s.modalHeader}>
+              <Text style={[s.modalTitle, {color: colors.textPrimary}]}>
+                {detailVisitor ? (detailVisitor.name || 'Visitor') : detailTask?.doctorName}
+              </Text>
+              <PressableScale style={[s.modalCloseBtn, {backgroundColor: colors.cardAlt}]} onPress={() => { setDetailVisitor(null); setDetailTask(null); }}>
+                <Icon name="close" size={16} color={colors.textPrimary} />
+              </PressableScale>
+            </View>
+
+            {detailVisitor && [
+              ['Token', `#${detailVisitor.token}`],
+              ['Car number', detailVisitor.carNumber || 'No plate'],
+              ['Vehicle', detailVisitor.vehicleType === 'bike' ? 'Bike' : 'Car'],
+              ['Mobile', detailVisitor.mobile],
+              ['Status', detailVisitor.status],
+              ['Slot', detailVisitor.slotId ?? '—'],
+              ['Driver', detailVisitor.driverName ?? '—'],
+              ['Checked in', fmtTime(detailVisitor.createdAt) ?? '—'],
+              ...(detailVisitor.pickedUpAt ? [['Key collected', fmtTime(detailVisitor.pickedUpAt)!]] : []),
+              ...(detailVisitor.cancelledAt ? [['Cancelled', fmtTime(detailVisitor.cancelledAt)!]] : []),
+              ...(detailVisitor.cancelReason ? [['Reason', detailVisitor.cancelReason.replace('_', ' ')]] : []),
+            ].map(([k, v]) => (
+              <View key={k} style={[s.detailRow, {borderBottomColor: colors.divider}]}>
+                <Text style={[s.detailKey, {color: colors.textMuted}]}>{k}</Text>
+                <Text style={[s.detailVal, {color: colors.textPrimary}]} numberOfLines={1}>{v}</Text>
+              </View>
+            ))}
+
+            {detailTask && [
+              ['Type', detailTask.type === 'park' ? 'Park' : 'Retrieve'],
+              ['Car number', detailTask.carNumber],
+              ['Department', detailTask.doctorDepartment || '—'],
+              ['Employee ID', detailTask.doctorEmployeeId || '—'],
+              ['Status', detailTask.status.replace('_', ' ')],
+              ['Slot', detailTask.slotId ?? '—'],
+              ['Driver', detailTask.driverName ?? '—'],
+              ['Valet', detailTask.valetName ?? '—'],
+              ...(detailTask.assignedAt ? [['Assigned', fmtTime(detailTask.assignedAt)!]] : []),
+              ...(detailTask.completedAt ? [['Completed', fmtTime(detailTask.completedAt)!]] : []),
+            ].map(([k, v]) => (
+              <View key={k} style={[s.detailRow, {borderBottomColor: colors.divider}]}>
+                <Text style={[s.detailKey, {color: colors.textMuted}]}>{k}</Text>
+                <Text style={[s.detailVal, {color: colors.textPrimary}]} numberOfLines={1}>{v}</Text>
+              </View>
+            ))}
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -450,6 +562,7 @@ const s = StyleSheet.create({
   chip: {flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 99, paddingHorizontal: 9, paddingVertical: 4},
   chipDot: {width: 5, height: 5, borderRadius: 3},
   chipTxt: {fontSize: 11.5, fontWeight: '700'},
+  infoBtn: {width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center'},
   carRow: {flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 7},
   carSwatch: {width: 22, height: 10, borderRadius: 3},
   carReg: {fontSize: 13, fontWeight: '700', letterSpacing: 1.2},
@@ -470,4 +583,13 @@ const s = StyleSheet.create({
   emptyWrap: {alignItems: 'center', gap: 6, paddingTop: 48},
   emptyTitle: {fontSize: 14, fontWeight: '600'},
   emptySub: {fontSize: 12.5, fontWeight: '500'},
+
+  modalOverlay: {flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center', padding: 24},
+  modalCard: {width: '100%', maxWidth: 420, borderRadius: 22, padding: 20},
+  modalHeader: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14},
+  modalTitle: {fontSize: 17, fontWeight: '900', flex: 1, marginRight: 12},
+  modalCloseBtn: {width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center'},
+  detailRow: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, gap: 12},
+  detailKey: {fontSize: 12, fontWeight: '700'},
+  detailVal: {fontSize: 13, fontWeight: '700', flexShrink: 1, textAlign: 'right', textTransform: 'capitalize'},
 });

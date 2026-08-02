@@ -165,6 +165,11 @@ export const tasksApi = {
   // fixed point, so it naturally works whichever valet does the assigning.
   assignDriver: (id: number, driverId: number, coords?: {lat: number; lng: number}) =>
     client.patch(`/tasks/${id}/assign`, {driverId, lat: coords?.lat, lng: coords?.lng}).then(r => r.data.task),
+  // Valet-initiated "Request retrieval" for a staff/doctor who called the
+  // desk instead of using their own app — raises the request (if one isn't
+  // already live) and assigns a driver in one step.
+  assignRetrievalDriverForDoctor: (doctorId: number, driverId: number, coords?: {lat: number; lng: number}) =>
+    client.patch(`/tasks/doctor/${doctorId}/assign-retrieval`, {driverId, lat: coords?.lat, lng: coords?.lng}).then(r => r.data.task),
   // Give up on a driver who hasn't accepted yet, right now, instead of
   // waiting out the accept-timeout window. Job stays open, driver freed.
   cancelAssignment: (id: number) =>

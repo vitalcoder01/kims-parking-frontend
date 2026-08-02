@@ -17,10 +17,23 @@ const SLOT_W = Math.floor(
   (Dimensions.get('window').width - 16 * 2 - 1 * 2 - 14 * 2 - SLOT_GAP * (SLOT_COLS - 1)) / SLOT_COLS,
 );
 
+// How long a car's been sitting in its slot, since the owner popup shows it
+// alongside who it belongs to — "since 2:14 PM" only means something with a
+// duration next to it.
+function agoLabel(ms?: number): string | null {
+  if (!ms) return null;
+  const mins = Math.max(0, Math.round((Date.now() - ms) / 60000));
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.floor(mins / 60);
+  const rem = mins % 60;
+  return rem ? `${hrs} hr ${rem} min ago` : `${hrs} hr ago`;
+}
+
 export function ParkingMapScreen() {
   const {colors} = useTheme();
   const {user} = useAuth();
-  const {slots} = useAppState();
+  const {slots, tasks} = useAppState();
 
   // The slot's own live `status`/`doctorId` is the single source of truth
   // for "is this actually my car, right now" — deriving it from task history
@@ -31,6 +44,14 @@ export function ParkingMapScreen() {
 
   const [picked, setPicked] = useState<string | undefined>(mySlot);
   const pickedSlot = picked ? slots.find(sl => sl.id === picked) : undefined;
+  // Cross-referenced against the live task list (already carries the
+  // owner's name, department, driver — works uniformly for staff/doctor AND
+  // visitor sessions since both run through the same ParkingTask) rather
+  // than adding a new backend field just for this popup.
+  const pickedOwnerTask = pickedSlot?.taskId ? tasks.find(t => t.id === pickedSlot.taskId) : undefined;
+  const showingOwnerDetail = pickedSlot?.status === 'occupied';
+
+  const selectSlot = (id: string) => setPicked(prev => (prev === id ? undefined : id));
 
   const blocks = useMemo(() => {
     const byBlock = new Map<string, typeof slots>();
@@ -57,25 +78,58 @@ export function ParkingMapScreen() {
     <SafeAreaView edges={['bottom', 'left', 'right']} style={[s.safe, {backgroundColor: colors.background}]}>
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
 
-        {/* Occupancy summary */}
-        <View style={[s.summaryCard, {backgroundColor: colors.primary}]}>
-          <View style={s.summaryTop}>
-            <View>
-              <Text style={[s.summaryLbl, {color: colors.textOnPrimary + '99'}]}>OCCUPANCY</Text>
-              <Text style={[s.summaryFrac, {color: colors.textOnPrimary}]}>
-                {occupied}
-                <Text style={[s.summaryTotal, {color: colors.textOnPrimary + '88'}]}> / {total}</Text>
-              </Text>
+        {/* Occupancy summary — swaps to the tapped slot's owner details when
+            an occupied slot is selected; tapping that same slot again (see
+            selectSlot) clears the selection and this reverts automatically. */}
+        {showingOwnerDetail && pickedSlot ? (
+          <View style={[s.summaryCard, {backgroundColor: colors.primary}]}>
+            <View style={s.summaryTop}>
+              <View style={{flex: 1}}>
+                <Text style={[s.summaryLbl, {color: colors.textOnPrimary + '99'}]}>
+                  SLOT {pickedSlot.id}{pickedOwnerTask?.isVisitor ? ' · VISITOR' : ''}
+                </Text>
+                <Text style={[s.ownerName, {color: colors.textOnPrimary}]} numberOfLines={1}>
+                  {pickedOwnerTask?.doctorName ?? pickedSlot.carNumber ?? 'Occupied'}
+                </Text>
+              </View>
+              <PressableScale style={[s.closeDetailBtn, {backgroundColor: 'rgba(255,255,255,0.18)'}]} onPress={() => setPicked(undefined)}>
+                <Icon name="close" size={16} color={colors.textOnPrimary} />
+              </PressableScale>
             </View>
-            <View style={s.summaryRight}>
-              <Text style={[s.summaryPct, {color: colors.textOnPrimary}]}>{occupancyPct}%</Text>
-              <Text style={[s.summaryLbl, {color: colors.textOnPrimary + '99'}]}>{available} FREE</Text>
+            <View style={s.ownerFacts}>
+              {[
+                ['Car', pickedSlot.carNumber || pickedOwnerTask?.carNumber || '—'],
+                ...(pickedOwnerTask?.doctorDepartment ? [['Department', pickedOwnerTask.doctorDepartment]] : []),
+                ...(pickedOwnerTask?.driverName ? [['Driver', pickedOwnerTask.driverName]] : []),
+                ...(agoLabel(pickedOwnerTask?.completedAt) ? [['Parked', agoLabel(pickedOwnerTask?.completedAt)!]] : []),
+              ].map(([k, v]) => (
+                <View key={k} style={s.ownerFactRow}>
+                  <Text style={[s.ownerFactKey, {color: 'rgba(255,255,255,0.6)'}]}>{k}</Text>
+                  <Text style={[s.ownerFactVal, {color: colors.textOnPrimary}]} numberOfLines={1}>{v}</Text>
+                </View>
+              ))}
             </View>
           </View>
-          <View style={[s.summaryTrack, {backgroundColor: 'rgba(255,255,255,0.2)'}]}>
-            <View style={[s.summaryFill, {width: `${occupancyPct}%` as any, backgroundColor: colors.textOnPrimary}]} />
+        ) : (
+          <View style={[s.summaryCard, {backgroundColor: colors.primary}]}>
+            <View style={s.summaryTop}>
+              <View>
+                <Text style={[s.summaryLbl, {color: colors.textOnPrimary + '99'}]}>OCCUPANCY</Text>
+                <Text style={[s.summaryFrac, {color: colors.textOnPrimary}]}>
+                  {occupied}
+                  <Text style={[s.summaryTotal, {color: colors.textOnPrimary + '88'}]}> / {total}</Text>
+                </Text>
+              </View>
+              <View style={s.summaryRight}>
+                <Text style={[s.summaryPct, {color: colors.textOnPrimary}]}>{occupancyPct}%</Text>
+                <Text style={[s.summaryLbl, {color: colors.textOnPrimary + '99'}]}>{available} FREE</Text>
+              </View>
+            </View>
+            <View style={[s.summaryTrack, {backgroundColor: 'rgba(255,255,255,0.2)'}]}>
+              <View style={[s.summaryFill, {width: `${occupancyPct}%` as any, backgroundColor: colors.textOnPrimary}]} />
+            </View>
           </View>
-        </View>
+        )}
 
         {/* Legend + selection */}
         <View style={s.legendRow}>
@@ -90,7 +144,9 @@ export function ParkingMapScreen() {
             </View>
           ))}
           <View style={{flex: 1}} />
-          {pickedSlot && (
+          {/* Free-slot selection only — an occupied one already shows its
+              full detail in the swapped summary card above. */}
+          {pickedSlot && !showingOwnerDetail && (
             <View style={[s.pickedChip, {backgroundColor: colors.surface, borderColor: colors.textPrimary}]}>
               <Icon name="pin" size={12} color={colors.textPrimary} />
               <Text style={[s.pickedChipTxt, {color: colors.textPrimary}]}>
@@ -127,7 +183,7 @@ export function ParkingMapScreen() {
                 return (
                   <PressableScale
                     key={sl.id}
-                    onPress={() => setPicked(sl.id)}
+                    onPress={() => selectSlot(sl.id)}
                     style={[s.slot, {backgroundColor: bg, borderColor: isSel && !isMe ? colors.textPrimary : 'transparent'}]}
                   >
                     {isMe
@@ -157,6 +213,12 @@ const s = StyleSheet.create({
   summaryPct: {fontSize: 24, fontWeight: '900'},
   summaryTrack: {height: 8, borderRadius: 4, overflow: 'hidden'},
   summaryFill: {height: '100%', borderRadius: 4},
+  ownerName: {fontSize: 20, fontWeight: '900', marginTop: 2},
+  closeDetailBtn: {width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center'},
+  ownerFacts: {marginTop: 14, gap: 8},
+  ownerFactRow: {flexDirection: 'row', justifyContent: 'space-between', gap: 12},
+  ownerFactKey: {fontSize: 11, fontWeight: '700', letterSpacing: 0.5},
+  ownerFactVal: {fontSize: 12.5, fontWeight: '800', flexShrink: 1, textAlign: 'right'},
 
   legendRow: {flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16, paddingHorizontal: 2},
   legendItem: {flexDirection: 'row', alignItems: 'center', gap: 5},
