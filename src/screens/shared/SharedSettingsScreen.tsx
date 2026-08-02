@@ -143,7 +143,7 @@ export function SharedSettingsScreen() {
                 title: 'Retrieval Lead Time',
                 step: 5,
                 unit: 'min',
-                help: 'How far ahead of a doctor\'s planned departure the retrieval becomes actionable. A request sits on the Retrieval Requests page as information until this point, then the owning valet is alerted. Set it to cover walking to the slot and driving back.',
+                help: 'How far ahead of a doctor\'s planned departure the owning valet is automatically alerted. A request shows on the Retrieval Requests page as "Scheduled" until then — a valet can still assign a driver early if they check it themselves; this only controls when the alert fires on its own. Set it to cover walking to the slot and driving back.',
               },
               {
                 key: 'ownerResponseTimeoutSeconds' as const,

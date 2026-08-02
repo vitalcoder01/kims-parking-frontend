@@ -55,7 +55,7 @@ export interface OpsSettings {
   driverAcceptTimeoutSeconds: string;
   /** Seconds the owning valet has to respond before recovery releases it. */
   ownerResponseTimeoutSeconds: string;
-  /** How far ahead of a planned departure the retrieval becomes actionable. */
+  /** How far ahead of a planned departure the owning valet is auto-alerted (a valet can still assign early). */
   retrievalLeadTimeMinutes: string;
 }
 

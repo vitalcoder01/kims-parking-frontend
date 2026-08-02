@@ -857,9 +857,10 @@ export function ValetHomeScreen() {
             // Everything on this card is driven by time LEFT, recomputed each
             // second, so a card genuinely heats up as its deadline approaches
             // instead of being frozen at whatever the doctor first picked.
-            // Booked for later: this row is informational until its lead
-            // time. The server refuses the actions too (NOT_READY), so hiding
-            // them is about not offering a button that can only fail.
+            // Booked for later: SCHEDULED marks the row as not-yet-due for
+            // the AUTOMATIC alert (see jobAlerts.js), but a valet can still
+            // assign a driver early if they check the inbox themselves — the
+            // backend allows it too, this is purely a visual/urgency cue now.
             const scheduled = isScheduled(t.retrievalReadyAt, now);
             const left = minutesUntilDeparture(t.requestedAt, t.plannedDepartureMinutes, now);
             const tone = scheduled ? colors.textMuted : departureTone(left, colors);
@@ -928,15 +929,16 @@ export function ValetHomeScreen() {
 
               {/* One button, one label, whether or not this is already ours —
                   a label that depends on ownership is exactly what flickered
-                  when ownership changed underneath it mid-tap. Absent entirely
-                  while scheduled: the row is a heads-up, not work. */}
-              {!scheduled && (
-                <PressableScale style={[s.taskActionBtn, s.jobActions, {borderColor: 'transparent', backgroundColor: colors.primary}]}
-                  onPress={() => handleAssignDriverTo(t)}>
-                  <Icon name="people" size={13} color={colors.textOnPrimary} />
-                  <Text style={[s.taskActionTxt, {color: colors.textOnPrimary}]}>Assign driver</Text>
-                </PressableScale>
-              )}
+                  when ownership changed underneath it mid-tap. Shown even
+                  while scheduled now: the lead time only delays the
+                  AUTOMATIC alert (see jobAlerts.js), it no longer blocks a
+                  valet who checks the inbox and wants to get ahead of it —
+                  the backend allows the early assignment too. */}
+              <PressableScale style={[s.taskActionBtn, s.jobActions, {borderColor: 'transparent', backgroundColor: colors.primary}]}
+                onPress={() => handleAssignDriverTo(t)}>
+                <Icon name="people" size={13} color={colors.textOnPrimary} />
+                <Text style={[s.taskActionTxt, {color: colors.textOnPrimary}]}>Assign driver</Text>
+              </PressableScale>
             </View>
             );
           })}
