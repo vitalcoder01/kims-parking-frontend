@@ -8,6 +8,7 @@ import {Icon} from '../../components/Icon';
 import {PressableScale} from '../../components/PressableScale';
 import {DriverPickerList} from '../../components/DriverPickerList';
 import {useValetActions} from './useValetActions';
+import {ParkingMapScreen} from '../ParkingMapScreen';
 
 function fmtTime(ms?: number) {
   if (!ms) return null;
@@ -39,8 +40,18 @@ function PerfLine({color}: {color: string}) {
   );
 }
 
-type RecordsTab = 'visitors' | 'staff';
+type RecordsTab = 'visitors' | 'staff' | 'map';
 type StatusFilter = 'all' | 'active' | 'completed';
+// One shared vehicle-lifecycle stage, whether the ticket is a visitor token
+// or a staff/doctor session — both run the identical park -> parked ->
+// retrieve journey underneath, just through different record shapes.
+type StageFilter = 'all' | 'atHospital' | 'transitToLot' | 'parked' | 'transitToHospital';
+const STAGE_FILTERS: {key: Exclude<StageFilter, 'all'>; label: string}[] = [
+  {key: 'atHospital', label: 'At hospital'},
+  {key: 'transitToLot', label: 'Transit → parking lot'},
+  {key: 'parked', label: 'Parked'},
+  {key: 'transitToHospital', label: 'Transit → hospital'},
+];
 
 export function ValetRecordsScreen() {
   const dialog = useDialog();
@@ -52,6 +63,7 @@ export function ValetRecordsScreen() {
   const [tab, setTab] = useState<RecordsTab>('visitors');
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('active');
+  const [stageFilter, setStageFilter] = useState<StageFilter>('all');
   const [pendingVisitorId, setPendingVisitorId] = useState<number | null>(null);
   const [pendingMode, setPendingMode] = useState<'park' | 'retrieve' | null>(null);
   // The staff/doctor equivalent of pendingVisitorId — set when the valet taps
@@ -85,8 +97,35 @@ export function ValetRecordsScreen() {
 
   const q = query.trim().toLowerCase();
 
+  // The 4-stage breakdown that appears under "Active" — same stages for a
+  // visitor token and a staff/doctor session, since both run the identical
+  // park -> parked -> retrieve journey, just through different record shapes.
+  const visitorStage = (v: Visitor): Exclude<StageFilter, 'all'> => {
+    if (v.status === 'pending') {
+      // Key not yet taken vs. already taken and driving to a slot.
+      return v.pickedUpAt != null ? 'transitToLot' : 'atHospital';
+    }
+    // v.status === 'parked' from here on — delivered/retrieved/cancelled
+    // visitors don't reach this (they're excluded from activeVisitors, or
+    // land under Completed instead of Active).
+    if (!v.retrievalRequested) return 'parked';
+    return hasActiveRetrievalDriver(v) ? 'transitToHospital' : 'atHospital';
+  };
+
+  const staffStage = (t: ParkingTask): Exclude<StageFilter, 'all'> => {
+    if (t.type === 'park') {
+      if (t.status === 'key_collected' || t.status === 'in_transit') return 'transitToLot';
+      if (t.status === 'completed') return 'parked';
+      return 'atHospital'; // assigned with no driver yet
+    }
+    // retrieve — a driver attached means it's accepted the job and is en
+    // route either direction; with none it's still waiting to be staffed.
+    return t.driverId != null ? 'transitToHospital' : 'atHospital';
+  };
+
   const visitorsFiltered = activeVisitors
     .filter(v => statusFilter === 'all' || (statusFilter === 'completed' ? v.status === 'retrieved' : v.status !== 'retrieved'))
+    .filter(v => statusFilter !== 'active' || stageFilter === 'all' || visitorStage(v) === stageFilter)
     .filter(v => !q || v.name?.toLowerCase().includes(q) || v.carNumber?.toLowerCase().includes(q) || v.token.toLowerCase().includes(q));
 
   // A doctor's most recent task tells us whether their session is still
@@ -124,6 +163,7 @@ export function ValetRecordsScreen() {
   const staffFiltered = staffHistory
     .filter(t => !t.isVisitor)
     .filter(t => statusFilter === 'all' || (statusFilter === 'completed' ? !isStaffRowActive(t) && t.status !== 'cancelled' : isStaffRowActive(t)))
+    .filter(t => statusFilter !== 'active' || stageFilter === 'all' || staffStage(t) === stageFilter)
     .filter(t => !q || t.doctorName?.toLowerCase().includes(q) || t.carNumber?.toLowerCase().includes(q));
 
   const pendingVisitor = pendingVisitorId ? activeVisitors.find(v => v.id === pendingVisitorId) ?? null : null;
@@ -413,19 +453,24 @@ export function ValetRecordsScreen() {
     );
   };
 
-  const filtered = tab === 'visitors' ? visitorsFiltered : staffFiltered;
-  const totalCount = tab === 'visitors' ? activeVisitors.length : staffHistory.length;
+  const filtered = tab === 'visitors' ? visitorsFiltered : tab === 'staff' ? staffFiltered : [];
+  const totalCount = tab === 'visitors' ? activeVisitors.length : tab === 'staff' ? staffHistory.length : 0;
 
   return (
     <SafeAreaView edges={['top','bottom','left','right']} style={[s.safe, {backgroundColor: colors.background}]}>
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={colors.background} />
 
       <View style={s.titleRow}>
-        <Text style={[s.title, {color: colors.textPrimary}]}>Records</Text>
-        <Text style={[s.titleCount, {color: colors.textMuted}]}>{filtered.length} of {totalCount}</Text>
+        <Text style={[s.title, {color: colors.textPrimary}]}>Jobs</Text>
+        {tab !== 'map' && (
+          <Text style={[s.titleCount, {color: colors.textMuted}]}>{filtered.length} of {totalCount}</Text>
+        )}
       </View>
 
-      {/* Top tab switcher — same underline pattern as the Live Map screen */}
+      {/* Top tab switcher — same underline pattern as the Live Map screen.
+          Map Layout used to live as a sub-tab of the Map bottom tab; it's a
+          record of the hospital's slots, same as Visitors/Staff are records
+          of who's using them, so it moved in here alongside them. */}
       <View style={[s.tabBar, {backgroundColor: colors.surface, borderBottomColor: colors.border}]}>
         <PressableScale style={s.tabItem} onPress={() => setTab('visitors')}>
           <Text style={[s.tabLabel, {color: tab === 'visitors' ? colors.textPrimary : colors.textMuted}]}>Visitors</Text>
@@ -435,8 +480,16 @@ export function ValetRecordsScreen() {
           <Text style={[s.tabLabel, {color: tab === 'staff' ? colors.textPrimary : colors.textMuted}]}>Staff</Text>
           {tab === 'staff' && <View style={[s.tabUnderline, {backgroundColor: colors.textPrimary}]} />}
         </PressableScale>
+        <PressableScale style={s.tabItem} onPress={() => setTab('map')}>
+          <Text style={[s.tabLabel, {color: tab === 'map' ? colors.textPrimary : colors.textMuted}]}>Map Layout</Text>
+          {tab === 'map' && <View style={[s.tabUnderline, {backgroundColor: colors.textPrimary}]} />}
+        </PressableScale>
       </View>
 
+      {tab === 'map' ? (
+        <ParkingMapScreen />
+      ) : (
+      <>
       <View style={s.searchRow}>
         <View style={[s.searchBox, {backgroundColor: colors.surface}]}>
           <Icon name="search" size={17} color={colors.textMuted} />
@@ -463,7 +516,7 @@ export function ValetRecordsScreen() {
           return (
             <PressableScale
               key={f}
-              onPress={() => setStatusFilter(f)}
+              onPress={() => { setStatusFilter(f); if (f !== 'active') setStageFilter('all'); }}
               style={[s.filterChip, {backgroundColor: on ? colors.primary : colors.surface, borderColor: on ? colors.primary : colors.border}]}
             >
               <Text style={[s.filterChipTxt, {color: on ? colors.textOnPrimary : colors.textSecondary}]}>
@@ -473,6 +526,30 @@ export function ValetRecordsScreen() {
           );
         })}
       </View>
+
+      {/* Second-level stage row — only meaningful once "Active" narrows the
+          list to still-in-flight tickets; a completed/all list mixes every
+          stage together, so a stage chip there wouldn't mean anything.
+          Same 4 chips, same meaning, whichever tab (Visitors or Staff) is
+          showing — it's one shared vehicle-lifecycle filter, not two. */}
+      {statusFilter === 'active' && (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.stageRow}>
+          {STAGE_FILTERS.map(sf => {
+            const on = stageFilter === sf.key;
+            return (
+              <PressableScale
+                key={sf.key}
+                onPress={() => setStageFilter(on ? 'all' : sf.key)}
+                style={[s.filterChip, {backgroundColor: on ? colors.primary : colors.surface, borderColor: on ? colors.primary : colors.border}]}
+              >
+                <Text style={[s.filterChipTxt, {color: on ? colors.textOnPrimary : colors.textSecondary}]}>
+                  {sf.label}
+                </Text>
+              </PressableScale>
+            );
+          })}
+        </ScrollView>
+      )}
 
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
         {tab === 'staff' && historyLoading && staffHistory.length === 0 ? (
@@ -489,6 +566,8 @@ export function ValetRecordsScreen() {
           </View>
         ) : tab === 'visitors' ? (filtered as Visitor[]).map(renderVisitorTicket) : (filtered as ParkingTask[]).map(renderStaffTicket)}
       </ScrollView>
+      </>
+      )}
 
       {/* Detail sheet — small extra context beyond what fits on the ticket
           card itself, for either tab. Read-only; the actual actions stay on
@@ -567,6 +646,7 @@ const s = StyleSheet.create({
   searchInput: {flex: 1, fontSize: 15, fontWeight: '500', padding: 0},
 
   filterRow: {flexDirection: 'row', gap: 8, paddingHorizontal: 20, paddingTop: 10},
+  stageRow: {flexDirection: 'row', gap: 8, paddingHorizontal: 20, paddingTop: 10},
   filterChip: {borderRadius: 99, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 7},
   filterChipTxt: {fontSize: 12, fontWeight: '700'},
 
