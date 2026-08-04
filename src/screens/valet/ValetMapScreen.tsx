@@ -1,18 +1,18 @@
-import React, {useEffect, useMemo, useRef, useState} from 'react';
+import React, {useEffect, useMemo, useRef} from 'react';
 import {View, Text, StyleSheet, ScrollView, StatusBar} from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {WebView} from 'react-native-webview';
 import {useTheme} from '../../context/ThemeContext';
 import {useAppState} from '../../context/AppStateContext';
 import {Icon} from '../../components/Icon';
-import {PressableScale} from '../../components/PressableScale';
-import {ParkingMapScreen} from '../ParkingMapScreen';
 import {LEAFLET_MAP_HTML} from '../../components/leafletMapHtml';
 
+// Used to also carry the slot occupancy grid as a "Parking Layout" sub-tab;
+// that moved into the Jobs page (alongside Visitors/Staff, as another kind
+// of record) so this screen is GPS-only now.
 export function ValetMapScreen() {
   const {colors, isDark} = useTheme();
   const {drivers, tasks, driverLocations, onlineDriverIds} = useAppState();
-  const [tab, setTab] = useState<'layout' | 'live'>('layout');
   const webviewRef = useRef<any>(null);
   const fittedOnce = useRef(false);
 
@@ -42,13 +42,12 @@ export function ValetMapScreen() {
   // delta — the WebView keeps its own Leaflet map instance alive and just
   // repositions/adds/removes markers, it never reloads the page.
   useEffect(() => {
-    if (tab !== 'live') return;
     const shouldFit = !fittedOnce.current && liveDrivers.length > 0;
     if (shouldFit) fittedOnce.current = true;
     webviewRef.current?.injectJavaScript(
       `window.updateMarkers(${JSON.stringify(liveDrivers)}, ${shouldFit}); true;`,
     );
-  }, [liveDrivers, tab]);
+  }, [liveDrivers]);
 
   const busyDrivers = drivers.filter(d => d.status === 'busy');
 
@@ -56,99 +55,73 @@ export function ValetMapScreen() {
     <SafeAreaView edges={['top', 'bottom', 'left', 'right']} style={[s.safe, {backgroundColor: colors.background}]}>
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={colors.background} />
 
-      {/* Top tab switcher */}
-      <View style={[s.tabBar, {backgroundColor: colors.surface, borderBottomColor: colors.border}]}>
-        <PressableScale style={s.tabItem} onPress={() => setTab('layout')}>
-          <Text style={[s.tabLabel, {color: tab === 'layout' ? colors.textPrimary : colors.textMuted}]}>Parking Layout</Text>
-          {tab === 'layout' && <View style={[s.tabUnderline, {backgroundColor: colors.textPrimary}]} />}
-        </PressableScale>
-        <PressableScale style={s.tabItem} onPress={() => setTab('live')}>
-          <View style={s.tabLabelRow}>
-            <Text style={[s.tabLabel, {color: tab === 'live' ? colors.textPrimary : colors.textMuted}]}>Live Map</Text>
-            {liveDrivers.length > 0 && <View style={[s.tabDot, {backgroundColor: colors.success}]} />}
+      <ScrollView contentContainerStyle={s.liveScroll} showsVerticalScrollIndicator={false}>
+        {/* Leaflet + OpenStreetMap card — free, no API key, markers driven
+            purely by socket deltas via injectJavaScript (never a page reload) */}
+        <View style={[s.mapCard, {borderColor: colors.textPrimary}]}>
+          <WebView
+            ref={webviewRef}
+            style={s.map}
+            originWhitelist={['*']}
+            source={{html: LEAFLET_MAP_HTML}}
+            javaScriptEnabled
+            domStorageEnabled
+            onLoadEnd={() => {
+              const shouldFit = !fittedOnce.current && liveDrivers.length > 0;
+              if (shouldFit) fittedOnce.current = true;
+              webviewRef.current?.injectJavaScript(
+                `window.updateMarkers(${JSON.stringify(liveDrivers)}, ${shouldFit}); true;`,
+              );
+            }}
+          />
+          <View style={[s.liveBadge, {backgroundColor: colors.error}]}>
+            <View style={s.liveBadgeDot} />
+            <Text style={s.liveBadgeTxt}>LIVE</Text>
           </View>
-          {tab === 'live' && <View style={[s.tabUnderline, {backgroundColor: colors.textPrimary}]} />}
-        </PressableScale>
-      </View>
+        </View>
 
-      {tab === 'layout' ? (
-        <ParkingMapScreen />
-      ) : (
-        <ScrollView contentContainerStyle={s.liveScroll} showsVerticalScrollIndicator={false}>
-          {/* Leaflet + OpenStreetMap card — free, no API key, markers driven
-              purely by socket deltas via injectJavaScript (never a page reload) */}
-          <View style={[s.mapCard, {borderColor: colors.textPrimary}]}>
-            <WebView
-              ref={webviewRef}
-              style={s.map}
-              originWhitelist={['*']}
-              source={{html: LEAFLET_MAP_HTML}}
-              javaScriptEnabled
-              domStorageEnabled
-              onLoadEnd={() => {
-                const shouldFit = !fittedOnce.current && liveDrivers.length > 0;
-                if (shouldFit) fittedOnce.current = true;
-                webviewRef.current?.injectJavaScript(
-                  `window.updateMarkers(${JSON.stringify(liveDrivers)}, ${shouldFit}); true;`,
-                );
-              }}
-            />
-            <View style={[s.liveBadge, {backgroundColor: colors.error}]}>
-              <View style={s.liveBadgeDot} />
-              <Text style={s.liveBadgeTxt}>LIVE</Text>
-            </View>
+        {/* Drivers currently reachable */}
+        <Text style={[s.sectionTitle, {color: colors.textPrimary}]}>On the map ({liveDrivers.length})</Text>
+        {liveDrivers.length === 0 ? (
+          <View style={[s.emptyBox, {borderColor: colors.border}]}>
+            <Icon name="navigate" size={26} color={colors.textMuted} style={{marginBottom: 8}} />
+            <Text style={[s.emptyTxt, {color: colors.textMuted}]}>
+              No drivers reachable right now.{'\n'}They appear the moment their app connects and shares GPS.
+            </Text>
           </View>
+        ) : liveDrivers.map(d => (
+          <View key={d.id} style={[s.driverRow, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+            <View style={[s.driverAvatar, {backgroundColor: colors.primary}]}>
+              <Text style={[s.driverAvatarTxt, {color: colors.textOnPrimary}]}>{d.name[0]}</Text>
+            </View>
+            <View style={{flex: 1}}>
+              <Text style={[s.driverName, {color: colors.textPrimary}]}>{d.name}</Text>
+              <Text style={[s.driverJob, {color: colors.textSecondary}]}>{d.job}</Text>
+            </View>
+            <View style={[s.liveDot, {backgroundColor: colors.success}]} />
+          </View>
+        ))}
 
-          {/* Drivers currently reachable */}
-          <Text style={[s.sectionTitle, {color: colors.textPrimary}]}>On the map ({liveDrivers.length})</Text>
-          {liveDrivers.length === 0 ? (
-            <View style={[s.emptyBox, {borderColor: colors.border}]}>
-              <Icon name="navigate" size={26} color={colors.textMuted} style={{marginBottom: 8}} />
-              <Text style={[s.emptyTxt, {color: colors.textMuted}]}>
-                No drivers reachable right now.{'\n'}They appear the moment their app connects and shares GPS.
-              </Text>
+        {/* Busy but not on the map — assigned yet no GPS/socket reaching us */}
+        {busyDrivers.filter(d => !liveDrivers.some(ld => ld.id === d.id)).map(d => (
+          <View key={d.id} style={[s.driverRow, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+            <View style={[s.driverAvatar, {backgroundColor: colors.cardAlt}]}>
+              <Text style={[s.driverAvatarTxt, {color: colors.textSecondary}]}>{d.name[0]}</Text>
             </View>
-          ) : liveDrivers.map(d => (
-            <View key={d.id} style={[s.driverRow, {backgroundColor: colors.surface, borderColor: colors.border}]}>
-              <View style={[s.driverAvatar, {backgroundColor: colors.primary}]}>
-                <Text style={[s.driverAvatarTxt, {color: colors.textOnPrimary}]}>{d.name[0]}</Text>
-              </View>
-              <View style={{flex: 1}}>
-                <Text style={[s.driverName, {color: colors.textPrimary}]}>{d.name}</Text>
-                <Text style={[s.driverJob, {color: colors.textSecondary}]}>{d.job}</Text>
-              </View>
-              <View style={[s.liveDot, {backgroundColor: colors.success}]} />
+            <View style={{flex: 1}}>
+              <Text style={[s.driverName, {color: colors.textPrimary}]}>{d.name}</Text>
+              <Text style={[s.driverJob, {color: colors.textMuted}]}>On task · waiting for GPS</Text>
             </View>
-          ))}
-
-          {/* Busy but not on the map — assigned yet no GPS/socket reaching us */}
-          {busyDrivers.filter(d => !liveDrivers.some(ld => ld.id === d.id)).map(d => (
-            <View key={d.id} style={[s.driverRow, {backgroundColor: colors.surface, borderColor: colors.border}]}>
-              <View style={[s.driverAvatar, {backgroundColor: colors.cardAlt}]}>
-                <Text style={[s.driverAvatarTxt, {color: colors.textSecondary}]}>{d.name[0]}</Text>
-              </View>
-              <View style={{flex: 1}}>
-                <Text style={[s.driverName, {color: colors.textPrimary}]}>{d.name}</Text>
-                <Text style={[s.driverJob, {color: colors.textMuted}]}>On task · waiting for GPS</Text>
-              </View>
-              <View style={[s.liveDot, {backgroundColor: colors.warning}]} />
-            </View>
-          ))}
-        </ScrollView>
-      )}
+            <View style={[s.liveDot, {backgroundColor: colors.warning}]} />
+          </View>
+        ))}
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
 const s = StyleSheet.create({
   safe: {flex: 1},
-
-  tabBar: {flexDirection: 'row', borderBottomWidth: 1},
-  tabItem: {flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 16},
-  tabLabelRow: {flexDirection: 'row', alignItems: 'center', gap: 6},
-  tabLabel: {fontSize: 15, fontWeight: '700'},
-  tabDot: {width: 6, height: 6, borderRadius: 3},
-  tabUnderline: {position: 'absolute', bottom: 0, left: 16, right: 16, height: 2, borderRadius: 1},
 
   liveScroll: {padding: 16, paddingBottom: 40},
   mapCard: {
