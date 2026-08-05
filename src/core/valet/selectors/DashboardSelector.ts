@@ -1,5 +1,6 @@
 import type {ParkingTask, ParkingSlot} from '../../../context/AppStateContext';
 import {isMyJobToRun} from '../services/OwnershipService';
+import {departurePriority} from '../../../utils/retrievalClocks';
 
 /**
  * Centralizes the Dashboard's 4-section grouping — ported verbatim from
@@ -68,4 +69,31 @@ export function selectDashboardSections(
 export function selectParkedVehicles(slots: ParkingSlot[], tasks: ParkingTask[]): ParkingSlot[] {
   return slots.filter(sl => sl.status === 'occupied' && !tasks.some(t =>
     t.type === 'retrieve' && t.slotId === sl.id && t.status !== 'completed' && t.status !== 'cancelled'));
+}
+
+/**
+ * Which unassigned job gets a driver next. Drive time to wherever the car
+ * actually gets parked varies job to job (never a fixed distance) — the
+ * only thing that reliably says "this one's more urgent" is either a real
+ * deadline (a retrieval with a planned departure) or, absent that, simply
+ * how long it's already been waiting.
+ *
+ * Tier 1 — retrievals with an explicit planned departure, most urgent/
+ * overdue first (same ranking the old Retrieval Requests inbox used).
+ * Tier 2 — everything else (park jobs, and retrievals with no departure
+ * given), oldest-first — a job nobody's picked up in 20 minutes should
+ * dispatch before one that landed 30 seconds ago.
+ */
+export function sortAssignPendingByUrgency(jobs: ParkingTask[], now: number): ParkingTask[] {
+  const age = (t: ParkingTask) => now - (t.requestedAt ?? t.assignedAt ?? now);
+  const hasDeadline = (t: ParkingTask) => t.type === 'retrieve' && t.plannedDepartureMinutes != null;
+  return [...jobs].sort((a, b) => {
+    const aDeadline = hasDeadline(a), bDeadline = hasDeadline(b);
+    if (aDeadline !== bDeadline) return aDeadline ? -1 : 1; // deadline jobs sort before FIFO ones
+    if (aDeadline && bDeadline) {
+      return departurePriority(a.requestedAt, a.plannedDepartureMinutes, now)
+        - departurePriority(b.requestedAt, b.plannedDepartureMinutes, now);
+    }
+    return age(b) - age(a); // oldest (longest-waiting) first
+  });
 }

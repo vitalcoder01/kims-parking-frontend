@@ -1,5 +1,6 @@
 import React, {useState, useEffect} from 'react';
 import {View, Text, StyleSheet, ScrollView, TextInput, StatusBar, ActivityIndicator, Modal, Pressable} from 'react-native';
+import LinearGradient from 'react-native-linear-gradient';
 import {useDialog} from '../../components/AppDialog';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useTheme} from '../../context/ThemeContext';
@@ -500,25 +501,44 @@ export function ValetRecordsScreen() {
           Same 4 chips, same meaning, whichever tab (Visitors or Staff) is
           showing — it's one shared vehicle-lifecycle filter, not two. */}
       {statusFilter === 'active' && (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.stageRow}>
-          {STAGE_FILTERS.map(sf => {
-            const on = stageFilter === sf.key;
-            return (
-              <PressableScale
-                key={sf.key}
-                onPress={() => setStageFilter(on ? 'all' : sf.key)}
-                style={[s.filterChip, {backgroundColor: on ? colors.primary : colors.surface, borderColor: on ? colors.primary : colors.border}]}
-              >
-                <Text style={[s.filterChipTxt, {color: on ? colors.textOnPrimary : colors.textSecondary}]}>
-                  {sf.label}
-                </Text>
-              </PressableScale>
-            );
-          })}
-        </ScrollView>
+        <View style={s.stageRowWrap}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.stageRow}>
+            {STAGE_FILTERS.map(sf => {
+              const on = stageFilter === sf.key;
+              return (
+                <PressableScale
+                  key={sf.key}
+                  onPress={() => setStageFilter(on ? 'all' : sf.key)}
+                  style={[s.filterChip, {backgroundColor: on ? colors.primary : colors.surface, borderColor: on ? colors.primary : colors.border}]}
+                >
+                  <Text style={[s.filterChipTxt, {color: on ? colors.textOnPrimary : colors.textSecondary}]}>
+                    {sf.label}
+                  </Text>
+                </PressableScale>
+              );
+            })}
+          </ScrollView>
+          {/* Fade hint — without it, "Transit → hospital" (the 4th chip) can
+              sit fully off-screen with nothing telling a valet there's more
+              to scroll to, easy to miss entirely. */}
+          <LinearGradient
+            pointerEvents="none"
+            colors={['transparent', colors.background]}
+            start={{x: 0, y: 0}} end={{x: 1, y: 0}}
+            style={s.stageRowFade}
+          />
+        </View>
       )}
 
-      <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
+      {/* flexGrow:1 only for the empty states — a real list should never be
+          forced to fill the screen (that would stretch a short list's
+          bottom item weirdly), but an empty message pinned near the top
+          with a wall of dead space below it read as broken, not "just
+          short". Centering it in the available height reads as intentional
+          instead. */}
+      <ScrollView
+        contentContainerStyle={filtered.length === 0 ? [s.scroll, s.scrollEmpty] : s.scroll}
+        showsVerticalScrollIndicator={false}>
         {tab === 'staff' && historyLoading && staffHistory.length === 0 ? (
           <View style={s.emptyWrap}>
             <ActivityIndicator color={colors.primary} />
@@ -618,10 +638,13 @@ const s = StyleSheet.create({
   // children across the ScrollView's own (much taller) measured height,
   // which blew these chips up into tall ovals instead of flat pills.
   stageRow: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 20, paddingTop: 10},
+  stageRowWrap: {position: 'relative'},
+  stageRowFade: {position: 'absolute', top: 0, right: 0, bottom: 0, width: 32},
   filterChip: {borderRadius: 99, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 7},
   filterChipTxt: {fontSize: 12, fontWeight: '700'},
 
   scroll: {padding: 20, paddingTop: 14, paddingBottom: 40},
+  scrollEmpty: {flexGrow: 1, justifyContent: 'center'},
 
   header: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, paddingTop: 20},
   skipBtn: {borderRadius: 10, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 8},
@@ -662,7 +685,7 @@ const s = StyleSheet.create({
   stubSlot: {fontSize: 10.5, fontWeight: '600'},
   stubBar: {marginTop: 6, width: 22, height: 5, borderRadius: 99, opacity: 0.7},
 
-  emptyWrap: {alignItems: 'center', gap: 6, paddingTop: 48},
+  emptyWrap: {alignItems: 'center', gap: 6},
   emptyTitle: {fontSize: 14, fontWeight: '600'},
   emptySub: {fontSize: 12.5, fontWeight: '500'},
 

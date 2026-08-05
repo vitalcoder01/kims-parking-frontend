@@ -1,5 +1,6 @@
 import type {ParkingTask} from '../../../context/AppStateContext';
 import {canRun, isEscalated as ownershipIsEscalated} from '../services/OwnershipService';
+import {agoLabel} from '../../../utils/retrievalClocks';
 
 /**
  * Replaces the ~8 independent booleans (needsDriver, isMine, isEscalated,
@@ -47,7 +48,7 @@ export interface JobActionResult {
 
 export function deriveJobAction(
   t: ParkingTask,
-  ctx: {myValetId: number | null | undefined; myUserId: number | undefined},
+  ctx: {myValetId: number | null | undefined; myUserId: number | undefined; now: number},
 ): JobActionResult {
   const needsDriver = t.status === 'assigned' && !t.driverId;
   const isMine = t.valetId === ctx.myUserId;
@@ -61,12 +62,20 @@ export function deriveJobAction(
     && (t.status === 'key_collected' || t.status === 'in_transit');
   const isRecalledInTransit = recalled && (t.status === 'key_collected' || t.status === 'in_transit');
 
+  // How long a job's been sitting without a driver has real operational
+  // weight — travel time to wherever it actually gets parked varies job to
+  // job, so nothing else tells a valet which unclaimed job has been
+  // waiting longest. Was silently missing before: a job used to always
+  // walk straight into assignment in the same motion it was created, so
+  // "how long has it been waiting" never had to be shown.
+  const waitedSince = t.type === 'retrieve' ? t.requestedAt : t.assignedAt;
   const waitingNote =
       awaitingAccept ? `Waiting for ${t.driverName ?? 'driver'} to accept…`
     : recalled && t.status !== 'delivered' ? `${t.driverName ?? 'Driver'} is bringing it back`
     : t.status === 'key_collected' ? `${t.driverName ?? 'Driver'} has the key`
     : t.status === 'in_transit' ? (t.type === 'park' ? `${t.driverName ?? 'Driver'} is parking it` : `${t.driverName ?? 'Driver'} is bringing it`)
-    : t.status === 'requested' || t.status === 'accepted' ? 'Waiting to be claimed'
+    : (needsDriver || t.status === 'requested' || t.status === 'accepted')
+      ? `Waiting for a driver · ${agoLabel(waitedSince, ctx.now)}`
     : null;
 
   let kind: JobActionKind = 'none';

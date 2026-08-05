@@ -16,7 +16,7 @@ import {useValetActions, isMyJobToRun} from './useValetActions';
 import type {ParkingTask} from '../../context/AppStateContext';
 import {useAppState} from '../../context/AppStateContext';
 import {SkeletonCard} from '../../components/Skeleton';
-import {selectDashboardSections, selectParkedVehicles} from '../../core/valet/selectors/DashboardSelector';
+import {selectDashboardSections, selectParkedVehicles, sortAssignPendingByUrgency} from '../../core/valet/selectors/DashboardSelector';
 import {deriveJobAction} from '../../core/valet/state/JobAction';
 import {
   plannedDepartureLabel, minutesUntilDeparture, departureClockLabel,
@@ -987,6 +987,9 @@ export function ValetHomeScreen() {
   } = selectDashboardSections(activeTasks, retrievalRequests, myValetId, queueTab);
 
   const parkedVehicles = selectParkedVehicles(slots, tasks);
+  // Longest-waiting / most-urgent first — see sortAssignPendingByUrgency's
+  // own comment for why a fixed distance was never assumed here.
+  const sortedAssignPendingJobs = sortAssignPendingByUrgency(assignPendingJobs, now);
 
   // One card, one contextual action button that changes as the job's own
   // stage changes — shared by every Dashboard section below, so a job looks
@@ -997,11 +1000,26 @@ export function ValetHomeScreen() {
     // now derived in one place — core/valet/state/JobAction.ts (Phase 1 of
     // VALET_ARCHITECTURE_REFACTOR.md) — instead of ~8 booleans re-computed
     // inline here. Same conditions, same resulting UI, just centralized.
-    const action = deriveJobAction(t, {myValetId, myUserId: user?.id});
+    const action = deriveJobAction(t, {myValetId, myUserId: user?.id, now});
+
+    // Urgency wash for a still-unclaimed retrieval — restores the "hot to
+    // cool" visual weight the old standalone Retrieval Requests inbox had,
+    // which flattened into a plain card once retrievals merged into this
+    // Dashboard. Park jobs (no departure deadline) stay a plain card; only
+    // a retrieval genuinely racing a clock gets tinted.
+    const isPendingRetrieval = action.kind === 'assign_retrieval_request';
+    const departureLeft = isPendingRetrieval
+      ? minutesUntilDeparture(t.requestedAt, t.plannedDepartureMinutes, now) : null;
+    const urgencyTone = isPendingRetrieval ? departureTone(departureLeft, colors) : null;
+    const urgencyWash = departureLeft == null ? '00' : departureLeft <= 0 ? '1C' : departureLeft <= 10 ? '14' : departureLeft <= 20 ? '0E' : departureLeft <= 30 ? '0A' : '08';
+    const urgencyEdge = departureLeft == null ? null : departureLeft <= 0 ? '66' : departureLeft <= 10 ? '4D' : departureLeft <= 20 ? '3A' : '26';
+    const cardBg = urgencyTone && urgencyEdge ? urgencyTone + urgencyWash : colors.surface;
+    const cardBorder = action.isEscalated ? colors.error : (urgencyTone && urgencyEdge ? urgencyTone + urgencyEdge : colors.border);
+
     return (
       <View key={t.id} style={[
         s.taskCard,
-        {backgroundColor: colors.surface, borderColor: action.isEscalated ? colors.error : colors.border},
+        {backgroundColor: cardBg, borderColor: cardBorder},
         action.isEscalated && {borderWidth: 2},
       ]}>
         <View style={s.jobHead}>
@@ -1311,7 +1329,7 @@ export function ValetHomeScreen() {
           </View>
         ) : (
           <>
-            {jobSection('Driver assign pending', 'people', assignPendingJobs)}
+            {jobSection('Driver assign pending', 'people', sortedAssignPendingJobs)}
             {jobSection('Driver acceptance pending', 'timer', acceptPendingJobs)}
             {jobSection('In progress', 'navigate', inProgressJobs)}
             {jobSection('Not completed', 'checkBold', notCompletedJobs)}
