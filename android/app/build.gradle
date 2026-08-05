@@ -84,6 +84,19 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
+    // Local build-machine workaround: this project's path
+    // (...\Desktop\KIMS PARKING\kims-parking-frontend\android\app\.cxx\...)
+    // plus the New Architecture's autolinked codegen object paths (e.g.
+    // react_codegen_safeareacontext) exceeds Windows' 260-character path
+    // limit for CMake/ninja intermediate build files. Redirecting the
+    // staging directory to a short, top-level path avoids that without
+    // needing project relocation or an OS-wide long-path registry change.
+    externalNativeBuild {
+        cmake {
+            buildStagingDirectory = file("C:/rncxx/frontend")
+        }
+    }
+
     namespace "com.kimsparking"
     defaultConfig {
         applicationId "com.kimsparking"
