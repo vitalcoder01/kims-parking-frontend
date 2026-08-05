@@ -646,7 +646,11 @@ const s = StyleSheet.create({
   searchInput: {flex: 1, fontSize: 15, fontWeight: '500', padding: 0},
 
   filterRow: {flexDirection: 'row', gap: 8, paddingHorizontal: 20, paddingTop: 10},
-  stageRow: {flexDirection: 'row', gap: 8, paddingHorizontal: 20, paddingTop: 10},
+  // alignItems: 'center' is load-bearing here, unlike filterRow above — a
+  // horizontal ScrollView's content container defaults to stretching its
+  // children across the ScrollView's own (much taller) measured height,
+  // which blew these chips up into tall ovals instead of flat pills.
+  stageRow: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 20, paddingTop: 10},
   filterChip: {borderRadius: 99, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 7},
   filterChipTxt: {fontSize: 12, fontWeight: '700'},
 
