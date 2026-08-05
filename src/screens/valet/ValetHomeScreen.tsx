@@ -17,14 +17,36 @@ import type {ParkingTask} from '../../context/AppStateContext';
 import {useAppState} from '../../context/AppStateContext';
 import {SkeletonCard} from '../../components/Skeleton';
 import {
-  plannedDepartureLabel, minutesUntilDeparture, departureClockLabel,
-  enRouteSeconds, fmtDuration,
+  plannedDepartureLabel, departurePriority, minutesUntilDeparture, departureClockLabel,
+  enRouteSeconds, agoLabel, fmtDuration,
 } from '../../utils/retrievalClocks';
 
 
 type Screen = 'home' | 'scan' | 'assign' | 'visitor' | 'retrievals';
 
+type InboxTab = 'all' | 'now' | 'soon' | 'later';
 type QueueTab = 'mine' | 'team';
+type InboxSection = 'retrievals' | 'arrivals';
+const INBOX_TABS: {key: InboxTab; label: string}[] = [
+  {key: 'all',   label: 'All'},
+  {key: 'now',   label: 'Now'},
+  {key: 'soon',  label: 'Soon'},
+  {key: 'later', label: 'Later'},
+];
+// Bands over the time REMAINING, not the number the doctor originally picked.
+// A doctor can now name a time up to 24h out, so the stored offset decays: a
+// request made at 09:00 for 18:00 must read "9 hr" at 09:00 and "10 min" at
+// 17:50, and must move from Later to Now on its own. Banding on the stored
+// value would leave it parked in Later all day and then fire with no warning.
+//
+// A request with no departure value (legacy row, or an older server) lands in
+// "later" rather than vanishing from every filtered tab.
+function inboxBand(left: number | null): Exclude<InboxTab, 'all'> {
+  if (left == null) return 'later';
+  if (left <= 0) return 'now';
+  if (left <= 20) return 'soon';
+  return 'later';
+}
 
 // Planned-departure badge colours, most urgent first. This shows ONLY when
 // the doctor intends to leave — it is not a delivery estimate.
@@ -108,6 +130,11 @@ export function ValetHomeScreen() {
   screenRef.current = screen;
   const pendingTaskIdRef = useRef<number | null>(null);
   pendingTaskIdRef.current = pendingTaskId;
+  const [inboxTab, setInboxTab] = useState<InboxTab>('all');
+  // The inbox holds both kinds of incoming request. Retrievals are work;
+  // arrivals are information — separated so a flood of arrivals can never
+  // push a waiting car off the screen.
+  const [inboxSection, setInboxSection] = useState<InboxSection>('retrievals');
   const [arrivalQuery, setArrivalQuery] = useState('');
   // Job Queue is split so a valet reads only what they're accountable for.
   // Team jobs stay reachable on the second tab because the key can be handed
@@ -137,13 +164,17 @@ export function ValetHomeScreen() {
       || (a.doctorName ?? '').toLowerCase().includes(arrivalQ))
     .sort((a, b) => a.eta - b.eta);
 
+  const myJobs = activeTasks.filter(t => isMyJobToRun(t, myValetId));
+  const teamJobs = activeTasks.filter(t => !isMyJobToRun(t, myValetId));
+  const queueJobs = queueTab === 'mine' ? myJobs : teamJobs;
+
   const pendingVisitor = pendingVisitorId ? visitors.find(v => v.id === pendingVisitorId) ?? null : null;
   const pendingTask = pendingTaskId ? tasks.find(t => t.id === pendingTaskId) ?? null : null;
 
   // Accept-timeout / reject prompt: the backend watchdog (or the driver's
   // explicit reject) freed the job and asked us — the valet — to pick
   // another driver. Confirming jumps straight into the assign screen.
-  const {reassignPrompt, clearReassignPrompt, slots} = useAppState();
+  const {reassignPrompt, clearReassignPrompt} = useAppState();
   useEffect(() => {
     if (!reassignPrompt) return;
     const what = reassignPrompt.kind === 'task'
@@ -731,11 +762,7 @@ export function ValetHomeScreen() {
     );
   }
 
-  // ── ARRIVALS ────────────────────────────────────────────────────────
-  // Used to be one Inbox screen split between this and Retrieval Requests —
-  // that half moved onto the Dashboard's Driver assign pending section
-  // (retrievals are work; an arrival notice is only ever a heads-up), so
-  // this screen is arrivals-only now.
+  // ── RETRIEVAL REQUESTS ───────────────────────────────────────────────
   if (screen === 'retrievals') {
     return (
       <SafeAreaView style={[s.safe, {backgroundColor: colors.background}]}>
@@ -744,92 +771,253 @@ export function ValetHomeScreen() {
           <PressableScale onPress={() => setScreen('home')} style={[s.circleBack, {backgroundColor: colors.surface, borderColor: colors.border}]}>
             <Icon name="back" size={18} color={colors.textPrimary} />
           </PressableScale>
-          <Text style={[s.headerTitle, {color: colors.textPrimary}]}>Expected Arrivals</Text>
+          <Text style={[s.headerTitle, {color: colors.textPrimary}]}>Inbox</Text>
         </View>
 
-        {/* Search is what makes a flood survivable: the valet never scrolls
-            this list, they type whatever the person at the counter gives
-            them. One box matching code, plate or name — at the counter you
-            get whichever of the three they happen to say, and making them
-            pick a field first would be a decision with no information. */}
-        <View style={[s.arrivalSearchWrap, {backgroundColor: colors.surface, borderColor: colors.border}]}>
-          <Icon name="search" size={15} color={colors.textMuted} />
-          <TextInput
-            style={[s.arrivalSearchInput, {color: colors.textPrimary}]}
-            value={arrivalQuery}
-            onChangeText={setArrivalQuery}
-            placeholder="Search code, plate or name"
-            placeholderTextColor={colors.textMuted}
-            autoCapitalize="characters"
-            autoCorrect={false}
-            returnKeyType="search"
-          />
-          {arrivalQuery.length > 0 && (
-            <PressableScale onPress={() => setArrivalQuery('')} hitSlop={10}>
-              <Icon name="close" size={15} color={colors.textMuted} />
-            </PressableScale>
-          )}
+        {/* Two kinds of incoming request, kept apart. The colour of each
+            count is the same language the inbox icon uses: red is a car
+            someone is waiting for, blue is only a heads-up. */}
+        <View style={[s.inboxTabs, {borderBottomColor: colors.border}]}>
+          {([
+            ['retrievals', 'Retrieval Requests', retrievalRequests.length, colors.error],
+            ['arrivals', 'Expected Arrivals', arrivalNotices.length, colors.info],
+          ] as const).map(([key, label, count, tint]) => {
+            const active = inboxSection === key;
+            return (
+              <PressableScale key={key} style={s.inboxTab} onPress={() => setInboxSection(key)}>
+                <View style={s.inboxSectionRow}>
+                  <Text style={[s.inboxTabTxt, {color: active ? colors.textPrimary : colors.textSecondary}]}>
+                    {label}
+                  </Text>
+                  {count > 0 && (
+                    <View style={[s.inboxSectionCount, {backgroundColor: tint}]}>
+                      <Text style={s.inboxSectionCountTxt}>{count > 99 ? '99+' : count}</Text>
+                    </View>
+                  )}
+                </View>
+                {active && <View style={[s.inboxTabBar, {backgroundColor: colors.textPrimary}]} />}
+              </PressableScale>
+            );
+          })}
         </View>
 
-        <ScrollView contentContainerStyle={s.subContent} keyboardShouldPersistTaps="handled">
+        {inboxSection === 'retrievals' && (<>
+        {/* Counts live on the tabs so the distribution is visible without
+            switching. Zero-count tabs stay in place, dimmed — hiding them
+            would shift the others under the valet's thumb mid-triage. */}
+        {hydrated && retrievalRequests.length > 0 && (
+          <View style={[s.inboxTabs, {borderBottomColor: colors.border}]}>
+            {INBOX_TABS.map(tb => {
+              const count = tb.key === 'all'
+                ? retrievalRequests.length
+                : retrievalRequests.filter(t => inboxBand(minutesUntilDeparture(t.requestedAt, t.plannedDepartureMinutes, now)) === tb.key).length;
+              const active = inboxTab === tb.key;
+              const empty = count === 0;
+              return (
+                <PressableScale key={tb.key} style={s.inboxTab} onPress={() => setInboxTab(tb.key)}>
+                  <Text style={[s.inboxTabTxt, {
+                    color: active ? colors.textPrimary : empty ? colors.textMuted : colors.textSecondary,
+                  }]}>
+                    {tb.label} {count}
+                  </Text>
+                  {active && <View style={[s.inboxTabBar, {backgroundColor: colors.textPrimary}]} />}
+                </PressableScale>
+              );
+            })}
+          </View>
+        )}
+        <ScrollView contentContainerStyle={s.subContent}>
           {!hydrated ? (
             <SkeletonCard lines={2} />
-          ) : arrivalNotices.length === 0 ? (
+          ) : retrievalRequests.length === 0 ? (
             <View style={[s.emptyBox, {borderColor: colors.border}]}>
               <Icon name="inbox" size={26} color={colors.textMuted} style={{marginBottom: 8}} />
-              <Text style={[s.emptyTxt, {color: colors.textMuted}]}>Nobody has announced an arrival.</Text>
+              <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No retrieval requests right now.</Text>
             </View>
-          ) : arrivalsFiltered.length === 0 ? (
+          ) : retrievalRequests.filter(t => inboxTab === 'all' || inboxBand(minutesUntilDeparture(t.requestedAt, t.plannedDepartureMinutes, now)) === inboxTab).length === 0 ? (
             <View style={[s.emptyBox, {borderColor: colors.border}]}>
-              <Icon name="search" size={26} color={colors.textMuted} style={{marginBottom: 8}} />
-              <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No arrival matches "{arrivalQuery.trim()}".</Text>
+              <Icon name="check" size={26} color={colors.textMuted} style={{marginBottom: 8}} />
+              <Text style={[s.emptyTxt, {color: colors.textMuted}]}>Nothing in this group.</Text>
             </View>
-          ) : arrivalsFiltered.map(a => (
-            <View key={a.id} style={[s.taskCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
-              <View style={s.taskTop}>
-                <View style={[s.typePill, {backgroundColor: colors.info + '15'}]}>
-                  <Icon name="bellAlert" size={11} color={colors.info} />
-                  <Text style={[s.typePillTxt, {color: colors.info}]}>ARRIVING</Text>
+          ) : [...retrievalRequests]
+                .filter(t => inboxTab === 'all' || inboxBand(minutesUntilDeparture(t.requestedAt, t.plannedDepartureMinutes, now)) === inboxTab)
+                // NOW first, then 10/20/30/40; oldest request first within a
+                // band so nobody is overtaken by a later request at the same
+                // urgency. No more scheduled-vs-actionable grouping — a
+                // request booked for later is just as assignable as one due
+                // now, so it sorts purely on urgency like everything else.
+                .sort((a, b) =>
+                  departurePriority(a.requestedAt, a.plannedDepartureMinutes, now) - departurePriority(b.requestedAt, b.plannedDepartureMinutes, now)
+                  || (a.requestedAt ?? 0) - (b.requestedAt ?? 0))
+                .map(t => {
+            // Everything on this card is driven by time LEFT, recomputed each
+            // second, so a card genuinely heats up as its deadline approaches
+            // instead of being frozen at whatever the doctor first picked.
+            // No "scheduled" treatment: the lead time only ever delayed the
+            // AUTOMATIC alert (see jobAlerts.js) and a valet who opens the
+            // inbox has always been able to assign a driver right away — the
+            // flat/muted "SCHEDULED" card used to visually suggest otherwise,
+            // reading as a lock the valet had to wait out.
+            const left = minutesUntilDeparture(t.requestedAt, t.plannedDepartureMinutes, now);
+            const tone = departureTone(left, colors);
+            // The card itself carries the colour, graded by urgency: due is a
+            // clearly washed card, hours away is barely tinted. Sorted top to
+            // bottom, the inbox reads as a fade from hot to cool — which
+            // conveys priority without every card shouting equally.
+            const wash = left == null ? '00' : left <= 0 ? '1C' : left <= 10 ? '14' : left <= 20 ? '0E' : left <= 30 ? '0A' : '08';
+            const edge = left == null ? null : left <= 0 ? '66' : left <= 10 ? '4D' : left <= 20 ? '3A' : '26';
+            return (
+            <View key={t.id} style={[
+              s.taskCard,
+              {backgroundColor: left == null ? colors.surface : tone + wash,
+               borderColor: edge ? tone + edge : colors.border},
+            ]}>
+              <View style={s.jobHead}>
+                <View style={{flex: 1}}>
+                  <Text style={[s.jobPlate, {color: colors.textPrimary}]} numberOfLines={1}>{t.carNumber}</Text>
+                  <Text style={[s.jobWho, {color: colors.textSecondary}]} numberOfLines={1}>{t.doctorName}</Text>
+                  {!!t.slotId && (
+                    <Text style={[s.jobSlot, {color: colors.textMuted}]} numberOfLines={1}>Slot {t.slotId}</Text>
+                  )}
                 </View>
-                {/* Doctors can now say an hour out, and "~60 min" reads
-                    worse than "~1 hr" on a card being scanned at a counter. */}
-                <Text style={[s.taskStatusTxt, {color: colors.info}]}>
-                  ~{a.eta >= 60 ? `${Math.round(a.eta / 6) / 10} hr` : `${a.eta} min`}
-                </Text>
-              </View>
-              <Text style={[s.taskDoctor, {color: colors.textPrimary}]}>{a.doctorName}</Text>
-              <Text style={[s.taskMeta, {color: colors.textSecondary, marginTop: 2}]} numberOfLines={1}>
-                {a.doctorCarNumber?.trim() || 'Plate not on file'}
-              </Text>
-              {!!a.doctorCardCode && (
-                <Text style={[s.taskMeta, {color: colors.textMuted}]}>Code {a.doctorCardCode}</Text>
-              )}
-              {/* Kept from the old home-screen card. "They've arrived"
-                  skips typing the code once they're standing here; without
-                  a plate on file it still saves re-entering their identity.
-                  "No-show" is not decoration — a notice only clears itself
-                  when a key is taken, so without it a doctor who never
-                  turns up leaves the blue count permanently wrong. */}
-              <View style={{flexDirection: 'row', gap: 8}}>
-                <PressableScale
-                  style={[s.taskActionBtn, {flex: 1, borderColor: 'transparent', backgroundColor: colors.primary, opacity: arrivingId === a.id ? 0.6 : 1}]}
-                  disabled={arrivingId === a.id}
-                  onPress={() => handleArrivalArrived(a)}>
-                  {arrivingId === a.id
-                    ? <ActivityIndicator color={colors.textOnPrimary} size="small" />
-                    : <Icon name="key" size={13} color={colors.textOnPrimary} />}
-                  <Text style={[s.taskActionTxt, {color: colors.textOnPrimary}]}>
-                    {arrivingId === a.id ? 'Please wait…' : "They've arrived"}
+                {/* Planned departure only — NOT a delivery ETA. */}
+                <View style={[s.departureBadge, {backgroundColor: tone}]}>
+                  <Text style={s.departureBadgeTxt}>
+                    {plannedDepartureLabel(t.requestedAt, t.plannedDepartureMinutes, now)}
                   </Text>
-                </PressableScale>
-                <PressableScale style={[s.taskActionBtn, {borderColor: colors.border, backgroundColor: colors.cardAlt, paddingHorizontal: 14}]}
-                  onPress={() => dismissArrivalNotice(a.id)}>
-                  <Text style={[s.taskActionTxt, {color: colors.textSecondary}]}>No-show</Text>
-                </PressableScale>
+                </View>
               </View>
+
+              <Text style={[s.jobWaiting, {color: colors.textSecondary}]}>
+                {/* Never interpolate the raw value — an older server (or a
+                    pre-departure-field task) has none, and template literals
+                    happily print "undefined" to the user. */}
+                {/* The wall-clock time they said, alongside the countdown in
+                    the badge. A doctor who names 18:00 should be findable by
+                    that, not only by "in 4 hr" — and never by a raw number
+                    that quietly goes stale. */}
+                {left == null
+                  ? 'Departure time not given'
+                  : left <= 0
+                  ? 'Leaving now'
+                  : `Leaves at ${departureClockLabel(t.requestedAt, t.plannedDepartureMinutes, t.plannedDepartureAt)}`}
+              </Text>
+              {!!t.requestedAt && (
+                <Text style={[s.jobSlot, {color: colors.textMuted}]}>Requested {agoLabel(t.requestedAt, now)}</Text>
+              )}
+
+              {/* Why this is on a non-owner's screen at all. Without the
+                  reason it just looks like a request that was routed
+                  strangely. */}
+              {t.recoveryBroadcastAt != null && t.arrivalOwnerValetId !== myValetId && (
+                <View style={s.taskMetaRow}>
+                  <Icon name="bellAlert" size={12} color={colors.warning} />
+                  <Text style={[s.taskMeta, {color: colors.warning}]}>Original owner unavailable</Text>
+                </View>
+              )}
+
+              {/* One button, one label, whether or not this is already ours —
+                  a label that depends on ownership is exactly what flickered
+                  when ownership changed underneath it mid-tap. Always shown:
+                  the lead time only ever delayed the AUTOMATIC alert (see
+                  jobAlerts.js) — the valet decides when to assign, not a
+                  timer. */}
+              <PressableScale style={[s.taskActionBtn, s.jobActions, {borderColor: 'transparent', backgroundColor: colors.primary}]}
+                onPress={() => handleAssignDriverTo(t)}>
+                <Icon name="people" size={13} color={colors.textOnPrimary} />
+                <Text style={[s.taskActionTxt, {color: colors.textOnPrimary}]}>Assign driver</Text>
+              </PressableScale>
             </View>
-          ))}
+            );
+          })}
         </ScrollView>
+        </>)}
+
+        {inboxSection === 'arrivals' && (<>
+          {/* Search is what makes a flood survivable: the valet never scrolls
+              this list, they type whatever the person at the counter gives
+              them. One box matching code, plate or name — at the counter you
+              get whichever of the three they happen to say, and making them
+              pick a field first would be a decision with no information. */}
+          <View style={[s.arrivalSearchWrap, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+            <Icon name="search" size={15} color={colors.textMuted} />
+            <TextInput
+              style={[s.arrivalSearchInput, {color: colors.textPrimary}]}
+              value={arrivalQuery}
+              onChangeText={setArrivalQuery}
+              placeholder="Search code, plate or name"
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="characters"
+              autoCorrect={false}
+              returnKeyType="search"
+            />
+            {arrivalQuery.length > 0 && (
+              <PressableScale onPress={() => setArrivalQuery('')} hitSlop={10}>
+                <Icon name="close" size={15} color={colors.textMuted} />
+              </PressableScale>
+            )}
+          </View>
+
+          <ScrollView contentContainerStyle={s.subContent} keyboardShouldPersistTaps="handled">
+            {!hydrated ? (
+              <SkeletonCard lines={2} />
+            ) : arrivalNotices.length === 0 ? (
+              <View style={[s.emptyBox, {borderColor: colors.border}]}>
+                <Icon name="inbox" size={26} color={colors.textMuted} style={{marginBottom: 8}} />
+                <Text style={[s.emptyTxt, {color: colors.textMuted}]}>Nobody has announced an arrival.</Text>
+              </View>
+            ) : arrivalsFiltered.length === 0 ? (
+              <View style={[s.emptyBox, {borderColor: colors.border}]}>
+                <Icon name="search" size={26} color={colors.textMuted} style={{marginBottom: 8}} />
+                <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No arrival matches "{arrivalQuery.trim()}".</Text>
+              </View>
+            ) : arrivalsFiltered.map(a => (
+              <View key={a.id} style={[s.taskCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+                <View style={s.taskTop}>
+                  <View style={[s.typePill, {backgroundColor: colors.info + '15'}]}>
+                    <Icon name="bellAlert" size={11} color={colors.info} />
+                    <Text style={[s.typePillTxt, {color: colors.info}]}>ARRIVING</Text>
+                  </View>
+                  {/* Doctors can now say an hour out, and "~60 min" reads
+                      worse than "~1 hr" on a card being scanned at a counter. */}
+                  <Text style={[s.taskStatusTxt, {color: colors.info}]}>
+                    ~{a.eta >= 60 ? `${Math.round(a.eta / 6) / 10} hr` : `${a.eta} min`}
+                  </Text>
+                </View>
+                <Text style={[s.taskDoctor, {color: colors.textPrimary}]}>{a.doctorName}</Text>
+                <Text style={[s.taskMeta, {color: colors.textSecondary, marginTop: 2}]} numberOfLines={1}>
+                  {a.doctorCarNumber?.trim() || 'Plate not on file'}
+                </Text>
+                {!!a.doctorCardCode && (
+                  <Text style={[s.taskMeta, {color: colors.textMuted}]}>Code {a.doctorCardCode}</Text>
+                )}
+                {/* Kept from the old home-screen card. "They've arrived"
+                    skips typing the code once they're standing here; without
+                    a plate on file it still saves re-entering their identity.
+                    "No-show" is not decoration — a notice only clears itself
+                    when a key is taken, so without it a doctor who never
+                    turns up leaves the blue count permanently wrong. */}
+                <View style={{flexDirection: 'row', gap: 8}}>
+                  <PressableScale
+                    style={[s.taskActionBtn, {flex: 1, borderColor: 'transparent', backgroundColor: colors.primary, opacity: arrivingId === a.id ? 0.6 : 1}]}
+                    disabled={arrivingId === a.id}
+                    onPress={() => handleArrivalArrived(a)}>
+                    {arrivingId === a.id
+                      ? <ActivityIndicator color={colors.textOnPrimary} size="small" />
+                      : <Icon name="key" size={13} color={colors.textOnPrimary} />}
+                    <Text style={[s.taskActionTxt, {color: colors.textOnPrimary}]}>
+                      {arrivingId === a.id ? 'Please wait…' : "They've arrived"}
+                    </Text>
+                  </PressableScale>
+                  <PressableScale style={[s.taskActionBtn, {borderColor: colors.border, backgroundColor: colors.cardAlt, paddingHorizontal: 14}]}
+                    onPress={() => dismissArrivalNotice(a.id)}>
+                    <Text style={[s.taskActionTxt, {color: colors.textSecondary}]}>No-show</Text>
+                  </PressableScale>
+                </View>
+              </View>
+            ))}
+          </ScrollView>
+        </>)}
       </SafeAreaView>
     );
   }
@@ -958,238 +1146,6 @@ export function ValetHomeScreen() {
   const completedToday = drivers.reduce((sum, d) => sum + (d.completedToday ?? 0), 0);
   const todayLabel = new Date().toLocaleDateString(undefined, {weekday: 'long', month: 'short', day: 'numeric'});
 
-  // ── Dashboard sections — the old flat Job Queue, regrouped by the stage
-  // each job is actually stuck at, with the old standalone Retrieval
-  // Requests inbox merged straight in (an unclaimed retrieval and a claimed
-  // job with no driver yet are the same "needs a driver" wait from the
-  // valet's side, so they now live in one section instead of two screens).
-  const dashboardJobs = [...activeTasks, ...retrievalRequests];
-  const dashboardMine = dashboardJobs.filter(t => isMyJobToRun(t, myValetId));
-  const dashboardTeam = dashboardJobs.filter(t => !isMyJobToRun(t, myValetId));
-  const dashboardJobsForTab = queueTab === 'mine' ? dashboardMine : dashboardTeam;
-
-  const isAssignPending = (t: ParkingTask) =>
-    (t.status === 'assigned' && !t.driverId) || t.status === 'requested' || t.status === 'accepted';
-  const isAcceptPending = (t: ParkingTask) => t.status === 'assigned' && !!t.driverId && !t.acceptedAt;
-  const isNotCompleted = (t: ParkingTask) => t.status === 'delivered';
-  // Accepted and actually moving (key handed over, or en route either
-  // direction) — not one of the four named sections, but still a live job
-  // that has to stay visible somewhere rather than disappearing off the
-  // Dashboard between "driver accepted" and "back at the counter".
-  const isJobInProgress = (t: ParkingTask) => !isAssignPending(t) && !isAcceptPending(t) && !isNotCompleted(t);
-
-  const assignPendingJobs = dashboardJobsForTab.filter(isAssignPending);
-  const acceptPendingJobs = dashboardJobsForTab.filter(isAcceptPending);
-  const inProgressJobs = dashboardJobsForTab.filter(isJobInProgress);
-  const notCompletedJobs = dashboardJobsForTab.filter(isNotCompleted);
-
-  // Parked Vehicles — every occupied slot with no retrieval currently in
-  // flight against it. A slot stays "occupied" from markParked all the way
-  // through to markRetrieved (the retrieve leg never touches slot state), so
-  // occupancy alone isn't "sitting idle" — it also needs no live retrieve
-  // task, or a car mid-retrieval would double-count as both parked and in
-  // progress.
-  const parkedVehicles = slots.filter(sl => sl.status === 'occupied' && !tasks.some(t =>
-    t.type === 'retrieve' && t.slotId === sl.id && t.status !== 'completed' && t.status !== 'cancelled'));
-
-  // One card, one contextual action button that changes as the job's own
-  // stage changes — shared by every Dashboard section below, so a job looks
-  // identical no matter which section it's currently filed under.
-  const renderJobCard = (t: ParkingTask) => {
-    const tc = t.type === 'park' ? colors.primary : colors.warning;
-    const needsDriver = t.status === 'assigned' && !t.driverId;
-    const isMine = t.valetId === user?.id;
-    const isEscalated = !!t.escalatedAt && needsDriver;
-    const claimedByOther = !!t.valetId && !isMine && !t.escalatedAt;
-    const awaitingAccept = t.status === 'assigned' && !!t.driverId && !t.acceptedAt;
-    const needsConfirm = t.status === 'delivered';
-    const recalled = !!t.recalledAt;
-    const canDispatch = isMyJobToRun(t, myValetId);
-    const canRecall = canDispatch && t.type === 'park' && !recalled
-      && (t.status === 'key_collected' || t.status === 'in_transit');
-    const waitingNote =
-        awaitingAccept ? `Waiting for ${t.driverName ?? 'driver'} to accept…`
-      : recalled && t.status !== 'delivered' ? `${t.driverName ?? 'Driver'} is bringing it back`
-      : t.status === 'key_collected' ? `${t.driverName ?? 'Driver'} has the key`
-      : t.status === 'in_transit' ? (t.type === 'park' ? `${t.driverName ?? 'Driver'} is parking it` : `${t.driverName ?? 'Driver'} is bringing it`)
-      : t.status === 'requested' || t.status === 'accepted' ? 'Waiting to be claimed'
-      : null;
-    return (
-      <View key={t.id} style={[
-        s.taskCard,
-        {backgroundColor: colors.surface, borderColor: isEscalated ? colors.error : colors.border},
-        isEscalated && {borderWidth: 2},
-      ]}>
-        <View style={s.jobHead}>
-          <View style={{flex: 1}}>
-            <Text style={[s.jobPlate, {color: colors.textPrimary}]} numberOfLines={1}>{t.carNumber}</Text>
-            <Text style={[s.jobWho, {color: colors.textSecondary}]} numberOfLines={1}>{t.doctorName}</Text>
-            {!!t.slotId && (
-              <Text style={[s.jobSlot, {color: colors.textMuted}]} numberOfLines={1}>Slot {t.slotId}</Text>
-            )}
-          </View>
-          <View style={s.jobHeadRight}>
-            <View style={[s.jobTypeTag, {backgroundColor: tc}]}>
-              <Icon name={t.type === 'park' ? 'arrowDown' : 'arrowUp'} size={11} color={colors.textOnPrimary} />
-              <Text style={[s.jobTypeTxt, {color: colors.textOnPrimary}]}>{t.type === 'park' ? 'IN' : 'OUT'}</Text>
-            </View>
-            {(isMine || !!t.valetName) && (
-              <View style={[
-                s.jobOwnerBadge,
-                isMine
-                  ? {backgroundColor: colors.primary + '1A', borderColor: colors.primary + '55'}
-                  : {backgroundColor: 'transparent', borderColor: colors.border},
-              ]}>
-                <Text
-                  style={[s.jobOwnerBadgeTxt, {color: isMine ? colors.primary : colors.textSecondary}]}
-                  numberOfLines={1}>
-                  {isMine ? 'YOURS' : (t.valetName ?? '').split(' ')[0].toUpperCase()}
-                </Text>
-              </View>
-            )}
-          </View>
-        </View>
-
-        {isEscalated && (
-          <View style={[s.jobAlert, {backgroundColor: colors.error + '14'}]}>
-            <Icon name="bellAlert" size={13} color={colors.error} />
-            <Text style={[s.jobAlertTxt, {color: colors.error}]}>Needs a driver</Text>
-          </View>
-        )}
-        {t.type === 'retrieve' && (() => {
-          const en = enRouteSeconds(t, now);
-          const mins = t.plannedDepartureMinutes;
-          const left = minutesUntilDeparture(t.requestedAt, mins, now);
-          if (mins == null && en == null) return null;
-          return (
-            <View style={s.jobClocks}>
-              {mins != null && (
-                <View style={[s.departureChip, {backgroundColor: departureTone(left, colors) + '1F'}]}>
-                  <Text style={[s.departureChipTxt, {color: departureTone(left, colors)}]}>
-                    {plannedDepartureLabel(t.requestedAt, mins, now)}
-                  </Text>
-                </View>
-              )}
-              {en != null && (
-                <Text style={[s.jobClockTxt, {color: colors.textSecondary}]}>
-                  on the way {fmtDuration(en)}
-                </Text>
-              )}
-            </View>
-          );
-        })()}
-        {!!waitingNote && !isEscalated && (
-          <Text style={[s.jobWaiting, {color: colors.textMuted}]} numberOfLines={1}>{waitingNote}</Text>
-        )}
-
-        {(t.status === 'requested' || t.status === 'accepted') && (
-          <PressableScale style={[s.taskActionBtn, s.jobActions, {borderColor: 'transparent', backgroundColor: colors.primary}]}
-            onPress={() => handleAssignDriverTo(t)}>
-            <Icon name="people" size={13} color={colors.textOnPrimary} />
-            <Text style={[s.taskActionTxt, {color: colors.textOnPrimary}]}>Assign driver</Text>
-          </PressableScale>
-        )}
-        {needsDriver && claimedByOther && (
-          <View style={[s.taskActionBtn, s.jobActions, {borderColor: colors.border, backgroundColor: 'transparent'}]}>
-            <Icon name="lock" size={13} color={colors.textMuted} />
-            <Text style={[s.taskActionTxt, {color: colors.textMuted}]}>
-              {t.valetName ?? 'Another valet'} is handling this
-            </Text>
-          </View>
-        )}
-        {needsDriver && !claimedByOther && (
-          <View style={[s.jobActions, {flexDirection: 'row', gap: 8}]}>
-            <PressableScale style={[s.taskActionBtn, {flex: 1, borderColor: 'transparent', backgroundColor: colors.primary}]}
-              onPress={() => handleAssignDriverTo(t)}>
-              <Icon name="people" size={13} color={colors.textOnPrimary} />
-              <Text style={[s.taskActionTxt, {color: colors.textOnPrimary}]}>Assign driver</Text>
-            </PressableScale>
-            <PressableScale style={[s.taskActionBtn, {borderColor: colors.border, backgroundColor: colors.cardAlt, paddingHorizontal: 14}]}
-              onPress={() => handleCancelTask(t.id)}>
-              <Text style={[s.taskActionTxt, {color: colors.textSecondary}]}>Cancel job</Text>
-            </PressableScale>
-          </View>
-        )}
-        {t.status === 'assigned' && !needsDriver && t.type === 'park' && (
-          awaitingAccept ? (
-            <View style={[s.jobActions, {flexDirection: 'row', gap: 8}]}>
-              <View style={[s.taskActionBtn, {flex: 1, borderColor: colors.border, backgroundColor: 'transparent'}]}>
-                <Icon name="timer" size={13} color={colors.textMuted} />
-                <Text style={[s.taskActionTxt, {color: colors.textMuted}]} numberOfLines={1}>Waiting to accept…</Text>
-              </View>
-              <PressableScale
-                style={[s.taskActionBtn, {borderColor: colors.border, backgroundColor: colors.cardAlt, paddingHorizontal: 14}]}
-                disabled={cancellingAssignmentId === t.id}
-                onPress={() => handleCancelAssignment(t.id)}>
-                <Text style={[s.taskActionTxt, {color: colors.textSecondary}]}>
-                  {cancellingAssignmentId === t.id ? 'Cancelling…' : 'Cancel Assign'}
-                </Text>
-              </PressableScale>
-            </View>
-          ) : (
-            <PressableScale
-              style={[s.taskActionBtn, s.jobActions, {borderColor: 'transparent', backgroundColor: colors.success, opacity: collectingKeyTaskId === t.id ? 0.6 : 1}]}
-              disabled={collectingKeyTaskId === t.id}
-              onPress={async () => {
-                if (collectingKeyTaskId != null) return;
-                setCollectingKeyTaskId(t.id);
-                try {
-                  await markKeyCollected(t.id);
-                } catch (err: any) {
-                  dialog.alert(err.message || 'Could not mark key handed over', {title: 'Error'});
-                } finally {
-                  setCollectingKeyTaskId(null);
-                }
-              }}>
-              {collectingKeyTaskId === t.id
-                ? <ActivityIndicator color="#fff" size="small" />
-                : <Icon name="check" size={14} color="#fff" />}
-              <Text style={[s.taskActionTxt, {color: '#fff'}]}>
-                {collectingKeyTaskId === t.id ? 'Please wait…' : 'Key handed over'}
-              </Text>
-            </PressableScale>
-          )
-        )}
-        {canRecall && (
-          <PressableScale style={[s.taskActionBtn, s.jobActions, {borderColor: colors.warning, backgroundColor: 'transparent'}]}
-            onPress={() => handleRecallTask(t.id, t.carNumber)}>
-            <Icon name="back" size={13} color={colors.warning} />
-            <Text style={[s.taskActionTxt, {color: colors.warning}]}>Bring car back</Text>
-          </PressableScale>
-        )}
-        {recalled && (t.status === 'key_collected' || t.status === 'in_transit') && (
-          <View style={[s.taskActionBtn, s.jobActions, {borderColor: colors.border, backgroundColor: 'transparent'}]}>
-            <Icon name="timer" size={13} color={colors.textMuted} />
-            <Text style={[s.taskActionTxt, {color: colors.textMuted}]}>Driver is bringing it back…</Text>
-          </View>
-        )}
-        {needsConfirm && (
-          <PressableScale
-            style={[s.taskActionBtn, s.jobActions, {borderColor: 'transparent', backgroundColor: colors.success, opacity: confirmingTaskId === t.id ? 0.6 : 1}]}
-            disabled={confirmingTaskId === t.id}
-            onPress={() => handleConfirmTaskDelivered(t.id)}>
-            {confirmingTaskId === t.id
-              ? <ActivityIndicator color="#fff" size="small" />
-              : <Icon name="checkBold" size={14} color="#fff" />}
-            <Text style={[s.taskActionTxt, {color: '#fff'}]}>
-              {confirmingTaskId === t.id ? 'Please wait…' : (recalled ? 'Confirm car returned' : 'Confirm handover')}
-            </Text>
-          </PressableScale>
-        )}
-      </View>
-    );
-  };
-
-  const jobSection = (title: string, icon: IconName, jobs: ParkingTask[]) => jobs.length === 0 ? null : (
-    <View style={{marginBottom: 20}}>
-      <View style={{flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 12}}>
-        <Icon name={icon} size={14} color={colors.textPrimary} />
-        <Text style={[s.sectionTitle, {color: colors.textPrimary, marginBottom: 0}]}>{title} ({jobs.length})</Text>
-      </View>
-      {jobs.map(renderJobCard)}
-    </View>
-  );
-
   return (
     <SafeAreaView edges={['top','bottom','left','right']} style={[s.safe, {backgroundColor: colors.background}]}>
       <StatusBar barStyle="light-content" backgroundColor={isDark ? BRAND_GRADIENT_DARK[0] : BRAND_GRADIENT[0]} />
@@ -1201,12 +1157,18 @@ export function ValetHomeScreen() {
               <Text style={s.gradGreetSub}>{todayLabel}</Text>
               <Text style={s.gradGreetName}>{user?.name}</Text>
             </View>
-            {/* Unclaimed retrievals now surface directly in the Driver
-                assign pending section below, not behind a separate inbox —
-                this badge is arrivals-only (a heads-up, not work waiting to
-                be dispatched). */}
+            {/* Two counts, and the colour carries the meaning: red is a car
+                someone is waiting for, blue is only a heads-up that someone
+                is on their way. They sit on opposite corners so neither
+                moves or overlaps as the other changes, and a zero count
+                hides rather than showing "0". */}
             <PressableScale style={s.inboxBtn} onPress={() => setScreen('retrievals')}>
-              <Icon name="bellAlert" size={20} color="#fff" />
+              <Icon name="inbox" size={20} color="#fff" />
+              {retrievalRequests.length > 0 && (
+                <View style={[s.inboxBadge, {backgroundColor: '#E53935'}]}>
+                  <Text style={s.inboxBadgeTxt}>{retrievalRequests.length > 9 ? '9+' : retrievalRequests.length}</Text>
+                </View>
+              )}
               {arrivalNotices.length > 0 && (
                 <View style={[s.inboxBadgeAlt, {backgroundColor: '#2F6FA8'}]}>
                   <Text style={s.inboxBadgeTxt}>{arrivalNotices.length > 9 ? '9+' : arrivalNotices.length}</Text>
@@ -1238,26 +1200,35 @@ export function ValetHomeScreen() {
         </LinearGradient>
 
         <View style={s.body}>
-        {/* Primary action grid — 3 across, same dark card language throughout
+        {/* Primary action grid — 2x2, same dark card language throughout
             (the badge colour carries the "needs attention" signal, not the
-            card background, so nothing here introduces a new colour).
-            Retrieval Requests used to be a 4th tile here, opening its own
-            inbox screen; that inbox is retired now that unclaimed retrievals
-            show up directly in the Driver assign pending section below. */}
+            card background, so nothing here introduces a new colour). The
+            inbox icon in the header above still works as a quick-glance
+            entry point; these two cards are the primary, always-visible one. */}
         <View style={s.actionGrid}>
-          <PressableScale style={[s.actionCard, s.actionCardThird, {backgroundColor: colors.primary}]} onPress={() => setScreen('scan')}>
+          <PressableScale style={[s.actionCard, {backgroundColor: colors.primary}]} onPress={() => setScreen('scan')}>
             <View style={s.actionIconWrap}><Icon name="key" size={24} color="#fff" /></View>
             <Text style={s.actionCardTxt}>Staff</Text>
             <Text style={s.actionCardSub} numberOfLines={2}>Collect key from doctor / staff</Text>
           </PressableScale>
-          <PressableScale style={[s.actionCard, s.actionCardThird, {backgroundColor: colors.primary}]} onPress={() => setScreen('visitor')}>
+          <PressableScale style={[s.actionCard, {backgroundColor: colors.primary}]} onPress={() => setScreen('visitor')}>
             <View style={s.actionIconWrap}><Icon name="ticket" size={24} color="#fff" /></View>
             <Text style={s.actionCardTxt}>Visitor</Text>
             <Text style={s.actionCardSub} numberOfLines={2}>Patient / VIP token</Text>
           </PressableScale>
           <PressableScale
-            style={[s.actionCard, s.actionCardThird, {backgroundColor: colors.primary}]}
-            onPress={() => setScreen('retrievals')}>
+            style={[s.actionCard, {backgroundColor: colors.primary}]}
+            onPress={() => { setInboxSection('retrievals'); setScreen('retrievals'); }}>
+            <View style={s.actionIconWrap}><Icon name="inbox" size={24} color="#fff" /></View>
+            <Text style={s.actionCardTxt}>Retrieval Requests</Text>
+            <Text style={s.actionCardSub} numberOfLines={2}>Cars waiting to leave</Text>
+            <View style={[s.actionBadge, {backgroundColor: retrievalRequests.length > 0 ? '#E53935' : 'rgba(255,255,255,0.14)'}]}>
+              <Text style={s.actionBadgeTxt}>{retrievalRequests.length} Pending</Text>
+            </View>
+          </PressableScale>
+          <PressableScale
+            style={[s.actionCard, {backgroundColor: colors.primary}]}
+            onPress={() => { setInboxSection('arrivals'); setScreen('retrievals'); }}>
             <View style={s.actionIconWrap}><Icon name="bellAlert" size={24} color="#fff" /></View>
             <Text style={s.actionCardTxt}>Expected Arrivals</Text>
             <Text style={s.actionCardSub} numberOfLines={2}>Heads-up, on the way in</Text>
@@ -1290,16 +1261,16 @@ export function ValetHomeScreen() {
           })}
         </ScrollView>
 
-        {/* Dashboard — every active job, grouped by the stage it's actually
-            stuck at (no more one flat undifferentiated list), plus the
-            unclaimed retrieval requests that used to live in their own
-            separate inbox. Same card everywhere, same one contextual action
-            button per job. */}
-        <Text style={[s.sectionTitle, {color: colors.textPrimary}]}>Dashboard ({dashboardJobsForTab.length})</Text>
+        {/* Job Queue — every task from assignment through to the valet's
+            final confirmation that the owner actually took the car back.
+            One card per job, one contextual action button that changes as
+            the job's own stage changes — no separate panel for "needs a
+            driver" vs "needs confirming"; it's all still the same job. */}
+        <Text style={[s.sectionTitle, {color: colors.textPrimary}]}>Job Queue ({queueJobs.length})</Text>
         {/* Counts sit on the tabs so a valet can see there IS team work
             without leaving their own list to check. */}
         <View style={[s.inboxTabs, {borderBottomColor: colors.border, paddingHorizontal: 0, marginBottom: 12}]}>
-          {([['mine', 'My Jobs', dashboardMine.length], ['team', 'Team Jobs', dashboardTeam.length]] as const).map(([key, label, count]) => {
+          {([['mine', 'My Jobs', myJobs.length], ['team', 'Team Jobs', teamJobs.length]] as const).map(([key, label, count]) => {
             const active = queueTab === key;
             return (
               <PressableScale key={key} style={s.inboxTab} onPress={() => setQueueTab(key)}>
@@ -1318,52 +1289,248 @@ export function ValetHomeScreen() {
             <SkeletonCard lines={2} style={{marginBottom: 12}} />
             <SkeletonCard lines={2} />
           </>
-        ) : dashboardJobsForTab.length === 0 ? (
+        ) : queueJobs.length === 0 ? (
           <View style={[s.emptyBox, {borderColor: colors.border}]}>
             <Icon name="check" size={26} color={colors.textMuted} style={{marginBottom: 8}} />
             <Text style={[s.emptyTxt, {color: colors.textMuted}]}>
               {queueTab === 'mine' ? 'No active jobs' : 'No one else has a job right now'}
             </Text>
           </View>
-        ) : (
-          <>
-            {jobSection('Driver assign pending', 'people', assignPendingJobs)}
-            {jobSection('Driver acceptance pending', 'timer', acceptPendingJobs)}
-            {jobSection('In progress', 'navigate', inProgressJobs)}
-            {jobSection('Not completed', 'checkBold', notCompletedJobs)}
-          </>
-        )}
-
-        {/* Parked Vehicles — not part of the mine/team job split above; a
-            parked car isn't anyone's active job, it's just sitting in its
-            slot, so this section isn't scoped by the My/Team tab. */}
-        <View style={{flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, marginBottom: 12}}>
-          <Icon name="car" size={14} color={colors.textPrimary} />
-          <Text style={[s.sectionTitle, {color: colors.textPrimary, marginBottom: 0}]}>Parked Vehicles ({parkedVehicles.length})</Text>
-        </View>
-        {!hydrated ? (
-          <SkeletonCard lines={2} />
-        ) : parkedVehicles.length === 0 ? (
-          <View style={[s.emptyBox, {borderColor: colors.border}]}>
-            <Icon name="car" size={26} color={colors.textMuted} style={{marginBottom: 8}} />
-            <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No cars parked right now</Text>
-          </View>
-        ) : parkedVehicles.map(sl => {
-          const ownerTask = sl.taskId ? tasks.find(t => t.id === sl.taskId) : undefined;
+        ) : queueJobs.map(t => {
+          const tc = t.type === 'park' ? colors.primary : colors.warning;
+          // 'assigned' is the task's status from creation — it does NOT by
+          // itself mean a driver has been picked (a park task starts here
+          // with no driver, and a rejected/timed-out driver rolls a park
+          // task back to 'assigned' with driverId cleared rather than a
+          // separate status). Whether a driver is actually attached has to
+          // come from driverId, not the status string.
+          const needsDriver = t.status === 'assigned' && !t.driverId;
+          // Job ownership: only the owning valet is alarmed when a job
+          // stalls, so the queue has to make it obvious at a glance which
+          // ones are yours — and, more importantly, which ones have
+          // escalated past their owner because nobody acted. A push can
+          // silently fail; this list is the thing that can't.
+          const isMine = t.valetId === user?.id;
+          const isEscalated = !!t.escalatedAt && needsDriver;
+          // One job, one valet. Another valet's live job is read-only here
+          // until it escalates — otherwise two valets who got the same alert
+          // could each assign a driver, and the second silently bumped the
+          // first. Matches the backend guard in task.service.js assignDriver,
+          // so the button is never offered for a call that would be refused.
+          const claimedByOther = !!t.valetId && !isMine && !t.escalatedAt;
+          // A driver being attached doesn't mean they've actually accepted
+          // yet — the accept handshake is a separate step (see
+          // DriverJobsScreen's Accept/Reject buttons), and "Mark Key Handed"
+          // below must not be offered until that's actually done, or a
+          // reject landing right after would either get rejected itself or
+          // leave this task key_collected with no driver on it at all.
+          const awaitingAccept = t.status === 'assigned' && !!t.driverId && !t.acceptedAt;
+          // Car's back at the counter, but nothing's confirmed the handover
+          // yet — the one stage on this whole screen that's actually
+          // time-sensitive right now, so the card itself gets highlighted.
+          const needsConfirm = t.status === 'delivered';
+          // Valet pulled this park job back mid-drive — the car is coming
+          // back to the counter instead of going into a slot.
+          const recalled = !!t.recalledAt;
+          // A plain cancel is only honest before the key changes hands;
+          // after that the car physically exists in a driver's hands and has
+          // to be recalled (driver brings it back) rather than silently voided.
+          // Dispatch rights — the same rule that splits the two tabs, asked
+          // per card rather than read off the tab so the two can't disagree.
+          const canDispatch = isMyJobToRun(t, myValetId);
+          // Recalling is a dispatch decision, not a physical one: it tells a
+          // driver already on the road to turn around. It had no ownership
+          // gate at all, so on the team tab it would have been the one button
+          // letting a valet override someone else's job.
+          const canRecall = canDispatch && t.type === 'park' && !recalled
+            && (t.status === 'key_collected' || t.status === 'in_transit');
+          // Status text is coloured by how much it needs the VALET right now,
+          // not by park-vs-retrieve. It used to use `tc` (the type colour),
+          // which meant "Awaiting driver" (needs you) and "In transit"
+          // (nothing to do) looked identical, while the same stage of a park
+          // and a retrieve looked different — colour encoding the one
+          // dimension that doesn't matter for triage.
+          //   red    = blocked, waiting on this valet
+          //   amber  = in progress, no action needed
+          //   muted  = someone else's move (the driver's)
+          // A status line ONLY where the card has no button. When there IS a
+          // button it already states the action ("Key Handed to Driver"),
+          // so a band above it reading "Hand over the key" was the same
+          // sentence twice — noise dressed up as information.
+          const waitingNote =
+              awaitingAccept ? `Waiting for ${t.driverName ?? 'driver'} to accept…`
+            : recalled && t.status !== 'delivered' ? `${t.driverName ?? 'Driver'} is bringing it back`
+            : t.status === 'key_collected' ? `${t.driverName ?? 'Driver'} has the key`
+            : t.status === 'in_transit' ? (t.type === 'park' ? `${t.driverName ?? 'Driver'} is parking it` : `${t.driverName ?? 'Driver'} is bringing it`)
+            : null;
           return (
-            <View key={sl.id} style={[s.taskCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+            <View key={t.id} style={[
+              s.taskCard,
+              {backgroundColor: colors.surface, borderColor: isEscalated ? colors.error : colors.border},
+              isEscalated && {borderWidth: 2},
+            ]}>
+              {/* Plate first, and big. A valet is standing in front of a
+                  physical car (or holding its key tag) — the number is what
+                  they match against, so it's the headline. Everything else
+                  is context for it, not competition with it. Tabular figures
+                  keep plates from jittering as the list re-renders. */}
               <View style={s.jobHead}>
                 <View style={{flex: 1}}>
-                  <Text style={[s.jobPlate, {color: colors.textPrimary}]} numberOfLines={1}>{sl.carNumber ?? 'Unknown plate'}</Text>
-                  {!!ownerTask?.doctorName && (
-                    <Text style={[s.jobWho, {color: colors.textSecondary}]} numberOfLines={1}>{ownerTask.doctorName}</Text>
+                  <Text style={[s.jobPlate, {color: colors.textPrimary}]} numberOfLines={1}>{t.carNumber}</Text>
+                  <Text style={[s.jobWho, {color: colors.textSecondary}]} numberOfLines={1}>{t.doctorName}</Text>
+                  {!!t.slotId && (
+                    <Text style={[s.jobSlot, {color: colors.textMuted}]} numberOfLines={1}>Slot {t.slotId}</Text>
                   )}
-                  <Text style={[s.jobSlot, {color: colors.textMuted}]} numberOfLines={1}>Slot {sl.id}</Text>
                 </View>
-                <View style={[s.departureBadge, {backgroundColor: colors.success}]}>
-                  <Text style={s.departureBadgeTxt}>PARKED</Text>
+                <View style={s.jobHeadRight}>
+                  <View style={[s.jobTypeTag, {backgroundColor: tc}]}>
+                    <Icon name={t.type === 'park' ? 'arrowDown' : 'arrowUp'} size={11} color={colors.textOnPrimary} />
+                    <Text style={[s.jobTypeTxt, {color: colors.textOnPrimary}]}>{t.type === 'park' ? 'IN' : 'OUT'}</Text>
+                  </View>
+                  {(isMine || !!t.valetName) && (
+                    <View style={[
+                      s.jobOwnerBadge,
+                      isMine
+                        ? {backgroundColor: colors.primary + '1A', borderColor: colors.primary + '55'}
+                        : {backgroundColor: 'transparent', borderColor: colors.border},
+                    ]}>
+                      <Text
+                        style={[s.jobOwnerBadgeTxt, {color: isMine ? colors.primary : colors.textSecondary}]}
+                        numberOfLines={1}>
+                        {isMine ? 'YOURS' : (t.valetName ?? '').split(' ')[0].toUpperCase()}
+                      </Text>
+                    </View>
+                  )}
                 </View>
               </View>
+
+              {/* Escalation is the one state worth shouting about — a real
+                  car has been sitting with nobody on it. Everything else is
+                  either already stated by the button below, or a quiet
+                  "nothing for you to do right now" note. */}
+              {isEscalated && (
+                <View style={[s.jobAlert, {backgroundColor: colors.error + '14'}]}>
+                  <Icon name="bellAlert" size={13} color={colors.error} />
+                  <Text style={[s.jobAlertTxt, {color: colors.error}]}>Needs a driver</Text>
+                </View>
+              )}
+              {/* Retrievals carry two clocks and the valet needs both: the
+                  doctor's deadline (are we late?) and, once a driver has
+                  actually set off, how long the car has been coming. The
+                  second only exists after startedAt, so it appears then. */}
+              {t.type === 'retrieve' && (() => {
+                const en = enRouteSeconds(t, now);
+                const mins = t.plannedDepartureMinutes;
+                const left = minutesUntilDeparture(t.requestedAt, mins, now);
+                if (mins == null && en == null) return null;
+                return (
+                  <View style={s.jobClocks}>
+                    {mins != null && (
+                      <View style={[s.departureChip, {backgroundColor: departureTone(left, colors) + '1F'}]}>
+                        <Text style={[s.departureChipTxt, {color: departureTone(left, colors)}]}>
+                          {plannedDepartureLabel(t.requestedAt, mins, now)}
+                        </Text>
+                      </View>
+                    )}
+                    {en != null && (
+                      <Text style={[s.jobClockTxt, {color: colors.textSecondary}]}>
+                        on the way {fmtDuration(en)}
+                      </Text>
+                    )}
+                  </View>
+                );
+              })()}
+              {!!waitingNote && !isEscalated && (
+                <Text style={[s.jobWaiting, {color: colors.textMuted}]} numberOfLines={1}>{waitingNote}</Text>
+              )}
+
+              {needsDriver && claimedByOther && (
+                <View style={[s.taskActionBtn, s.jobActions, {borderColor: colors.border, backgroundColor: 'transparent'}]}>
+                  <Icon name="lock" size={13} color={colors.textMuted} />
+                  <Text style={[s.taskActionTxt, {color: colors.textMuted}]}>
+                    {t.valetName ?? 'Another valet'} is handling this
+                  </Text>
+                </View>
+              )}
+              {needsDriver && !claimedByOther && (
+                <View style={[s.jobActions, {flexDirection: 'row', gap: 8}]}>
+                  <PressableScale style={[s.taskActionBtn, {flex: 1, borderColor: 'transparent', backgroundColor: colors.primary}]}
+                    onPress={() => handleAssignDriverTo(t)}>
+                    <Icon name="people" size={13} color={colors.textOnPrimary} />
+                    <Text style={[s.taskActionTxt, {color: colors.textOnPrimary}]}>Assign driver</Text>
+                  </PressableScale>
+                  <PressableScale style={[s.taskActionBtn, {borderColor: colors.border, backgroundColor: colors.cardAlt, paddingHorizontal: 14}]}
+                    onPress={() => handleCancelTask(t.id)}>
+                    <Text style={[s.taskActionTxt, {color: colors.textSecondary}]}>Cancel job</Text>
+                  </PressableScale>
+                </View>
+              )}
+              {t.status === 'assigned' && !needsDriver && t.type === 'park' && (
+                awaitingAccept ? (
+                  <View style={[s.jobActions, {flexDirection: 'row', gap: 8}]}>
+                    <View style={[s.taskActionBtn, {flex: 1, borderColor: colors.border, backgroundColor: 'transparent'}]}>
+                      <Icon name="timer" size={13} color={colors.textMuted} />
+                      <Text style={[s.taskActionTxt, {color: colors.textMuted}]} numberOfLines={1}>Waiting to accept…</Text>
+                    </View>
+                    <PressableScale
+                      style={[s.taskActionBtn, {borderColor: colors.border, backgroundColor: colors.cardAlt, paddingHorizontal: 14}]}
+                      disabled={cancellingAssignmentId === t.id}
+                      onPress={() => handleCancelAssignment(t.id)}>
+                      <Text style={[s.taskActionTxt, {color: colors.textSecondary}]}>
+                        {cancellingAssignmentId === t.id ? 'Cancelling…' : 'Cancel Assign'}
+                      </Text>
+                    </PressableScale>
+                  </View>
+                ) : (
+                  <PressableScale
+                    style={[s.taskActionBtn, s.jobActions, {borderColor: 'transparent', backgroundColor: colors.success, opacity: collectingKeyTaskId === t.id ? 0.6 : 1}]}
+                    disabled={collectingKeyTaskId === t.id}
+                    onPress={async () => {
+                      if (collectingKeyTaskId != null) return;
+                      setCollectingKeyTaskId(t.id);
+                      try {
+                        await markKeyCollected(t.id);
+                      } catch (err: any) {
+                        dialog.alert(err.message || 'Could not mark key handed over', {title: 'Error'});
+                      } finally {
+                        setCollectingKeyTaskId(null);
+                      }
+                    }}>
+                    {collectingKeyTaskId === t.id
+                      ? <ActivityIndicator color="#fff" size="small" />
+                      : <Icon name="check" size={14} color="#fff" />}
+                    <Text style={[s.taskActionTxt, {color: '#fff'}]}>
+                      {collectingKeyTaskId === t.id ? 'Please wait…' : 'Key handed over'}
+                    </Text>
+                  </PressableScale>
+                )
+              )}
+              {canRecall && (
+                <PressableScale style={[s.taskActionBtn, s.jobActions, {borderColor: colors.warning, backgroundColor: 'transparent'}]}
+                  onPress={() => handleRecallTask(t.id, t.carNumber)}>
+                  <Icon name="back" size={13} color={colors.warning} />
+                  <Text style={[s.taskActionTxt, {color: colors.warning}]}>Bring car back</Text>
+                </PressableScale>
+              )}
+              {recalled && (t.status === 'key_collected' || t.status === 'in_transit') && (
+                <View style={[s.taskActionBtn, s.jobActions, {borderColor: colors.border, backgroundColor: 'transparent'}]}>
+                  <Icon name="timer" size={13} color={colors.textMuted} />
+                  <Text style={[s.taskActionTxt, {color: colors.textMuted}]}>Driver is bringing it back…</Text>
+                </View>
+              )}
+              {needsConfirm && (
+                <PressableScale
+                  style={[s.taskActionBtn, s.jobActions, {borderColor: 'transparent', backgroundColor: colors.success, opacity: confirmingTaskId === t.id ? 0.6 : 1}]}
+                  disabled={confirmingTaskId === t.id}
+                  onPress={() => handleConfirmTaskDelivered(t.id)}>
+                  {confirmingTaskId === t.id
+                    ? <ActivityIndicator color="#fff" size="small" />
+                    : <Icon name="checkBold" size={14} color="#fff" />}
+                  <Text style={[s.taskActionTxt, {color: '#fff'}]}>
+                    {confirmingTaskId === t.id ? 'Please wait…' : (recalled ? 'Confirm car returned' : 'Confirm handover')}
+                  </Text>
+                </PressableScale>
+              )}
             </View>
           );
         })}
@@ -1401,8 +1568,7 @@ const s = StyleSheet.create({
   // `(100% - gap) / 2` via percentage width keeps it responsive across phone
   // sizes without a hardcoded pixel width like the old 2-card row had.
   actionGrid:{flexDirection:'row',flexWrap:'wrap',justifyContent:'space-between',rowGap:12,marginBottom:24},
-  actionCard:{borderRadius:22,padding:16,minHeight:148,alignItems:'center',shadowColor:'#000',shadowOffset:{width:0,height:6},shadowOpacity:0.16,shadowRadius:10,elevation:4},
-  actionCardThird:{width:'31.5%'},
+  actionCard:{width:'48.5%',borderRadius:22,padding:18,minHeight:148,alignItems:'center',shadowColor:'#000',shadowOffset:{width:0,height:6},shadowOpacity:0.16,shadowRadius:10,elevation:4},
   actionIconWrap:{width:46,height:46,borderRadius:14,backgroundColor:'rgba(255,255,255,0.18)',alignItems:'center',justifyContent:'center',marginBottom:10},
   actionCardTxt:{color:'#fff',fontSize:15,fontWeight:'800',textAlign:'center'},
   actionCardSub:{color:'rgba(255,255,255,0.65)',fontSize:11,lineHeight:14,marginTop:4,textAlign:'center'},

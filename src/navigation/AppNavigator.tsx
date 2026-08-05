@@ -81,8 +81,8 @@ function ValetNavigator() {
   const {colors} = useTheme();
   return (
     <Tab.Navigator screenOptions={tabOpts(colors)}>
-      <Tab.Screen name="Queue"    component={ValetHomeScreen}      options={{headerShown:false, tabBarLabel:'Dashboard', tabBarIcon:({size,color})=>ic('key',size,color)}} />
-      <Tab.Screen name="Records"  component={ValetRecordsScreen}   options={{headerShown:false, tabBarLabel:'Jobs',      tabBarIcon:({size,color})=>ic('clipboard',size,color)}} />
+      <Tab.Screen name="Queue"    component={ValetHomeScreen}      options={{headerShown:false, tabBarLabel:'Queue',    tabBarIcon:({size,color})=>ic('key',size,color)}} />
+      <Tab.Screen name="Records"  component={ValetRecordsScreen}   options={{headerShown:false, tabBarLabel:'Records',  tabBarIcon:({size,color})=>ic('clipboard',size,color)}} />
       <Tab.Screen name="Map"      component={ValetMapScreen}       options={{headerShown:false, tabBarLabel:'Map',      tabBarIcon:({size,color})=>ic('map',size,color)}} />
       <Tab.Screen name="Settings" component={SharedSettingsScreen} options={{title:'Settings',      tabBarLabel:'Settings',tabBarIcon:({size,color})=>ic('settings',size,color)}} />
     </Tab.Navigator>
