@@ -1,39 +1,16 @@
 import {useAppState, Visitor, ParkingTask} from '../../context/AppStateContext';
 import {useAuth} from '../../context/AuthContext';
+import {canView, canRun} from '../../core/valet/services/OwnershipService';
 
 // Shared valet data + mutations, used by the Queue, Requests, and Visitors
 // screens (three separate bottom tabs) so none of them re-derive the same
 // filters or duplicate the assign/notify logic.
-// Mirrors isVisibleToValet() in the backend's task.service.js. An owned
-// departure belongs to one valet until either they act or their window
-// lapses and it is released to everyone.
-export function isMyRetrieval(t: ParkingTask, myValetId: number | null | undefined): boolean {
-  const owner = t.retrievalOwnerValetId ?? t.arrivalOwnerValetId;
-  if (owner == null) return true;                       // never owned — open floor
-  if (owner === myValetId) return true;                 // mine
-  // A claim narrows it back down to one person immediately, so everyone else
-  // loses the action the moment someone takes it — even mid-recovery.
-  if (t.retrievalOwnerValetId != null) return t.escalatedAt != null;
-  // Released to the floor: the session owner never answered, or whoever held
-  // it stalled and the job escalated past them.
-  return t.recoveryBroadcastAt != null || t.escalatedAt != null;
-}
-
-// Which side of the Job Queue split a job falls on. "Mine to run" is wider
-// than "I own it" on purpose:
-//   - an UNOWNED job has nobody to wait for, so it belongs to whoever looks;
-//   - an ESCALATED job has already had its owner's window and is waiting on
-//     anyone — leaving it on the team side is precisely the stall the
-//     escalation exists to break.
-// Everything else is another valet's, and shows in the team tab read-only
-// for dispatch — though the physical steps stay available there, because a
-// key really can change hands between valets.
-export function isMyJobToRun(t: ParkingTask, myValetId: number | null | undefined): boolean {
-  if (t.valetId == null) return true;
-  if (t.valetId === myValetId) return true;
-  const needsDriver = t.status === 'assigned' && !t.driverId;
-  return !!t.escalatedAt && needsDriver;
-}
+//
+// Ownership rules themselves now live in core/valet/services/OwnershipService
+// (Phase 1 of VALET_ARCHITECTURE_REFACTOR.md) — re-exported here under their
+// original names so no existing import elsewhere has to change.
+export const isMyRetrieval = canView;
+export const isMyJobToRun = canRun;
 
 export function useValetActions() {
   const {drivers, tasks, visitors, arrivalNotices, dismissArrivalNotice, addTask, assignDriver, cancelTaskAssignment, markKeyCollected, pushNotification, addVisitor,

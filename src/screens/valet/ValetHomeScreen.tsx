@@ -16,6 +16,8 @@ import {useValetActions, isMyJobToRun} from './useValetActions';
 import type {ParkingTask} from '../../context/AppStateContext';
 import {useAppState} from '../../context/AppStateContext';
 import {SkeletonCard} from '../../components/Skeleton';
+import {selectDashboardSections, selectParkedVehicles} from '../../core/valet/selectors/DashboardSelector';
+import {deriveJobAction} from '../../core/valet/state/JobAction';
 import {
   plannedDepartureLabel, minutesUntilDeparture, departureClockLabel,
   enRouteSeconds, fmtDuration,
@@ -976,62 +978,31 @@ export function ValetHomeScreen() {
   // Requests inbox merged straight in (an unclaimed retrieval and a claimed
   // job with no driver yet are the same "needs a driver" wait from the
   // valet's side, so they now live in one section instead of two screens).
-  const dashboardJobs = [...activeTasks, ...retrievalRequests];
-  const dashboardMine = dashboardJobs.filter(t => isMyJobToRun(t, myValetId));
-  const dashboardTeam = dashboardJobs.filter(t => !isMyJobToRun(t, myValetId));
-  const dashboardJobsForTab = queueTab === 'mine' ? dashboardMine : dashboardTeam;
+  // Grouping logic itself lives in core/valet/selectors/DashboardSelector
+  // (Phase 1 of VALET_ARCHITECTURE_REFACTOR.md) — same predicates, just
+  // centralized so the Jobs page's history view can eventually share them.
+  const {
+    mine: dashboardMine, team: dashboardTeam, forTab: dashboardJobsForTab,
+    assignPendingJobs, acceptPendingJobs, inProgressJobs, notCompletedJobs,
+  } = selectDashboardSections(activeTasks, retrievalRequests, myValetId, queueTab);
 
-  const isAssignPending = (t: ParkingTask) =>
-    (t.status === 'assigned' && !t.driverId) || t.status === 'requested' || t.status === 'accepted';
-  const isAcceptPending = (t: ParkingTask) => t.status === 'assigned' && !!t.driverId && !t.acceptedAt;
-  const isNotCompleted = (t: ParkingTask) => t.status === 'delivered';
-  // Accepted and actually moving (key handed over, or en route either
-  // direction) — not one of the four named sections, but still a live job
-  // that has to stay visible somewhere rather than disappearing off the
-  // Dashboard between "driver accepted" and "back at the counter".
-  const isJobInProgress = (t: ParkingTask) => !isAssignPending(t) && !isAcceptPending(t) && !isNotCompleted(t);
-
-  const assignPendingJobs = dashboardJobsForTab.filter(isAssignPending);
-  const acceptPendingJobs = dashboardJobsForTab.filter(isAcceptPending);
-  const inProgressJobs = dashboardJobsForTab.filter(isJobInProgress);
-  const notCompletedJobs = dashboardJobsForTab.filter(isNotCompleted);
-
-  // Parked Vehicles — every occupied slot with no retrieval currently in
-  // flight against it. A slot stays "occupied" from markParked all the way
-  // through to markRetrieved (the retrieve leg never touches slot state), so
-  // occupancy alone isn't "sitting idle" — it also needs no live retrieve
-  // task, or a car mid-retrieval would double-count as both parked and in
-  // progress.
-  const parkedVehicles = slots.filter(sl => sl.status === 'occupied' && !tasks.some(t =>
-    t.type === 'retrieve' && t.slotId === sl.id && t.status !== 'completed' && t.status !== 'cancelled'));
+  const parkedVehicles = selectParkedVehicles(slots, tasks);
 
   // One card, one contextual action button that changes as the job's own
   // stage changes — shared by every Dashboard section below, so a job looks
   // identical no matter which section it's currently filed under.
   const renderJobCard = (t: ParkingTask) => {
     const tc = t.type === 'park' ? colors.primary : colors.warning;
-    const needsDriver = t.status === 'assigned' && !t.driverId;
-    const isMine = t.valetId === user?.id;
-    const isEscalated = !!t.escalatedAt && needsDriver;
-    const claimedByOther = !!t.valetId && !isMine && !t.escalatedAt;
-    const awaitingAccept = t.status === 'assigned' && !!t.driverId && !t.acceptedAt;
-    const needsConfirm = t.status === 'delivered';
-    const recalled = !!t.recalledAt;
-    const canDispatch = isMyJobToRun(t, myValetId);
-    const canRecall = canDispatch && t.type === 'park' && !recalled
-      && (t.status === 'key_collected' || t.status === 'in_transit');
-    const waitingNote =
-        awaitingAccept ? `Waiting for ${t.driverName ?? 'driver'} to accept…`
-      : recalled && t.status !== 'delivered' ? `${t.driverName ?? 'Driver'} is bringing it back`
-      : t.status === 'key_collected' ? `${t.driverName ?? 'Driver'} has the key`
-      : t.status === 'in_transit' ? (t.type === 'park' ? `${t.driverName ?? 'Driver'} is parking it` : `${t.driverName ?? 'Driver'} is bringing it`)
-      : t.status === 'requested' || t.status === 'accepted' ? 'Waiting to be claimed'
-      : null;
+    // Card state (which action shows, locked/escalated/recall badges) is
+    // now derived in one place — core/valet/state/JobAction.ts (Phase 1 of
+    // VALET_ARCHITECTURE_REFACTOR.md) — instead of ~8 booleans re-computed
+    // inline here. Same conditions, same resulting UI, just centralized.
+    const action = deriveJobAction(t, {myValetId, myUserId: user?.id});
     return (
       <View key={t.id} style={[
         s.taskCard,
-        {backgroundColor: colors.surface, borderColor: isEscalated ? colors.error : colors.border},
-        isEscalated && {borderWidth: 2},
+        {backgroundColor: colors.surface, borderColor: action.isEscalated ? colors.error : colors.border},
+        action.isEscalated && {borderWidth: 2},
       ]}>
         <View style={s.jobHead}>
           <View style={{flex: 1}}>
@@ -1046,24 +1017,24 @@ export function ValetHomeScreen() {
               <Icon name={t.type === 'park' ? 'arrowDown' : 'arrowUp'} size={11} color={colors.textOnPrimary} />
               <Text style={[s.jobTypeTxt, {color: colors.textOnPrimary}]}>{t.type === 'park' ? 'IN' : 'OUT'}</Text>
             </View>
-            {(isMine || !!t.valetName) && (
+            {(action.isMine || !!t.valetName) && (
               <View style={[
                 s.jobOwnerBadge,
-                isMine
+                action.isMine
                   ? {backgroundColor: colors.primary + '1A', borderColor: colors.primary + '55'}
                   : {backgroundColor: 'transparent', borderColor: colors.border},
               ]}>
                 <Text
-                  style={[s.jobOwnerBadgeTxt, {color: isMine ? colors.primary : colors.textSecondary}]}
+                  style={[s.jobOwnerBadgeTxt, {color: action.isMine ? colors.primary : colors.textSecondary}]}
                   numberOfLines={1}>
-                  {isMine ? 'YOURS' : (t.valetName ?? '').split(' ')[0].toUpperCase()}
+                  {action.isMine ? 'YOURS' : (t.valetName ?? '').split(' ')[0].toUpperCase()}
                 </Text>
               </View>
             )}
           </View>
         </View>
 
-        {isEscalated && (
+        {action.isEscalated && (
           <View style={[s.jobAlert, {backgroundColor: colors.error + '14'}]}>
             <Icon name="bellAlert" size={13} color={colors.error} />
             <Text style={[s.jobAlertTxt, {color: colors.error}]}>Needs a driver</Text>
@@ -1091,26 +1062,26 @@ export function ValetHomeScreen() {
             </View>
           );
         })()}
-        {!!waitingNote && !isEscalated && (
-          <Text style={[s.jobWaiting, {color: colors.textMuted}]} numberOfLines={1}>{waitingNote}</Text>
+        {!!action.waitingNote && (
+          <Text style={[s.jobWaiting, {color: colors.textMuted}]} numberOfLines={1}>{action.waitingNote}</Text>
         )}
 
-        {(t.status === 'requested' || t.status === 'accepted') && (
+        {action.kind === 'assign_retrieval_request' && (
           <PressableScale style={[s.taskActionBtn, s.jobActions, {borderColor: 'transparent', backgroundColor: colors.primary}]}
             onPress={() => handleAssignDriverTo(t)}>
             <Icon name="people" size={13} color={colors.textOnPrimary} />
             <Text style={[s.taskActionTxt, {color: colors.textOnPrimary}]}>Assign driver</Text>
           </PressableScale>
         )}
-        {needsDriver && claimedByOther && (
+        {action.kind === 'locked' && (
           <View style={[s.taskActionBtn, s.jobActions, {borderColor: colors.border, backgroundColor: 'transparent'}]}>
             <Icon name="lock" size={13} color={colors.textMuted} />
             <Text style={[s.taskActionTxt, {color: colors.textMuted}]}>
-              {t.valetName ?? 'Another valet'} is handling this
+              {action.lockedByName} is handling this
             </Text>
           </View>
         )}
-        {needsDriver && !claimedByOther && (
+        {action.kind === 'assign_or_cancel' && (
           <View style={[s.jobActions, {flexDirection: 'row', gap: 8}]}>
             <PressableScale style={[s.taskActionBtn, {flex: 1, borderColor: 'transparent', backgroundColor: colors.primary}]}
               onPress={() => handleAssignDriverTo(t)}>
@@ -1123,8 +1094,8 @@ export function ValetHomeScreen() {
             </PressableScale>
           </View>
         )}
-        {t.status === 'assigned' && !needsDriver && t.type === 'park' && (
-          awaitingAccept ? (
+        {(action.kind === 'awaiting_accept' || action.kind === 'key_handover') && (
+          action.kind === 'awaiting_accept' ? (
             <View style={[s.jobActions, {flexDirection: 'row', gap: 8}]}>
               <View style={[s.taskActionBtn, {flex: 1, borderColor: colors.border, backgroundColor: 'transparent'}]}>
                 <Icon name="timer" size={13} color={colors.textMuted} />
@@ -1163,20 +1134,20 @@ export function ValetHomeScreen() {
             </PressableScale>
           )
         )}
-        {canRecall && (
+        {action.canRecall && (
           <PressableScale style={[s.taskActionBtn, s.jobActions, {borderColor: colors.warning, backgroundColor: 'transparent'}]}
             onPress={() => handleRecallTask(t.id, t.carNumber)}>
             <Icon name="back" size={13} color={colors.warning} />
             <Text style={[s.taskActionTxt, {color: colors.warning}]}>Bring car back</Text>
           </PressableScale>
         )}
-        {recalled && (t.status === 'key_collected' || t.status === 'in_transit') && (
+        {action.isRecalledInTransit && (
           <View style={[s.taskActionBtn, s.jobActions, {borderColor: colors.border, backgroundColor: 'transparent'}]}>
             <Icon name="timer" size={13} color={colors.textMuted} />
             <Text style={[s.taskActionTxt, {color: colors.textMuted}]}>Driver is bringing it back…</Text>
           </View>
         )}
-        {needsConfirm && (
+        {action.kind === 'confirm_handover' && (
           <PressableScale
             style={[s.taskActionBtn, s.jobActions, {borderColor: 'transparent', backgroundColor: colors.success, opacity: confirmingTaskId === t.id ? 0.6 : 1}]}
             disabled={confirmingTaskId === t.id}
@@ -1185,7 +1156,7 @@ export function ValetHomeScreen() {
               ? <ActivityIndicator color="#fff" size="small" />
               : <Icon name="checkBold" size={14} color="#fff" />}
             <Text style={[s.taskActionTxt, {color: '#fff'}]}>
-              {confirmingTaskId === t.id ? 'Please wait…' : (recalled ? 'Confirm car returned' : 'Confirm handover')}
+              {confirmingTaskId === t.id ? 'Please wait…' : (action.wasRecalled ? 'Confirm car returned' : 'Confirm handover')}
             </Text>
           </PressableScale>
         )}
