@@ -211,9 +211,19 @@ export function ValetHomeScreen() {
     }
   };
 
+  // Creating the ticket and assigning a driver are two separate steps now —
+  // this used to walk straight into the assign screen in one continuous
+  // motion, but that meant a freshly-created ticket only ever existed for
+  // the instant between the two calls, never actually visible as "waiting
+  // for a driver". Splitting them means ANY valet (not just whoever
+  // scanned the card) can pick it up from the Dashboard's "Driver assign
+  // pending" section — the same section an unclaimed retrieval request
+  // already lands in, and the backend already creates a park task at
+  // status 'assigned' with no driverId, so isAssignPending already
+  // recognises it with no server change needed.
   const createKeyTask = async (user: any, plate: string) => {
     try {
-      const id = await addTask({
+      await addTask({
         type: 'park',
         doctorId: user.id,
         doctorName: user.name,
@@ -221,11 +231,12 @@ export function ValetHomeScreen() {
         status: 'assigned',
         assignedAt: Date.now(),
       });
-      setPendingTaskId(id);
-      // No driver notification here — the task has no driver yet. The real
-      // per-driver alarm fires from handleAssignDriver once the valet picks one.
       setFoundUser(null); setCarNumber('');
-      setScreen('assign');
+      setScreen('home');
+      dialog.alert(
+        `${plate.toUpperCase()} is now waiting for a driver in "Driver assign pending" on the Dashboard.`,
+        {title: 'Ticket created', tone: 'success'},
+      );
     } catch (err: any) {
       dialog.alert(err.message || 'Something went wrong', {title: 'Error'});
     }
@@ -350,16 +361,18 @@ export function ValetHomeScreen() {
       // Shown regardless of WhatsApp: this token is what the visitor brings
       // back to the desk to collect their car, and with WhatsApp off it is
       // the ONLY place it appears. Reading it out is the fallback.
+      // Check-in and driver assignment are separate steps — same reasoning
+      // as createKeyTask above: the token now sits visibly in "Driver
+      // assign pending" on the Dashboard until any valet picks it up,
+      // rather than forcing whoever checked the visitor in to also be the
+      // one who assigns a driver in the same breath.
       dialog.alert(
         `Parking token  ${visitor.token}\n\n${visitor.carNumber || 'Vehicle'} — ${vMobileDigits}\n\n` +
-        'Give this token to the visitor. They return to the valet desk with it to collect their car.',
+        'Give this token to the visitor. Their car is now waiting for a driver in "Driver assign pending" on the Dashboard.',
         {title: 'Checked in', tone: 'success'},
       );
       setVName(''); setVCar(''); setVMobile(''); setVVehicleType('car');
-      // Straight into driver assignment — a token with nobody assigned to
-      // collect the key is exactly the gap this flow used to leave open.
-      setPendingVisitorId(visitor.id);
-      setScreen('assign');
+      setScreen('home');
     } catch (err: any) {
       dialog.alert(err.message || 'Something went wrong', {title: 'Error'});
     } finally {
