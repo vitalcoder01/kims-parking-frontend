@@ -54,6 +54,7 @@ export function LoginScreen() {
   const [showPass, setShowPass] = useState(false);
   const [keepSignedIn, setKeepSignedIn] = useState(true);
   const [savedAccounts, setSavedAccounts] = useState<SavedAccount[]>([]);
+  const [forgetting, setForgetting] = useState<string | null>(null);
   const shake = useRef(new Animated.Value(0)).current;
   const passwordRef = useRef<TextInput>(null);
 
@@ -96,14 +97,21 @@ export function LoginScreen() {
   const handleLogin = () => doLogin(username, password);
 
   const handleQuickLogin = (account: SavedAccount) => {
+    if (loading) return;
     setUsername(account.username);
     setPassword(account.password);
     doLogin(account.username, account.password);
   };
 
   const handleForget = async (account: SavedAccount) => {
-    await forgetAccount(account.username);
-    setSavedAccounts(await loadSavedAccounts());
+    if (forgetting) return;
+    setForgetting(account.username);
+    try {
+      await forgetAccount(account.username);
+      setSavedAccounts(await loadSavedAccounts());
+    } finally {
+      setForgetting(null);
+    }
   };
 
   return (
@@ -134,8 +142,9 @@ export function LoginScreen() {
                   {savedAccounts.map(acc => (
                     <PressableScale
                       key={acc.username}
-                      style={[s.quickChip, {backgroundColor: isDark ? colors.card : '#F8FAFF', borderColor: colors.border}]}
+                      style={[s.quickChip, {backgroundColor: isDark ? colors.card : '#F8FAFF', borderColor: colors.border, opacity: loading ? 0.6 : 1}]}
                       onPress={() => handleQuickLogin(acc)}
+                      disabled={loading}
                     >
                       <View style={[s.quickAvatar, {backgroundColor: colors.primary}]}>
                         <Text style={[s.quickAvatarTxt, {color: colors.textOnPrimary}]}>{acc.name[0]?.toUpperCase()}</Text>
@@ -144,8 +153,14 @@ export function LoginScreen() {
                         <Text style={[s.quickName, {color: colors.textPrimary}]} numberOfLines={1}>{acc.name}</Text>
                         <Text style={[s.quickRole, {color: colors.textMuted}]}>{acc.role}</Text>
                       </View>
-                      <PressableScale onPress={() => handleForget(acc)} style={s.quickRemove}>
-                        <Icon name="close" size={12} color={colors.textMuted} />
+                      <PressableScale
+                        onPress={() => handleForget(acc)}
+                        style={s.quickRemove}
+                        disabled={forgetting === acc.username}
+                      >
+                        {forgetting === acc.username
+                          ? <ActivityIndicator size="small" color={colors.textMuted} />
+                          : <Icon name="close" size={12} color={colors.textMuted} />}
                       </PressableScale>
                     </PressableScale>
                   ))}

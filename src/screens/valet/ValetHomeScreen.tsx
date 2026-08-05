@@ -103,6 +103,10 @@ export function ValetHomeScreen() {
   const [collectingKeyTaskId, setCollectingKeyTaskId] = useState<number | null>(null);
   const [arrivingId, setArrivingId] = useState<number | null>(null);
   const [assigningToId, setAssigningToId] = useState<number | null>(null);
+  // Same guard as arrivingId, for the sibling "No-show" action — it also
+  // calls the backend (not just a local list filter), so a fast double-tap
+  // could otherwise fire dismiss twice for the same notice.
+  const [dismissingArrivalId, setDismissingArrivalId] = useState<number | null>(null);
   // Read from async callbacks that would otherwise close over stale values.
   const assigningDriverIdRef = useRef<number | null>(null);
   assigningDriverIdRef.current = assigningDriverId;
@@ -483,6 +487,18 @@ export function ValetHomeScreen() {
     }
   };
 
+  const handleDismissArrival = async (id: number) => {
+    if (dismissingArrivalId != null) return;
+    setDismissingArrivalId(id);
+    try {
+      await dismissArrivalNotice(id);
+    } catch (err: any) {
+      dialog.alert(err.message || 'Could not dismiss', {title: 'Error'});
+    } finally {
+      setDismissingArrivalId(null);
+    }
+  };
+
   const handleCancelTask = (taskId: number) => {
     dialog.show({
       title: 'Cancel This Job?',
@@ -837,9 +853,13 @@ export function ValetHomeScreen() {
                     {arrivingId === a.id ? 'Please wait…' : "They've arrived"}
                   </Text>
                 </PressableScale>
-                <PressableScale style={[s.taskActionBtn, {borderColor: colors.border, backgroundColor: colors.cardAlt, paddingHorizontal: 14}]}
-                  onPress={() => dismissArrivalNotice(a.id)}>
-                  <Text style={[s.taskActionTxt, {color: colors.textSecondary}]}>No-show</Text>
+                <PressableScale
+                  style={[s.taskActionBtn, {borderColor: colors.border, backgroundColor: colors.cardAlt, paddingHorizontal: 14, opacity: dismissingArrivalId === a.id ? 0.6 : 1}]}
+                  disabled={dismissingArrivalId === a.id}
+                  onPress={() => handleDismissArrival(a.id)}>
+                  {dismissingArrivalId === a.id
+                    ? <ActivityIndicator color={colors.textSecondary} size="small" />
+                    : <Text style={[s.taskActionTxt, {color: colors.textSecondary}]}>No-show</Text>}
                 </PressableScale>
               </View>
             </View>

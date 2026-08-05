@@ -65,6 +65,8 @@ export function AdminStaffScreen() {
   const [cardCode, setCardCode] = useState('');
   const [phone, setPhone] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [resettingPassword, setResettingPassword] = useState(false);
+  const [deletingAccount, setDeletingAccount] = useState(false);
   // Return-key chaining — role-dependent fields aren't always mounted, so
   // "next" focuses the first ref in the candidate list that actually exists.
   const empIdRef = useRef<TextInput | null>(null);
@@ -113,6 +115,7 @@ export function AdminStaffScreen() {
   };
 
   const handleCreate = async () => {
+    if (submitting) return;
     if (!name.trim() || !employeeId.trim() || !password.trim()) return;
     if (password.length < 8 || password.length > 64) {
       dialog.alert('Password must be 8–64 characters.', {title: 'Invalid password', tone: 'info'});
@@ -140,6 +143,7 @@ export function AdminStaffScreen() {
   };
 
   const handleSaveEdit = async () => {
+    if (submitting) return;
     if (!editingUser || !name.trim()) return;
     setSubmitting(true);
     try {
@@ -160,7 +164,7 @@ export function AdminStaffScreen() {
   };
 
   const handleResetPassword = () => {
-    if (!editingUser) return;
+    if (resettingPassword || !editingUser) return;
     const newPassword = genPassword();
     dialog.show({
       title: 'Reset Password?',
@@ -171,11 +175,15 @@ export function AdminStaffScreen() {
         {
           text: 'Reset',
           onPress: async () => {
+            if (resettingPassword) return;
+            setResettingPassword(true);
             try {
               await adminApi.resetPassword(editingUser.id, newPassword);
               dialog.alert(`New password: ${newPassword}`, {title: 'Password Reset', tone: 'info'});
             } catch (err: any) {
               dialog.alert(err.message || 'Something went wrong', {title: 'Could not reset password', tone: 'info'});
+            } finally {
+              setResettingPassword(false);
             }
           },
         },
@@ -184,7 +192,7 @@ export function AdminStaffScreen() {
   };
 
   const handleDelete = () => {
-    if (!editingUser) return;
+    if (deletingAccount || !editingUser) return;
     dialog.show({
       title: 'Delete Account?',
       message: `This permanently removes ${editingUser.name}'s login (${editingUser.username}). This can't be undone.`,
@@ -195,12 +203,16 @@ export function AdminStaffScreen() {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
+            if (deletingAccount) return;
+            setDeletingAccount(true);
             try {
               await adminApi.deleteUser(editingUser.id);
               closeForm();
               loadUsers();
             } catch (err: any) {
               dialog.alert(err.message || 'Something went wrong', {title: 'Could not delete', tone: 'info'});
+            } finally {
+              setDeletingAccount(false);
             }
           },
         },
@@ -338,11 +350,21 @@ export function AdminStaffScreen() {
 
           {isEdit && (
             <>
-              <PressableScale style={[s.secondaryBtn, {borderColor: colors.warning + '50', backgroundColor: colors.warning + '10'}]} onPress={handleResetPassword}>
-                <Text style={[s.secondaryBtnTxt, {color: colors.warning}]}>Reset Password</Text>
+              <PressableScale
+                style={[s.secondaryBtn, {borderColor: colors.warning + '50', backgroundColor: colors.warning + '10', opacity: resettingPassword ? 0.6 : 1}]}
+                onPress={handleResetPassword}
+                disabled={resettingPassword || deletingAccount}>
+                {resettingPassword
+                  ? <ActivityIndicator color={colors.warning} />
+                  : <Text style={[s.secondaryBtnTxt, {color: colors.warning}]}>Reset Password</Text>}
               </PressableScale>
-              <PressableScale style={[s.secondaryBtn, {borderColor: colors.error + '50', backgroundColor: colors.error + '10'}]} onPress={handleDelete}>
-                <Text style={[s.secondaryBtnTxt, {color: colors.error}]}>Delete Account</Text>
+              <PressableScale
+                style={[s.secondaryBtn, {borderColor: colors.error + '50', backgroundColor: colors.error + '10', opacity: deletingAccount ? 0.6 : 1}]}
+                onPress={handleDelete}
+                disabled={resettingPassword || deletingAccount}>
+                {deletingAccount
+                  ? <ActivityIndicator color={colors.error} />
+                  : <Text style={[s.secondaryBtnTxt, {color: colors.error}]}>Delete Account</Text>}
               </PressableScale>
             </>
           )}
