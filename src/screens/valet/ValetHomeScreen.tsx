@@ -1527,7 +1527,10 @@ export function ValetHomeScreen() {
             car isn't anyone's active job); it shows the same list either
             way, the natural result of nesting a non-owned category under an
             ownership-based outer tab. */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{marginHorizontal: -20, marginBottom: 14}} contentContainerStyle={{paddingHorizontal: 20, gap: 8}}>
+        {/* overflow:'hidden' clips Android's native scrollbar track, which
+            otherwise still draws through despite showsHorizontalScrollIndicator
+            — a known RN/Android quirk, not something the prop alone fixes. */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} overScrollMode="never" style={{marginHorizontal: -20, marginBottom: 14, overflow: 'hidden'}} contentContainerStyle={{paddingHorizontal: 20, gap: 8}}>
           {([
             ['assignPending', 'Driver assign pending', sortedAssignPendingJobs.length],
             ['acceptPending', 'Driver acceptance pending', acceptPendingJobs.length],

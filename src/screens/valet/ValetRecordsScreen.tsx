@@ -502,7 +502,11 @@ export function ValetRecordsScreen() {
           showing — it's one shared vehicle-lifecycle filter, not two. */}
       {statusFilter === 'active' && (
         <View style={s.stageRowWrap}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.stageRow}>
+          {/* overflow:'hidden' (on stageRowWrap below) clips Android's
+              native scrollbar track, which otherwise still draws through
+              despite showsHorizontalScrollIndicator — a known RN/Android
+              quirk, not something the prop alone fixes. */}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} overScrollMode="never" contentContainerStyle={s.stageRow}>
             {STAGE_FILTERS.map(sf => {
               const on = stageFilter === sf.key;
               return (
@@ -638,7 +642,7 @@ const s = StyleSheet.create({
   // children across the ScrollView's own (much taller) measured height,
   // which blew these chips up into tall ovals instead of flat pills.
   stageRow: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 20, paddingTop: 10},
-  stageRowWrap: {position: 'relative'},
+  stageRowWrap: {position: 'relative', overflow: 'hidden'},
   stageRowFade: {position: 'absolute', top: 0, right: 0, bottom: 0, width: 32},
   filterChip: {borderRadius: 99, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 7},
   filterChipTxt: {fontSize: 12, fontWeight: '700'},
