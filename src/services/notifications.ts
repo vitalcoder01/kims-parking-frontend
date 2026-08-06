@@ -4,8 +4,14 @@ import {Vibration, Platform} from 'react-native';
 // Central place for OS-level (system tray) notifications.
 // Works while the app is backgrounded; scheduled ones fire even when the app is fully closed.
 
-const CHANNEL_ID = 'kims_parking';
-const ALARM_CHANNEL_ID = 'kims_parking_alarm';
+// v2: the original channels were created with no explicit `sound`, which on
+// several Android builds means genuinely silent, not "plays the system
+// default" — and channels are immutable after creation, so a phone that
+// already has the v1 channel stays silent forever no matter what this file
+// says now. Fresh ids are the only way to actually fix it for installs that
+// already exist (same reason the ring channel below is already on `_v2`).
+const CHANNEL_ID = 'kims_parking_v2';
+const ALARM_CHANNEL_ID = 'kims_parking_alarm_v2';
 // Android channels are immutable after creation — the loud full-alarm config
 // (sound + bypass DND + alarm category) needs a fresh channel id on devices
 // that already created the old silent-ish one.
@@ -23,12 +29,14 @@ export async function initNotifications(): Promise<void> {
       id: CHANNEL_ID,
       name: 'KIMS Parking Updates',
       importance: AndroidImportance.HIGH,
+      sound: 'default',
       vibration: true,
     });
     await notifee.createChannel({
       id: ALARM_CHANNEL_ID,
       name: 'KIMS Parking Alerts',
       importance: AndroidImportance.HIGH,
+      sound: 'default',
       vibration: true,
       vibrationPattern: [300, 500, 300, 500],
     });
