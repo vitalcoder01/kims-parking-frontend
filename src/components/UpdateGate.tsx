@@ -1,5 +1,5 @@
-import React, {useEffect, useState} from 'react';
-import {View, Text, StyleSheet, Linking, ActivityIndicator, Platform} from 'react-native';
+import React, {useEffect, useRef, useState} from 'react';
+import {View, Text, StyleSheet, Linking, ActivityIndicator, Platform, AppState} from 'react-native';
 import ReactNativeBlobUtil from 'react-native-blob-util';
 import {PressableScale} from './PressableScale';
 import {useTheme} from '../context/ThemeContext';
@@ -101,26 +101,65 @@ async function downloadAndInstall(
 // in-flight; a stale build could complete a login before the modal ever
 // appeared. Nothing here (including the login screen) mounts until this
 // gate has confirmed the installed build is current.
+// How often to re-check while the app has stayed open the whole time (never
+// backgrounded at all) — the one case a resume-triggered check can't cover.
+const STILL_OPEN_RECHECK_MS = 5 * 60 * 1000;
+
 export function UpdateGate({children}: {children: React.ReactNode}) {
   const {colors} = useTheme();
   const [state, setState] = useState<GateState>({status: 'checking'});
   const [download, setDownload] = useState<DownloadState>({phase: 'idle'});
+  // Read inside listeners without re-subscribing them on every state change.
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
   useEffect(() => {
     let cancelled = false;
-    appApi.checkVersion()
-      .then(data => {
-        if (cancelled) return;
-        setState(data.latestVersionCode > APP_VERSION_CODE ? {status: 'blocked', info: data} : {status: 'ok'});
-      })
-      .catch(() => {
-        // No connectivity yet / backend briefly down — fail OPEN rather than
-        // bricking the app on a network hiccup. The check re-runs every
-        // launch, so a real update still reaches everyone quickly once
-        // connectivity is back.
-        if (!cancelled) setState({status: 'ok'});
-      });
-    return () => { cancelled = true; };
+
+    // Shared by the initial launch check and every later silent recheck.
+    // A later recheck NEVER flips back to the full-screen 'checking'
+    // spinner and never re-confirms 'ok' — it only acts when it actually
+    // finds a real block, so an already-open session isn't interrupted by
+    // anything except the update gate itself when one genuinely lands.
+    const check = (isInitial: boolean) => {
+      appApi.checkVersion()
+        .then(data => {
+          if (cancelled) return;
+          if (data.latestVersionCode > APP_VERSION_CODE) {
+            setState({status: 'blocked', info: data});
+          } else if (isInitial) {
+            setState({status: 'ok'});
+          }
+        })
+        .catch(() => {
+          // No connectivity yet / backend briefly down — fail OPEN on the
+          // very first check rather than bricking the app on a network
+          // hiccup. A later silent recheck failing just means try again on
+          // the next resume/interval tick; the app is already usable.
+          if (!cancelled && isInitial) setState({status: 'ok'});
+        });
+    };
+
+    check(true);
+
+    // Resume-from-background: a plain app-switch (home button, recents)
+    // never remounts this component, so without this the check above was
+    // effectively launch-only — a release that shipped while someone had
+    // merely backgrounded (not killed) the app never surfaced until their
+    // next real cold start. This is what made it look like "removing from
+    // background" was the trigger — that's Android killing the process on
+    // some OEMs, which forces the cold start that happened to re-run this.
+    const sub = AppState.addEventListener('change', next => {
+      if (next === 'active' && stateRef.current.status === 'ok') check(false);
+    });
+
+    // Still-open: covers a session that's never backgrounded at all — the
+    // one case neither the launch check nor the resume listener catches.
+    const interval = setInterval(() => {
+      if (stateRef.current.status === 'ok') check(false);
+    }, STILL_OPEN_RECHECK_MS);
+
+    return () => { cancelled = true; sub.remove(); clearInterval(interval); };
   }, []);
 
   if (state.status === 'checking') {

@@ -185,10 +185,9 @@ export function ValetRecordsScreen() {
   };
 
   const handleCancel = (visitorId: number) => {
-    dialog.show({title: 'Cancel Visitor Token', message: 'Why is this being cancelled?', tone: 'warning', buttons: [
+    dialog.show({title: 'Cancel Visitor Token', message: 'This will cancel the check-in. This cannot be undone.', tone: 'warning', buttons: [
       {text: 'Never mind', style: 'cancel'},
-      {text: 'No-Show', onPress: () => cancelVisitor(visitorId, 'no_show').catch(err => dialog.alert(err.message || 'Something went wrong', {title: 'Error'}))},
-      {text: 'Cancel Visit', style: 'destructive', onPress: () => cancelVisitor(visitorId, 'valet_cancelled').catch(err => dialog.alert(err.message || 'Something went wrong', {title: 'Error'}))},
+      {text: 'Cancel Token', style: 'destructive', onPress: () => cancelVisitor(visitorId, 'valet_cancelled').catch(err => dialog.alert(err.message || 'Something went wrong', {title: 'Error'}))},
     ]});
   };
 
@@ -341,7 +340,7 @@ export function ValetRecordsScreen() {
             <PressableScale style={[s.actionBtn, s.actionGhost, {borderColor: colors.border}]}
               onPress={() => handleCancel(v.id)}>
               <Icon name="close" size={14} color={colors.textSecondary} />
-              <Text style={[s.actionTxt, {color: colors.textSecondary}]}>Cancel / No-Show</Text>
+              <Text style={[s.actionTxt, {color: colors.textSecondary}]}>Cancel</Text>
             </PressableScale>
           )}
           {/* A driver already has the key — the car is physically gone, so
