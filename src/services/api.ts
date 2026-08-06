@@ -335,6 +335,7 @@ export type AnalyticsOverview = {
   totalCarsParked: number; totalCarsRetrieved: number; totalJobsCompleted: number;
   avgParkMinutes: number | null; avgRetrieveMinutes: number | null;
   busiestHour: number | null;
+  hourlyDistribution: number[];
   visitorJobs: number; staffJobs: number;
   drivers: DriverAnalytics[];
   generatedAt: string;

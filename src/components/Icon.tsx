@@ -20,6 +20,9 @@ export const ICONS = {
   trophy:      'trophy-variant',
   trending:    'trending-up',
   speedometer: 'speedometer',
+  crown:       'crown',
+  share:       'share-variant',
+  chevronDown: 'chevron-down',
 
   // actions / objects
   key:         'key-variant',
