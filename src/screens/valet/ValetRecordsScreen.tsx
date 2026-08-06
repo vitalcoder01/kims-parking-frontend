@@ -1,12 +1,12 @@
 import React, {useState, useEffect} from 'react';
-import {View, Text, StyleSheet, ScrollView, TextInput, StatusBar, ActivityIndicator, Modal, Pressable} from 'react-native';
-import LinearGradient from 'react-native-linear-gradient';
+import {View, Text, StyleSheet, ScrollView, TextInput, StatusBar, ActivityIndicator, Modal, Pressable, Platform} from 'react-native';
 import {useDialog} from '../../components/AppDialog';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useTheme} from '../../context/ThemeContext';
 import {Visitor, ParkingTask} from '../../context/AppStateContext';
 import {Icon} from '../../components/Icon';
 import {PressableScale} from '../../components/PressableScale';
+import {HScrollHint} from '../../components/HScrollHint';
 import {DriverPickerList} from '../../components/DriverPickerList';
 import {useValetActions} from './useValetActions';
 import {ParkingMapScreen} from '../ParkingMapScreen';
@@ -57,9 +57,9 @@ type StatusFilter = 'all' | 'active' | 'completed';
 type StageFilter = 'all' | Stage;
 const STAGE_FILTERS: {key: Exclude<StageFilter, 'all'>; label: string}[] = [
   {key: 'atHospital', label: 'At hospital'},
-  {key: 'transitToLot', label: 'Transit → parking lot'},
+  {key: 'transitToLot', label: 'Vehicle → parking lot'},
   {key: 'parked', label: 'Parked'},
-  {key: 'transitToHospital', label: 'Transit → hospital'},
+  {key: 'transitToHospital', label: 'Vehicle → hospital'},
 ];
 
 export function ValetRecordsScreen() {
@@ -567,37 +567,22 @@ export function ValetRecordsScreen() {
           Same 4 chips, same meaning, whichever tab (Visitors or Staff) is
           showing — it's one shared vehicle-lifecycle filter, not two. */}
       {statusFilter === 'active' && (
-        <View style={s.stageRowWrap}>
-          {/* overflow:'hidden' (on stageRowWrap below) clips Android's
-              native scrollbar track, which otherwise still draws through
-              despite showsHorizontalScrollIndicator — a known RN/Android
-              quirk, not something the prop alone fixes. */}
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} overScrollMode="never" contentContainerStyle={s.stageRow}>
-            {STAGE_FILTERS.map(sf => {
-              const on = stageFilter === sf.key;
-              return (
-                <PressableScale
-                  key={sf.key}
-                  onPress={() => setStageFilter(on ? 'all' : sf.key)}
-                  style={[s.filterChip, {backgroundColor: on ? colors.primary : colors.surface, borderColor: on ? colors.primary : colors.border}]}
-                >
-                  <Text style={[s.filterChipTxt, {color: on ? colors.textOnPrimary : colors.textSecondary}]}>
-                    {sf.label}
-                  </Text>
-                </PressableScale>
-              );
-            })}
-          </ScrollView>
-          {/* Fade hint — without it, "Transit → hospital" (the 4th chip) can
-              sit fully off-screen with nothing telling a valet there's more
-              to scroll to, easy to miss entirely. */}
-          <LinearGradient
-            pointerEvents="none"
-            colors={['transparent', colors.background]}
-            start={{x: 0, y: 0}} end={{x: 1, y: 0}}
-            style={s.stageRowFade}
-          />
-        </View>
+        <HScrollHint fadeColor={colors.background} contentContainerStyle={s.stageRow}>
+          {STAGE_FILTERS.map(sf => {
+            const on = stageFilter === sf.key;
+            return (
+              <PressableScale
+                key={sf.key}
+                onPress={() => setStageFilter(on ? 'all' : sf.key)}
+                style={[s.filterChip, {backgroundColor: on ? colors.primary : colors.surface, borderColor: on ? colors.primary : colors.border}]}
+              >
+                <Text style={[s.filterChipTxt, {color: on ? colors.textOnPrimary : colors.textSecondary}]}>
+                  {sf.label}
+                </Text>
+              </PressableScale>
+            );
+          })}
+        </HScrollHint>
       )}
 
       {/* flexGrow:1 only for the empty states — a real list should never be
@@ -693,7 +678,7 @@ const s = StyleSheet.create({
   tabBar: {flexDirection: 'row', marginTop: 14, borderBottomWidth: 1},
   tabItem: {flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 12},
   tabLabel: {fontSize: 14, fontWeight: '800'},
-  tabUnderline: {position: 'absolute', bottom: 0, left: 16, right: 16, height: 2, borderRadius: 1},
+  tabUnderline: {position: 'absolute', bottom: 0, left: 0, right: 0, height: 2},
 
   searchRow: {paddingHorizontal: 20, paddingTop: 14, paddingBottom: 4},
   searchBox: {
@@ -711,7 +696,7 @@ const s = StyleSheet.create({
   stageRowWrap: {position: 'relative', overflow: 'hidden'},
   stageRowFade: {position: 'absolute', top: 0, right: 0, bottom: 0, width: 32},
   filterChip: {borderRadius: 99, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 7},
-  filterChipTxt: {fontSize: 12, fontWeight: '700'},
+  filterChipTxt: {fontSize: 12, fontWeight: '900', fontFamily: Platform.select({ios: 'Arial', android: 'sans-serif-black', default: 'Arial'})},
 
   scroll: {padding: 20, paddingTop: 14, paddingBottom: 40},
   scrollEmpty: {flexGrow: 1, justifyContent: 'center'},

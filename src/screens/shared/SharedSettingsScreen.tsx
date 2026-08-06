@@ -1,5 +1,5 @@
 import React from 'react';
-import {ScrollView, View, Text, StyleSheet} from 'react-native';
+import {ScrollView, View, Text, StyleSheet, ActivityIndicator} from 'react-native';
 import {useDialog} from '../../components/AppDialog';
 import {PressableScale} from '../../components/PressableScale';
 import {SafeAreaView} from 'react-native-safe-area-context';
@@ -24,6 +24,7 @@ export function SharedSettingsScreen() {
   const dialog = useDialog();
   const {colors, mode, setMode} = useTheme();
   const {user, logout} = useAuth();
+  const [loggingOut, setLoggingOut] = React.useState(false);
 
   // Admin-only operational knobs. Loaded together because they come from one
   // endpoint, and held as one object so a stepper cannot write a stale
@@ -276,14 +277,29 @@ export function SharedSettingsScreen() {
 
         {/* Logout */}
         <PressableScale
+          disabled={loggingOut}
           onPress={() =>
             dialog.show({title: 'Logout', message: 'Are you sure you want to logout?', tone: 'warning', buttons: [
               {text: 'Cancel', style: 'cancel'},
-              {text: 'Logout', style: 'destructive', onPress: logout},
+              {text: 'Logout', style: 'destructive', onPress: async () => {
+                if (loggingOut) return;
+                setLoggingOut(true);
+                try {
+                  await logout();
+                } finally {
+                  // Only reached if logout itself throws — the normal path
+                  // unmounts this screen (AuthContext clears the user, the
+                  // navigator swaps to the login stack) before this would
+                  // ever run.
+                  setLoggingOut(false);
+                }
+              }},
             ]})
           }
-          style={[styles.logoutBtn, {backgroundColor: colors.errorLight, borderColor: colors.error + '44'}]}>
-          <Text style={[styles.logoutText, {color: colors.error}]}>Logout</Text>
+          style={[styles.logoutBtn, {backgroundColor: colors.errorLight, borderColor: colors.error + '44', opacity: loggingOut ? 0.6 : 1}]}>
+          {loggingOut
+            ? <ActivityIndicator color={colors.error} size="small" />
+            : <Text style={[styles.logoutText, {color: colors.error}]}>Logout</Text>}
         </PressableScale>
 
       </ScrollView>

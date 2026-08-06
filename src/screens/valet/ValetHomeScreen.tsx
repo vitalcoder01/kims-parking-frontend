@@ -16,6 +16,7 @@ import {useValetActions, isMyJobToRun} from './useValetActions';
 import type {ParkingTask} from '../../context/AppStateContext';
 import {useAppState} from '../../context/AppStateContext';
 import {SkeletonCard} from '../../components/Skeleton';
+import {HScrollHint} from '../../components/HScrollHint';
 import {selectDashboardSections, selectParkedVehicles, sortAssignPendingByUrgency} from '../../core/valet/selectors/DashboardSelector';
 import {deriveJobAction} from '../../core/valet/state/JobAction';
 import {
@@ -1419,10 +1420,6 @@ export function ValetHomeScreen() {
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
         {/* Header */}
         <LinearGradient colors={isDark ? BRAND_GRADIENT_DARK : BRAND_GRADIENT} style={s.gradHeader} start={{x:0,y:0}} end={{x:1,y:1}}>
-          {/* Decorative depth — same glow-disc language as the Analytics tab,
-              so both screens read as one consistent premium surface. */}
-          <View pointerEvents="none" style={s.glowA} />
-          <View pointerEvents="none" style={s.glowB} />
           <View style={s.gradTopRow}>
             <View>
               <View style={s.eyebrowRow}>
@@ -1493,13 +1490,11 @@ export function ValetHomeScreen() {
             is the dedicated urgency-sorted view, not a replacement for it. */}
         <View style={s.actionGrid}>
           <PressableScale style={[s.actionCard, {backgroundColor: colors.primary, borderColor: colors.success + '40'}]} onPress={() => setScreen('scan')}>
-            <Icon name="chevronRight" size={14} color="rgba(255,255,255,0.3)" style={s.actionChevron} />
             <View style={[s.actionIconWrap, {backgroundColor: colors.success + '26'}]}><Icon name="key" size={24} color={colors.success} /></View>
             <Text style={s.actionCardTxt}>Staff</Text>
             <Text style={s.actionCardSub} numberOfLines={2}>Collect key from doctor / staff</Text>
           </PressableScale>
           <PressableScale style={[s.actionCard, {backgroundColor: colors.primary, borderColor: '#F5C16840'}]} onPress={() => setScreen('visitor')}>
-            <Icon name="chevronRight" size={14} color="rgba(255,255,255,0.3)" style={s.actionChevron} />
             <View style={[s.actionIconWrap, {backgroundColor: '#F5C16826'}]}><Icon name="ticket" size={24} color="#F5C168" /></View>
             <Text style={s.actionCardTxt}>Visitor</Text>
             <Text style={s.actionCardSub} numberOfLines={2}>Patient / VIP token</Text>
@@ -1507,7 +1502,6 @@ export function ValetHomeScreen() {
           <PressableScale
             style={[s.actionCard, {backgroundColor: colors.primary, borderColor: '#E5393540'}]}
             onPress={() => { setInboxSection('retrievals'); setScreen('retrievals'); }}>
-            <Icon name="chevronRight" size={14} color="rgba(255,255,255,0.3)" style={s.actionChevron} />
             <View style={[s.actionIconWrap, {backgroundColor: '#E5393526'}]}><Icon name="inbox" size={24} color="#F1786F" /></View>
             <Text style={s.actionCardTxt}>Retrieval Requests</Text>
             <Text style={s.actionCardSub} numberOfLines={2}>Cars waiting to leave</Text>
@@ -1518,7 +1512,6 @@ export function ValetHomeScreen() {
           <PressableScale
             style={[s.actionCard, {backgroundColor: colors.primary, borderColor: '#2F6FA840'}]}
             onPress={() => { setInboxSection('arrivals'); setScreen('retrievals'); }}>
-            <Icon name="chevronRight" size={14} color="rgba(255,255,255,0.3)" style={s.actionChevron} />
             <View style={[s.actionIconWrap, {backgroundColor: '#2F6FA826'}]}><Icon name="bellAlert" size={24} color="#6FA8DC" /></View>
             <Text style={s.actionCardTxt}>Expected Arrivals</Text>
             <Text style={s.actionCardSub} numberOfLines={2}>Heads-up, on the way in</Text>
@@ -1556,7 +1549,7 @@ export function ValetHomeScreen() {
             </Text>
           </View>
         ) : (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} overScrollMode="never" style={{marginHorizontal: -20, marginBottom: 20, overflow: 'hidden'}} contentContainerStyle={{paddingHorizontal: 20, gap: 10}}>
+        <HScrollHint fadeColor={colors.background} wrapStyle={{marginHorizontal: -20, marginBottom: 20}} contentContainerStyle={{paddingHorizontal: 20, gap: 10}}>
           {driverStatusList.map((d, i) => {
             const sc = d.status === 'available' ? colors.success : d.status === 'busy' ? colors.warning : colors.textMuted;
             const sl = d.status === 'available' ? 'Ready' : d.status === 'busy' ? 'On task' : 'Off duty';
@@ -1585,7 +1578,7 @@ export function ValetHomeScreen() {
               </View>
             );
           })}
-        </ScrollView>
+        </HScrollHint>
         )}
 
         {/* Dashboard — every active job, grouped by the stage it's actually
@@ -1621,7 +1614,7 @@ export function ValetHomeScreen() {
         {/* overflow:'hidden' clips Android's native scrollbar track, which
             otherwise still draws through despite showsHorizontalScrollIndicator
             — a known RN/Android quirk, not something the prop alone fixes. */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} overScrollMode="never" style={{marginHorizontal: -20, marginBottom: 14, overflow: 'hidden'}} contentContainerStyle={{paddingHorizontal: 20, gap: 8}}>
+        <HScrollHint fadeColor={colors.background} wrapStyle={{marginHorizontal: -20, marginBottom: 14}} contentContainerStyle={{paddingHorizontal: 20, gap: 8}}>
           {([
             ['inProgress', 'In Progress', inProgressJobs.length],
             ['assignPending', 'Driver assign pending', sortedAssignPendingJobs.length],
@@ -1641,7 +1634,7 @@ export function ValetHomeScreen() {
               </PressableScale>
             );
           })}
-        </ScrollView>
+        </HScrollHint>
 
         {!hydrated ? (
           <>
@@ -1701,8 +1694,6 @@ const s = StyleSheet.create({
   safe:{flex:1}, scroll:{paddingBottom:40},
   body:{padding:16,gap:8},
   gradHeader:{paddingTop:16,paddingBottom:20,paddingHorizontal:20,borderBottomLeftRadius:28,borderBottomRightRadius:28,overflow:'hidden'},
-  glowA:{position:'absolute',top:-60,right:-40,width:160,height:160,borderRadius:80,backgroundColor:'rgba(255,255,255,0.06)'},
-  glowB:{position:'absolute',bottom:-50,left:-30,width:130,height:130,borderRadius:65,backgroundColor:'rgba(245,193,104,0.08)'},
   gradTopRow:{flexDirection:'row',justifyContent:'space-between',alignItems:'flex-start'},
   eyebrowRow:{flexDirection:'row',alignItems:'center',gap:6,marginBottom:6},
   liveDot:{width:6,height:6,borderRadius:3,backgroundColor:'#4ADE9A'},
@@ -1735,7 +1726,6 @@ const s = StyleSheet.create({
   // sizes without a hardcoded pixel width like the old 2-card row had.
   actionGrid:{flexDirection:'row',flexWrap:'wrap',justifyContent:'space-between',rowGap:12,marginBottom:24},
   actionCard:{width:'48.5%',borderRadius:22,padding:18,minHeight:148,alignItems:'center',borderWidth:1,shadowColor:'#000',shadowOffset:{width:0,height:6},shadowOpacity:0.16,shadowRadius:10,elevation:4},
-  actionChevron:{position:'absolute',top:14,right:14},
   actionIconWrap:{width:46,height:46,borderRadius:14,alignItems:'center',justifyContent:'center',marginBottom:10},
   actionCardTxt:{color:'#fff',fontSize:15,fontWeight:'800',textAlign:'center'},
   actionCardSub:{color:'rgba(255,255,255,0.65)',fontSize:11,lineHeight:14,marginTop:4,textAlign:'center'},

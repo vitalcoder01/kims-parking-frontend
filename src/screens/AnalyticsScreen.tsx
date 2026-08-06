@@ -117,9 +117,17 @@ export function AnalyticsScreen() {
   const activeHour = selectedHour ?? data?.busiestHour ?? null;
   const activeHourCount = activeHour != null ? hourly[activeHour] : 0;
 
-  const onShare = () => {
-    if (!data) return;
-    Share.share({message: buildShareText(data)}).catch(() => {});
+  const [sharing, setSharing] = useState(false);
+  const onShare = async () => {
+    if (!data || sharing) return;
+    setSharing(true);
+    try {
+      await Share.share({message: buildShareText(data)});
+    } catch {
+      // best-effort — sharing is never critical enough to surface an error
+    } finally {
+      setSharing(false);
+    }
   };
 
   const toneColor = (tone: 'good' | 'ok' | 'bad') =>
@@ -147,10 +155,10 @@ export function AnalyticsScreen() {
               <Text style={s.gradTitle}>Analytics</Text>
             </View>
             <View style={{flexDirection: 'row', gap: 8}}>
-              <PressableScale style={s.headerBtn} onPress={onShare}>
-                <Icon name="share" size={17} color="#fff" />
+              <PressableScale style={[s.headerBtn, sharing && {opacity: 0.6}]} disabled={sharing} onPress={onShare}>
+                {sharing ? <ActivityIndicator color="#fff" size="small" /> : <Icon name="share" size={17} color="#fff" />}
               </PressableScale>
-              <PressableScale style={s.headerBtn} onPress={() => { setRefreshing(true); load(true); }}>
+              <PressableScale style={[s.headerBtn, refreshing && {opacity: 0.6}]} disabled={refreshing} onPress={() => { setRefreshing(true); load(true); }}>
                 <Icon name="refresh" size={18} color="#fff" />
               </PressableScale>
             </View>
@@ -185,8 +193,10 @@ export function AnalyticsScreen() {
           <View style={s.centerBox}>
             <Icon name="alert" size={26} color={colors.textMuted} style={{marginBottom: 8}} />
             <Text style={{color: colors.textMuted, marginBottom: 12}}>{err}</Text>
-            <PressableScale onPress={() => load()} style={[s.retryBtn, {backgroundColor: colors.primary}]}>
-              <Text style={{color: colors.background, fontWeight: '800'}}>Retry</Text>
+            <PressableScale disabled={loading} onPress={() => load()} style={[s.retryBtn, {backgroundColor: colors.primary, opacity: loading ? 0.6 : 1}]}>
+              {loading
+                ? <ActivityIndicator color={colors.background} size="small" />
+                : <Text style={{color: colors.background, fontWeight: '800'}}>Retry</Text>}
             </PressableScale>
           </View>
         ) : (
