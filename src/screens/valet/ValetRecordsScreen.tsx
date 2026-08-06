@@ -1,5 +1,5 @@
 import React, {useState, useEffect} from 'react';
-import {View, Text, StyleSheet, ScrollView, TextInput, StatusBar, ActivityIndicator, Modal, Pressable, Platform} from 'react-native';
+import {View, Text, StyleSheet, ScrollView, TextInput, StatusBar, ActivityIndicator, Modal, Pressable, Platform, BackHandler} from 'react-native';
 import {useDialog} from '../../components/AppDialog';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useTheme} from '../../context/ThemeContext';
@@ -91,6 +91,23 @@ export function ValetRecordsScreen() {
   // per doctor" now, so this tab's actual record view needs its own fetch.
   const [staffHistory, setStaffHistory] = useState<ParkingTask[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+
+  // Android hardware/gesture back — the Assign Driver screen (below) is a
+  // plain conditional full-screen replace, not a stack route, so React
+  // Navigation has no idea it exists. Without this, back skipped straight
+  // past it to the tab bar's own default behaviour. The detail sheet
+  // doesn't need the same treatment — it's a real RN <Modal>, which already
+  // wires hardware back to its onRequestClose for free.
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (pendingVisitorId != null || pendingDoctorTaskId != null) {
+        setPendingVisitorId(null); setPendingMode(null); setPendingDoctorTaskId(null);
+        return true;
+      }
+      return false;
+    });
+    return () => sub.remove();
+  }, [pendingVisitorId, pendingDoctorTaskId]);
 
   useEffect(() => {
     if (tab !== 'staff') return;

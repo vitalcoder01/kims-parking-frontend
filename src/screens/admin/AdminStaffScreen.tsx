@@ -1,5 +1,5 @@
 import React, {useState, useEffect, useCallback, useRef} from 'react';
-import {View, Text, StyleSheet, ScrollView, TextInput, ActivityIndicator} from 'react-native';
+import {View, Text, StyleSheet, ScrollView, TextInput, ActivityIndicator, BackHandler} from 'react-native';
 import {useDialog} from '../../components/AppDialog';
 import {PressableScale} from '../../components/PressableScale';
 import {SafeAreaView} from 'react-native-safe-area-context';
@@ -102,6 +102,19 @@ export function AdminStaffScreen() {
     setEditingUser(null);
     resetForm();
   };
+
+  // Android hardware/gesture back — the Add/Edit Staff form (below) is a
+  // plain conditional full-screen replace, not a stack route, so React
+  // Navigation has no idea it exists. Without this, back skipped straight
+  // past it to the tab bar's own default behaviour.
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (showAdd) { closeForm(); return true; }
+      return false;
+    });
+    return () => sub.remove();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showAdd]);
 
   const openEdit = (u: AdminUser) => {
     setEditingUser(u);

@@ -1,5 +1,5 @@
 import React, {useState, useRef, useEffect} from 'react';
-import {View, Text, StyleSheet, ScrollView, TextInput, StatusBar, ActivityIndicator} from 'react-native';
+import {View, Text, StyleSheet, ScrollView, TextInput, StatusBar, ActivityIndicator, BackHandler} from 'react-native';
 import {useDialog} from '../../components/AppDialog';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import LinearGradient from 'react-native-linear-gradient';
@@ -129,6 +129,27 @@ export function ValetHomeScreen() {
   // who they want and would rather scan a fixed order than a shifting one.
   const [driverSearch, setDriverSearch] = useState('');
   const [assigningDriverId, setAssigningDriverId] = useState<number | null>(null);
+
+  // Android hardware/gesture back — this screen has its own internal
+  // sub-screens (scan/assign/visitor/retrievals) that React Navigation
+  // knows nothing about, since they're plain useState, not stack routes.
+  // Without this, back skipped straight past them to the tab bar's own
+  // default behaviour (switch tab / exit) — pressing back from "Assign
+  // Driver" mid-flow exited past the Dashboard entirely instead of
+  // returning to it. Mirrors exactly what each screen's own on-screen back
+  // button already does, so state stays consistent either way. Returning
+  // true stops the tab navigator's own back handling from also firing;
+  // false (only at 'home') lets it fall through to the default tab-switch
+  // /exit behaviour.
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (screen === 'scan') { setScreen('home'); setFoundUser(null); setCode(''); setCodeError(''); return true; }
+      if (screen === 'assign') { setScreen('home'); setPendingVisitorId(null); setPendingTaskId(null); setDriverSearch(''); return true; }
+      if (screen === 'visitor' || screen === 'retrievals') { setScreen('home'); return true; }
+      return false;
+    });
+    return () => sub.remove();
+  }, [screen]);
   // Which job's pending assignment is being cancelled right now — guards
   // against a double-tap firing the cancel-assignment call twice.
   const [cancellingAssignmentId, setCancellingAssignmentId] = useState<number | null>(null);
