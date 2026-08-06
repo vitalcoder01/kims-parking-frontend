@@ -551,7 +551,7 @@ export function ValetRecordsScreen() {
             <PressableScale
               key={f}
               onPress={() => { setStatusFilter(f); if (f !== 'active') setStageFilter('all'); }}
-              style={[s.filterChip, {backgroundColor: on ? colors.primary : colors.surface, borderColor: on ? colors.primary : colors.border}]}
+              style={[s.statusChip, {backgroundColor: on ? colors.primary : colors.surface, borderColor: on ? colors.primary : colors.border}]}
             >
               <Text style={[s.filterChipTxt, {color: on ? colors.textOnPrimary : colors.textSecondary}]}>
                 {f === 'all' ? 'All' : f === 'active' ? 'Active' : 'Completed'}
@@ -696,6 +696,11 @@ const s = StyleSheet.create({
   stageRowWrap: {position: 'relative', overflow: 'hidden'},
   stageRowFade: {position: 'absolute', top: 0, right: 0, bottom: 0, width: 32},
   filterChip: {borderRadius: 99, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 7},
+  // Active/Completed/All specifically — unlike the stage chips (which sit in
+  // a horizontally-scrolling row and must stay content-width), this row has
+  // exactly 3 fixed options and nothing else, so each one should fill an
+  // equal share of the full width instead of leaving dead space on the right.
+  statusChip: {flex: 1, borderRadius: 99, borderWidth: 1, paddingVertical: 9, alignItems: 'center'},
   filterChipTxt: {fontSize: 12, fontWeight: '900', fontFamily: Platform.select({ios: 'Arial', android: 'sans-serif-black', default: 'Arial'})},
 
   scroll: {padding: 20, paddingTop: 14, paddingBottom: 40},

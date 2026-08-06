@@ -142,10 +142,6 @@ export function AnalyticsScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(true); }} tintColor={colors.primary} />}>
 
         <LinearGradient colors={isDark ? BRAND_GRADIENT_DARK : BRAND_GRADIENT} style={s.gradHeader} start={{x:0,y:0}} end={{x:1,y:1}}>
-          {/* Decorative depth — two soft glow discs, pure layout, no image assets. */}
-          <View pointerEvents="none" style={s.glowA} />
-          <View pointerEvents="none" style={s.glowB} />
-
           <View style={s.gradTopRow}>
             <View>
               <View style={s.eyebrowRow}>
@@ -409,8 +405,6 @@ const styles = StyleSheet.create({
   safe: {flex: 1},
   scroll: {paddingBottom: 32},
   gradHeader: {paddingTop: 8, paddingBottom: 18, paddingHorizontal: 20, borderBottomLeftRadius: 28, borderBottomRightRadius: 28, overflow: 'hidden'},
-  glowA: {position: 'absolute', top: -60, right: -40, width: 160, height: 160, borderRadius: 80, backgroundColor: 'rgba(255,255,255,0.06)'},
-  glowB: {position: 'absolute', bottom: -50, left: -30, width: 130, height: 130, borderRadius: 65, backgroundColor: 'rgba(245,193,104,0.08)'},
   gradTopRow: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20},
   eyebrowRow: {flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 4},
   eyebrow: {color: 'rgba(255,255,255,0.75)', fontSize: 11, fontWeight: '800', letterSpacing: 1.2},
