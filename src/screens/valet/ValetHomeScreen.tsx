@@ -28,6 +28,11 @@ type Screen = 'home' | 'scan' | 'assign' | 'visitor' | 'retrievals';
 
 type QueueTab = 'mine' | 'team';
 
+// The Dashboard's inner tab row — one category visible at a time under the
+// My Jobs/Team Jobs outer split, replacing the old vertically-stacked
+// sections-all-at-once layout.
+type DashboardCategory = 'assignPending' | 'acceptPending' | 'inProgress' | 'parked' | 'notCompleted';
+
 // Restored per the 4-card Dashboard grid brought back from v1.8.9 — the
 // Retrieval Requests inbox is a dedicated screen again (Now/Soon/Later
 // urgency tabs, full-card colour wash), alongside Expected Arrivals as a
@@ -152,6 +157,13 @@ export function ValetHomeScreen() {
   // Team jobs stay reachable on the second tab because the key can be handed
   // between valets — see QUEUE_TABS.
   const [queueTab, setQueueTab] = useState<QueueTab>('mine');
+  // Inner tab row under My Jobs/Team Jobs — one category visible at a time
+  // instead of every section stacked vertically. Parked Vehicles is nested
+  // in here too even though it isn't actually scoped by My/Team ownership
+  // (a parked car isn't anyone's active job) — it shows the same list
+  // either way, which is the natural (and harmless) result of nesting a
+  // non-owned category under an ownership-based outer tab.
+  const [dashboardCategory, setDashboardCategory] = useState<DashboardCategory>('assignPending');
   // Deadlines have to visibly tick — a static "wants it in 10 min" rendered
   // once tells the valet nothing about how much of that is left by now.
   const [now, setNow] = useState(Date.now());
@@ -1371,16 +1383,6 @@ export function ValetHomeScreen() {
     );
   };
 
-  const jobSection = (title: string, icon: IconName, jobs: ParkingTask[]) => jobs.length === 0 ? null : (
-    <View style={{marginBottom: 20}}>
-      <View style={{flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 12}}>
-        <Icon name={icon} size={14} color={colors.textPrimary} />
-        <Text style={[s.sectionTitle, {color: colors.textPrimary, marginBottom: 0}]}>{title} ({jobs.length})</Text>
-      </View>
-      {jobs.map(renderJobCard)}
-    </View>
-  );
-
   return (
     <SafeAreaView edges={['top','bottom','left','right']} style={[s.safe, {backgroundColor: colors.background}]}>
       <StatusBar barStyle="light-content" backgroundColor={isDark ? BRAND_GRADIENT_DARK[0] : BRAND_GRADIENT[0]} />
@@ -1499,10 +1501,8 @@ export function ValetHomeScreen() {
         </ScrollView>
 
         {/* Dashboard — every active job, grouped by the stage it's actually
-            stuck at (no more one flat undifferentiated list), plus the
-            unclaimed retrieval requests that used to live in their own
-            separate inbox. Same card everywhere, same one contextual action
-            button per job. */}
+            stuck at, one category visible at a time (an inner tab row under
+            My Jobs/Team Jobs, replacing the old stacked-sections layout). */}
         <Text style={[s.sectionTitle, {color: colors.textPrimary}]}>Dashboard ({dashboardJobsForTab.length})</Text>
         {/* Counts sit on the tabs so a valet can see there IS team work
             without leaving their own list to check. */}
@@ -1521,60 +1521,82 @@ export function ValetHomeScreen() {
             );
           })}
         </View>
+
+        {/* Inner category row — Parked Vehicles is nested in here too even
+            though it isn't actually scoped by My/Team ownership (a parked
+            car isn't anyone's active job); it shows the same list either
+            way, the natural result of nesting a non-owned category under an
+            ownership-based outer tab. */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{marginHorizontal: -20, marginBottom: 14}} contentContainerStyle={{paddingHorizontal: 20, gap: 8}}>
+          {([
+            ['assignPending', 'Driver assign pending', sortedAssignPendingJobs.length],
+            ['acceptPending', 'Driver acceptance pending', acceptPendingJobs.length],
+            ['inProgress', 'In Progress', inProgressJobs.length],
+            ['parked', 'Parked Vehicles', parkedVehicles.length],
+            ['notCompleted', 'Not completed', notCompletedJobs.length],
+          ] as const).map(([key, label, count]) => {
+            const active = dashboardCategory === key;
+            return (
+              <PressableScale
+                key={key}
+                onPress={() => setDashboardCategory(key)}
+                style={[s.dashCatChip, {backgroundColor: active ? colors.primary : colors.surface, borderColor: active ? colors.primary : colors.border}]}>
+                <Text style={[s.dashCatChipTxt, {color: active ? colors.textOnPrimary : colors.textSecondary}]}>
+                  {label} {count}
+                </Text>
+              </PressableScale>
+            );
+          })}
+        </ScrollView>
+
         {!hydrated ? (
           <>
             <SkeletonCard lines={2} style={{marginBottom: 12}} />
             <SkeletonCard lines={2} />
           </>
-        ) : dashboardJobsForTab.length === 0 ? (
-          <View style={[s.emptyBox, {borderColor: colors.border}]}>
-            <Icon name="check" size={26} color={colors.textMuted} style={{marginBottom: 8}} />
-            <Text style={[s.emptyTxt, {color: colors.textMuted}]}>
-              {queueTab === 'mine' ? 'No active jobs' : 'No one else has a job right now'}
-            </Text>
-          </View>
-        ) : (
-          <>
-            {jobSection('Driver assign pending', 'people', sortedAssignPendingJobs)}
-            {jobSection('Driver acceptance pending', 'timer', acceptPendingJobs)}
-            {jobSection('In progress', 'navigate', inProgressJobs)}
-            {jobSection('Not completed', 'checkBold', notCompletedJobs)}
-          </>
-        )}
-
-        {/* Parked Vehicles — not part of the mine/team job split above; a
-            parked car isn't anyone's active job, it's just sitting in its
-            slot, so this section isn't scoped by the My/Team tab. */}
-        <View style={{flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, marginBottom: 12}}>
-          <Icon name="car" size={14} color={colors.textPrimary} />
-          <Text style={[s.sectionTitle, {color: colors.textPrimary, marginBottom: 0}]}>Parked Vehicles ({parkedVehicles.length})</Text>
-        </View>
-        {!hydrated ? (
-          <SkeletonCard lines={2} />
-        ) : parkedVehicles.length === 0 ? (
-          <View style={[s.emptyBox, {borderColor: colors.border}]}>
-            <Icon name="car" size={26} color={colors.textMuted} style={{marginBottom: 8}} />
-            <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No cars parked right now</Text>
-          </View>
-        ) : parkedVehicles.map(sl => {
-          const ownerTask = sl.taskId ? tasks.find(t => t.id === sl.taskId) : undefined;
-          return (
-            <View key={sl.id} style={[s.taskCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
-              <View style={s.jobHead}>
-                <View style={{flex: 1}}>
-                  <Text style={[s.jobPlate, {color: colors.textPrimary}]} numberOfLines={1}>{sl.carNumber ?? 'Unknown plate'}</Text>
-                  {!!ownerTask?.doctorName && (
-                    <Text style={[s.jobWho, {color: colors.textSecondary}]} numberOfLines={1}>{ownerTask.doctorName}</Text>
-                  )}
-                  <Text style={[s.jobSlot, {color: colors.textMuted}]} numberOfLines={1}>Slot {sl.id}</Text>
-                </View>
-                <View style={[s.departureBadge, {backgroundColor: colors.success}]}>
-                  <Text style={s.departureBadgeTxt}>PARKED</Text>
+        ) : dashboardCategory === 'parked' ? (
+          parkedVehicles.length === 0 ? (
+            <View style={[s.emptyBox, {borderColor: colors.border}]}>
+              <Icon name="car" size={26} color={colors.textMuted} style={{marginBottom: 8}} />
+              <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No cars parked right now</Text>
+            </View>
+          ) : parkedVehicles.map(sl => {
+            const ownerTask = sl.taskId ? tasks.find(t => t.id === sl.taskId) : undefined;
+            return (
+              <View key={sl.id} style={[s.taskCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+                <View style={s.jobHead}>
+                  <View style={{flex: 1}}>
+                    <Text style={[s.jobPlate, {color: colors.textPrimary}]} numberOfLines={1}>{sl.carNumber ?? 'Unknown plate'}</Text>
+                    {!!ownerTask?.doctorName && (
+                      <Text style={[s.jobWho, {color: colors.textSecondary}]} numberOfLines={1}>{ownerTask.doctorName}</Text>
+                    )}
+                    <Text style={[s.jobSlot, {color: colors.textMuted}]} numberOfLines={1}>Slot {sl.id}</Text>
+                  </View>
+                  <View style={[s.departureBadge, {backgroundColor: colors.success}]}>
+                    <Text style={s.departureBadgeTxt}>PARKED</Text>
+                  </View>
                 </View>
               </View>
+            );
+          })
+        ) : (() => {
+          const list =
+              dashboardCategory === 'assignPending' ? sortedAssignPendingJobs
+            : dashboardCategory === 'acceptPending' ? acceptPendingJobs
+            : dashboardCategory === 'inProgress' ? inProgressJobs
+            : notCompletedJobs;
+          const emptyLabel =
+              dashboardCategory === 'assignPending' ? 'No jobs waiting for a driver'
+            : dashboardCategory === 'acceptPending' ? 'No jobs waiting on a driver to accept'
+            : dashboardCategory === 'inProgress' ? 'No jobs on the move right now'
+            : 'Nothing waiting on a handover confirmation';
+          return list.length === 0 ? (
+            <View style={[s.emptyBox, {borderColor: colors.border}]}>
+              <Icon name="check" size={26} color={colors.textMuted} style={{marginBottom: 8}} />
+              <Text style={[s.emptyTxt, {color: colors.textMuted}]}>{emptyLabel}</Text>
             </View>
-          );
-        })}
+          ) : list.map(renderJobCard);
+        })()}
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -1642,6 +1664,8 @@ const s = StyleSheet.create({
   inboxTab:{flex:1,alignItems:'center',paddingVertical:12},
   inboxTabTxt:{fontSize:13,fontWeight:'800'},
   inboxTabBar:{height:2,borderRadius:1,marginTop:8,alignSelf:'stretch',marginHorizontal:6},
+  dashCatChip:{borderRadius:99,borderWidth:1,paddingHorizontal:14,paddingVertical:8},
+  dashCatChipTxt:{fontSize:12,fontWeight:'700'},
   inboxSectionRow:{flexDirection:'row',alignItems:'center',gap:6},
   inboxSectionCount:{minWidth:18,height:18,borderRadius:9,paddingHorizontal:5,alignItems:'center',justifyContent:'center'},
   inboxSectionCountTxt:{color:'#fff',fontSize:10,fontWeight:'800'},
