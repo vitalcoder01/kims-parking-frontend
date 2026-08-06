@@ -256,6 +256,10 @@ export const visitorsApi = {
     client.patch(`/visitors/${id}/cancel-assignment`).then(r => r.data.visitor),
   cancel: (id: number, reason: 'no_show' | 'valet_cancelled' | 'parking_failed') =>
     client.patch(`/visitors/${id}/cancel`, {reason}).then(r => r.data.visitor),
+  // "Bring my car back" — the key's already with a driver, so this isn't a
+  // cancel/no-show anymore. See backend visitor.service.js's recallVisitor.
+  recall: (id: number) =>
+    client.patch(`/visitors/${id}/recall`).then(r => r.data.visitor),
   assignRetrievalDriver: (id: number, driverId: number) =>
     client.patch(`/visitors/${id}/assign-retrieval`, {driverId}).then(r => r.data.visitor),
   confirmDelivered: (id: number) =>

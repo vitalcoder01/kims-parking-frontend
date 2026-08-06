@@ -1,5 +1,5 @@
 import React, {useState, useEffect, useRef} from 'react';
-import {View, Text, StyleSheet, ScrollView, TextInput, Animated, StatusBar} from 'react-native';
+import {View, Text, StyleSheet, ScrollView, TextInput, Animated, StatusBar, ActivityIndicator} from 'react-native';
 import {useDialog} from '../../components/AppDialog';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useAuth} from '../../context/AuthContext';
@@ -32,6 +32,10 @@ export function DriverJobsScreen() {
   // left the button tappable, and a second tap either fired the same action
   // twice or landed after the job had already moved past that stage.
   const [actionBusy, setActionBusy] = useState(false);
+  // Accept/Reject show together and actionBusy alone can't say which one is
+  // running — without this the tapped button gave no visible feedback (just
+  // a dimmed opacity easy to miss), so a driver would tap it again.
+  const [respondingAction, setRespondingAction] = useState<'accept' | 'reject' | null>(null);
   const carAnim = useRef(new Animated.Value(0)).current;
 
   const myDriverId = useMyDriverId();
@@ -84,24 +88,28 @@ export function DriverJobsScreen() {
   const handleAcceptTask = async () => {
     if (!activeTask || actionBusy) return;
     setActionBusy(true);
+    setRespondingAction('accept');
     try {
       await acceptTask(activeTask.id);
     } catch (err: any) {
       await handleStaleJob(err, 'Could not accept task');
     } finally {
       setActionBusy(false);
+      setRespondingAction(null);
     }
   };
 
   const handleRejectTask = async () => {
     if (!activeTask || actionBusy) return;
     setActionBusy(true);
+    setRespondingAction('reject');
     try {
       await rejectTask(activeTask.id);
     } catch (err: any) {
       await handleStaleJob(err, 'Could not reject task');
     } finally {
       setActionBusy(false);
+      setRespondingAction(null);
     }
   };
 
@@ -263,15 +271,19 @@ export function DriverJobsScreen() {
                     style={[s.parkBtn, {backgroundColor: c.cardAlt, flex: 1, opacity: actionBusy ? 0.6 : 1}]}
                     onPress={handleRejectTask} disabled={actionBusy}
                   >
-                    <Icon name="close" size={15} color={c.primary} />
-                    <Text style={[s.parkBtnTxt, {color: c.primary}]}>Reject</Text>
+                    {respondingAction === 'reject'
+                      ? <ActivityIndicator color={c.primary} size="small" />
+                      : <Icon name="close" size={15} color={c.primary} />}
+                    <Text style={[s.parkBtnTxt, {color: c.primary}]}>{respondingAction === 'reject' ? 'Rejecting…' : 'Reject'}</Text>
                   </PressableScale>
                   <PressableScale
                     style={[s.parkBtn, {backgroundColor: c.primary, flex: 1, opacity: actionBusy ? 0.6 : 1}]}
                     onPress={handleAcceptTask} disabled={actionBusy}
                   >
-                    <Icon name="check" size={15} color={c.textOnPrimary} />
-                    <Text style={[s.parkBtnTxt, {color: c.textOnPrimary}]}>Accept</Text>
+                    {respondingAction === 'accept'
+                      ? <ActivityIndicator color={c.textOnPrimary} size="small" />
+                      : <Icon name="check" size={15} color={c.textOnPrimary} />}
+                    <Text style={[s.parkBtnTxt, {color: c.textOnPrimary}]}>{respondingAction === 'accept' ? 'Accepting…' : 'Accept'}</Text>
                   </PressableScale>
                 </View>
               )}

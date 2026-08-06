@@ -66,7 +66,7 @@ export function ValetRecordsScreen() {
   const dialog = useDialog();
   const {colors, isDark} = useTheme();
   const {tasks, activeVisitors, availableDrivers, hasActiveRetrievalDriver,
-    assignVisitorPickupDriver, assignVisitorRetrievalDriver, assignStaffRetrievalDriver, cancelVisitor, confirmVisitorDelivered,
+    assignVisitorPickupDriver, assignVisitorRetrievalDriver, assignStaffRetrievalDriver, cancelVisitor, recallVisitor, confirmVisitorDelivered,
     confirmTaskDelivered, fetchTaskHistory} = useValetActions();
 
   const [tab, setTab] = useState<RecordsTab>('visitors');
@@ -81,6 +81,7 @@ export function ValetRecordsScreen() {
   const [pendingDoctorTaskId, setPendingDoctorTaskId] = useState<number | null>(null);
   const [assigningDriverId, setAssigningDriverId] = useState<number | null>(null);
   const [confirmingVisitorId, setConfirmingVisitorId] = useState<number | null>(null);
+  const [recallingVisitorId, setRecallingVisitorId] = useState<number | null>(null);
   const [confirmingTaskId, setConfirmingTaskId] = useState<number | null>(null);
   // Detail sheet — shared by both tabs, holds whichever ticket was tapped.
   const [detailVisitor, setDetailVisitor] = useState<Visitor | null>(null);
@@ -191,6 +192,31 @@ export function ValetRecordsScreen() {
     ]});
   };
 
+  // Past the key handover the car is physically with a driver — it can't be
+  // cancelled/no-shown anymore (see cancelVisitor's backend comment), so
+  // this is the only thing left on offer at that stage.
+  const handleRecallVisitor = (visitorId: number, carNumber?: string) => {
+    dialog.show({
+      title: 'Bring the Car Back?',
+      message: `The driver will be told NOT to park ${carNumber || 'this car'} and to return it to the valet counter instead.`,
+      tone: 'warning',
+      buttons: [
+        {text: 'Never mind', style: 'cancel'},
+        {text: 'Recall Car', style: 'destructive', onPress: async () => {
+          if (recallingVisitorId != null) return;
+          setRecallingVisitorId(visitorId);
+          try {
+            await recallVisitor(visitorId);
+          } catch (err: any) {
+            dialog.alert(err.message || 'Could not recall the car', {title: 'Error'});
+          } finally {
+            setRecallingVisitorId(null);
+          }
+        }},
+      ],
+    });
+  };
+
   if (pendingVisitor || pendingDoctorTask) {
     return (
       <SafeAreaView edges={['top','bottom','left','right']} style={[s.safe, {backgroundColor: colors.background}]}>
@@ -223,6 +249,15 @@ export function ValetRecordsScreen() {
     const retrieving = v.status === 'parked' && v.retrievalRequested && !needsDriver;
     const parkedIdle = v.status === 'parked' && !v.retrievalRequested;
     const delivered = v.status === 'delivered';
+    // The visitor row itself doesn't track a driver's key handover — that
+    // lives on its linked ParkingTask (see backend createVisitor). Reading
+    // it here is what tells the difference between "nobody's touched this
+    // yet" (Cancel/No-Show is still valid) and "a driver already has the
+    // key" (only a recall makes sense from here on).
+    const linkedTask = tasks.find(t => t.visitorId === v.id && t.type === 'park' && t.status !== 'completed' && t.status !== 'cancelled');
+    const keyWithDriver = v.status === 'pending' && !!v.driverId;
+    const awaitingDriver = v.status === 'pending' && !v.driverId;
+    const recalled = !!linkedTask?.recalledAt;
     const chipTone = parkedIdle ? colors.success : colors.warning;
     const chipBg = parkedIdle ? colors.successLight : colors.warningLight;
     const chipLabel = parkedIdle ? `Parked · ${v.slotId ?? ''}`
@@ -300,11 +335,43 @@ export function ValetRecordsScreen() {
               </Text>
             </PressableScale>
           )}
-          {v.status === 'pending' && (
+          {/* Awaiting driver — nobody's touched this yet, cancel/no-show is
+              still the right call. */}
+          {awaitingDriver && (
             <PressableScale style={[s.actionBtn, s.actionGhost, {borderColor: colors.border}]}
               onPress={() => handleCancel(v.id)}>
               <Icon name="close" size={14} color={colors.textSecondary} />
               <Text style={[s.actionTxt, {color: colors.textSecondary}]}>Cancel / No-Show</Text>
+            </PressableScale>
+          )}
+          {/* A driver already has the key — the car is physically gone, so
+              cancelling/no-showing it no longer makes sense. The only real
+              action left is asking for it back. */}
+          {keyWithDriver && !recalled && (
+            <PressableScale
+              style={[s.actionBtn, s.actionGhost, {borderColor: colors.warning}]}
+              onPress={() => handleRecallVisitor(v.id, v.carNumber)}>
+              <Icon name="back" size={14} color={colors.warning} />
+              <Text style={[s.actionTxt, {color: colors.warning}]}>Bring back my car</Text>
+            </PressableScale>
+          )}
+          {keyWithDriver && recalled && linkedTask?.status !== 'delivered' && (
+            <View style={[s.actionBtn, {backgroundColor: colors.cardAlt}]}>
+              <Icon name="timer" size={14} color={colors.textMuted} />
+              <Text style={[s.actionTxt, {color: colors.textMuted}]}>Driver is bringing it back…</Text>
+            </View>
+          )}
+          {keyWithDriver && linkedTask?.status === 'delivered' && (
+            <PressableScale
+              style={[s.actionBtn, {backgroundColor: colors.success, opacity: confirmingTaskId === linkedTask.id ? 0.6 : 1}]}
+              disabled={confirmingTaskId === linkedTask.id}
+              onPress={() => handleConfirmTaskDelivered(linkedTask.id)}>
+              {confirmingTaskId === linkedTask.id
+                ? <ActivityIndicator color="#fff" size="small" />
+                : <Icon name="checkBold" size={15} color="#fff" />}
+              <Text style={[s.actionTxt, {color: '#fff'}]}>
+                {confirmingTaskId === linkedTask.id ? 'Please wait…' : 'Confirm car returned'}
+              </Text>
             </PressableScale>
           )}
         </View>

@@ -251,6 +251,7 @@ interface AppState {
   // Token stays open.
   cancelVisitorAssignment: (visitorId: number) => Promise<void>;
   cancelVisitor: (visitorId: number, reason: 'no_show' | 'valet_cancelled' | 'parking_failed') => Promise<void>;
+  recallVisitor: (visitorId: number) => Promise<void>;
   assignRetrievalDriver: (visitorId: number, driverId: number) => Promise<void>;
   assignStaffRetrievalDriver: (doctorId: number, driverId: number) => Promise<void>;
   confirmVisitorDelivered: (visitorId: number) => Promise<void>;
@@ -970,6 +971,16 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     if (driverId) setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'available', currentTaskId: undefined} : d)));
   }, [visitors]);
 
+  // "Bring my car back" — the key's already with a driver, so the linked
+  // ParkingTask (not the Visitor row — see backend recallVisitor) is what
+  // actually flips to recalled; that arrives here over the socket's normal
+  // task:upsert event. This just fires the request and refreshes the
+  // visitor row for anything it does mirror (e.g. driverName).
+  const recallVisitor = useCallback(async (visitorId: number) => {
+    const updated = mapVisitor(await visitorsApi.recall(visitorId));
+    setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
+  }, []);
+
   const assignRetrievalDriver = useCallback(async (visitorId: number, driverId: number) => {
     await stopAssignmentAlarm().catch(() => {});
     const updated = mapVisitor(await visitorsApi.assignRetrievalDriver(visitorId, driverId));
@@ -1026,7 +1037,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
       driverLocations, onlineDriverIds, reassignPrompt, clearReassignPrompt,
       addTask, requestRetrieval, cancelMyRetrieval, sendArrivalNotice, acceptRetrieval, dismissArrivalNotice, updateTask, assignDriver, cancelTaskAssignment, acceptTask, rejectTask, markKeyCollected, markParked, markRetrieved, confirmTaskDelivered, cancelTask, recallTask, markTaskReturned, fetchTaskHistory, reportLocation,
       setDriverStatus, addVisitor,
-      assignVisitorDriver, cancelVisitorAssignment, cancelVisitor,
+      assignVisitorDriver, cancelVisitorAssignment, cancelVisitor, recallVisitor,
       assignRetrievalDriver, assignStaffRetrievalDriver, confirmVisitorDelivered,
       pushNotification, markNotificationRead, clearNotifications, refreshTasks: fetchAll,
     }}>

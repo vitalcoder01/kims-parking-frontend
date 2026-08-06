@@ -167,7 +167,7 @@ export function ValetHomeScreen() {
   // (a parked car isn't anyone's active job) — it shows the same list
   // either way, which is the natural (and harmless) result of nesting a
   // non-owned category under an ownership-based outer tab.
-  const [dashboardCategory, setDashboardCategory] = useState<DashboardCategory>('assignPending');
+  const [dashboardCategory, setDashboardCategory] = useState<DashboardCategory>('inProgress');
   // Tapping a header stat again clears it — same toggle pattern as the
   // Dashboard's stage-filter chips elsewhere on this screen.
   const [driverStatFilter, setDriverStatFilter] = useState<DriverStatFilter>(null);
@@ -921,14 +921,25 @@ export function ValetHomeScreen() {
             ]}>
               <View style={s.jobHead}>
                 <View style={{flex: 1}}>
-                  <Text style={[s.jobPlate, {color: colors.textPrimary}]} numberOfLines={1}>{t.carNumber}</Text>
-                  <Text style={[s.jobWho, {color: colors.textSecondary}]} numberOfLines={1}>{t.doctorName}</Text>
+                  {/* Icon-led, not just bold text — "QWERT" alone reads as
+                      an unlabeled code; the vehicle icon is what says
+                      "this is the plate", same as the person icon below
+                      says "this is who it belongs to". */}
+                  <View style={s.jobHeadLine}>
+                    <Icon name="carSide" size={13} color={colors.textMuted} />
+                    <Text style={[s.jobPlate, {color: colors.textPrimary}]} numberOfLines={1}>{t.carNumber}</Text>
+                  </View>
+                  <View style={s.jobHeadLine}>
+                    <Icon name={t.isVisitor ? 'ticket' : 'stethoscope'} size={11} color={colors.textMuted} />
+                    <Text style={[s.jobWho, {color: colors.textSecondary}]} numberOfLines={1}>{t.doctorName}</Text>
+                  </View>
                   {!!t.slotId && (
                     <Text style={[s.jobSlot, {color: colors.textMuted}]} numberOfLines={1}>Slot {t.slotId}</Text>
                   )}
                 </View>
                 {/* Planned departure only — NOT a delivery ETA. */}
                 <View style={[s.departureBadge, {backgroundColor: tone}]}>
+                  <Text style={s.departureBadgeLbl}>LEAVES IN</Text>
                   <Text style={s.departureBadgeTxt}>
                     {plannedDepartureLabel(t.requestedAt, t.plannedDepartureMinutes, now)}
                   </Text>
@@ -1612,9 +1623,9 @@ export function ValetHomeScreen() {
             — a known RN/Android quirk, not something the prop alone fixes. */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} overScrollMode="never" style={{marginHorizontal: -20, marginBottom: 14, overflow: 'hidden'}} contentContainerStyle={{paddingHorizontal: 20, gap: 8}}>
           {([
+            ['inProgress', 'In Progress', inProgressJobs.length],
             ['assignPending', 'Driver assign pending', sortedAssignPendingJobs.length],
             ['acceptPending', 'Driver acceptance pending', acceptPendingJobs.length],
-            ['inProgress', 'In Progress', inProgressJobs.length],
             ['parked', 'Parked Vehicles', parkedVehicles.length],
             ['notCompleted', 'Not completed', notCompletedJobs.length],
           ] as const).map(([key, label, count]) => {
@@ -1749,8 +1760,9 @@ const s = StyleSheet.create({
   // tag, and the stripe was competing with the status band for the same job.
   taskCard:{borderRadius:18,borderWidth:1,padding:16,marginBottom:12},
   jobHead:{flexDirection:'row',alignItems:'flex-start',gap:12},
+  jobHeadLine:{flexDirection:'row',alignItems:'center',gap:5,marginTop:3},
   jobPlate:{fontSize:22,fontWeight:'900',letterSpacing:0.5,fontVariant:['tabular-nums']},
-  jobWho:{fontSize:12,fontWeight:'600',marginTop:3},
+  jobWho:{fontSize:12,fontWeight:'600'},
   jobTypeTag:{flexDirection:'row',alignItems:'center',gap:3,borderRadius:8,paddingHorizontal:9,paddingVertical:5},
   jobTypeTxt:{fontSize:10,fontWeight:'900',letterSpacing:1},
   jobAlert:{flexDirection:'row',alignItems:'center',gap:7,borderRadius:10,paddingHorizontal:11,paddingVertical:9,marginTop:12},
@@ -1769,7 +1781,8 @@ const s = StyleSheet.create({
   inboxSectionCountTxt:{color:'#fff',fontSize:10,fontWeight:'800'},
   arrivalSearchWrap:{flexDirection:'row',alignItems:'center',gap:8,marginHorizontal:20,marginTop:12,paddingHorizontal:12,height:42,borderRadius:12,borderWidth:1},
   arrivalSearchInput:{flex:1,fontSize:14,fontWeight:'600',padding:0},
-  departureBadge:{borderRadius:8,paddingHorizontal:10,paddingVertical:6},
+  departureBadge:{borderRadius:8,paddingHorizontal:10,paddingVertical:6,alignItems:'center'},
+  departureBadgeLbl:{color:'rgba(255,255,255,0.75)',fontSize:8,fontWeight:'800',letterSpacing:0.6,marginBottom:1},
   departureBadgeTxt:{color:'#fff',fontSize:11,fontWeight:'900',letterSpacing:0.8},
   departureChip:{borderRadius:6,paddingHorizontal:8,paddingVertical:3},
   departureChipTxt:{fontSize:11,fontWeight:'900',letterSpacing:0.5},
