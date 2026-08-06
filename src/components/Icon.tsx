@@ -16,6 +16,10 @@ export const ICONS = {
   track:       'crosshairs-gps',
   dashboard:   'view-dashboard',
   staff:       'account-group',
+  analytics:   'chart-donut',
+  trophy:      'trophy-variant',
+  trending:    'trending-up',
+  speedometer: 'speedometer',
 
   // actions / objects
   key:         'key-variant',

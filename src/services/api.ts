@@ -325,6 +325,24 @@ export const adminApi = {
     }),
 };
 
+// ── Analytics (valet + admin) ───────────────────────────────────────────
+export type DriverAnalytics = {
+  id: number; name: string;
+  parksCompleted: number; retrievesCompleted: number; totalCompleted: number;
+  avgParkMinutes: number | null; avgRetrieveMinutes: number | null;
+};
+export type AnalyticsOverview = {
+  totalCarsParked: number; totalCarsRetrieved: number; totalJobsCompleted: number;
+  avgParkMinutes: number | null; avgRetrieveMinutes: number | null;
+  busiestHour: number | null;
+  visitorJobs: number; staffJobs: number;
+  drivers: DriverAnalytics[];
+  generatedAt: string;
+};
+export const analyticsApi = {
+  overview: (): Promise<AnalyticsOverview> => client.get('/analytics/overview').then(r => r.data),
+};
+
 // ── App version / updates ───────────────────────────────────────────────
 export const appApi = {
   checkVersion: (): Promise<{latestVersionCode: number; latestVersionName: string; apkUrl: string; notes?: string}> =>
