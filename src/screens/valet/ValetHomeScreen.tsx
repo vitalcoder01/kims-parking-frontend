@@ -1408,8 +1408,16 @@ export function ValetHomeScreen() {
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
         {/* Header */}
         <LinearGradient colors={isDark ? BRAND_GRADIENT_DARK : BRAND_GRADIENT} style={s.gradHeader} start={{x:0,y:0}} end={{x:1,y:1}}>
+          {/* Decorative depth — same glow-disc language as the Analytics tab,
+              so both screens read as one consistent premium surface. */}
+          <View pointerEvents="none" style={s.glowA} />
+          <View pointerEvents="none" style={s.glowB} />
           <View style={s.gradTopRow}>
             <View>
+              <View style={s.eyebrowRow}>
+                <View style={s.liveDot} />
+                <Text style={s.eyebrow}>ON SHIFT</Text>
+              </View>
               <Text style={s.gradGreetSub}>{todayLabel}</Text>
               <Text style={s.gradGreetName}>{user?.name}</Text>
             </View>
@@ -1449,12 +1457,14 @@ export function ValetHomeScreen() {
                   <PressableScale
                     style={[s.statItem, active && {backgroundColor: 'rgba(255,255,255,0.14)', borderRadius: 14}]}
                     onPress={() => setDriverStatFilter(f => f === key ? null : key)}>
-                    <View style={s.statIconRow}>
-                      <Icon name={icon} size={11} color={active ? tint : 'rgba(255,255,255,0.55)'} />
-                      {active && <View style={[s.statActiveDot, {backgroundColor: tint}]} />}
+                    <View style={[s.statIconWrap, {backgroundColor: active ? tint + '33' : 'rgba(255,255,255,0.1)'}]}>
+                      <Icon name={icon} size={13} color={active ? tint : 'rgba(255,255,255,0.6)'} />
                     </View>
                     <Text style={[s.statNum, active && {color: tint}]}>{num}</Text>
-                    <Text style={[s.statLbl, active && {color: 'rgba(255,255,255,0.85)'}]}>{label}</Text>
+                    <View style={s.statLblRow}>
+                      <Text style={[s.statLbl, active && {color: 'rgba(255,255,255,0.85)'}]}>{label}</Text>
+                      {active && <View style={[s.statActiveDot, {backgroundColor: tint}]} />}
+                    </View>
                   </PressableScale>
                 </React.Fragment>
               );
@@ -1471,20 +1481,23 @@ export function ValetHomeScreen() {
             Dashboard's "Driver assign pending" section below — this tile
             is the dedicated urgency-sorted view, not a replacement for it. */}
         <View style={s.actionGrid}>
-          <PressableScale style={[s.actionCard, {backgroundColor: colors.primary}]} onPress={() => setScreen('scan')}>
-            <View style={s.actionIconWrap}><Icon name="key" size={24} color="#fff" /></View>
+          <PressableScale style={[s.actionCard, {backgroundColor: colors.primary, borderColor: colors.success + '40'}]} onPress={() => setScreen('scan')}>
+            <Icon name="chevronRight" size={14} color="rgba(255,255,255,0.3)" style={s.actionChevron} />
+            <View style={[s.actionIconWrap, {backgroundColor: colors.success + '26'}]}><Icon name="key" size={24} color={colors.success} /></View>
             <Text style={s.actionCardTxt}>Staff</Text>
             <Text style={s.actionCardSub} numberOfLines={2}>Collect key from doctor / staff</Text>
           </PressableScale>
-          <PressableScale style={[s.actionCard, {backgroundColor: colors.primary}]} onPress={() => setScreen('visitor')}>
-            <View style={s.actionIconWrap}><Icon name="ticket" size={24} color="#fff" /></View>
+          <PressableScale style={[s.actionCard, {backgroundColor: colors.primary, borderColor: '#F5C16840'}]} onPress={() => setScreen('visitor')}>
+            <Icon name="chevronRight" size={14} color="rgba(255,255,255,0.3)" style={s.actionChevron} />
+            <View style={[s.actionIconWrap, {backgroundColor: '#F5C16826'}]}><Icon name="ticket" size={24} color="#F5C168" /></View>
             <Text style={s.actionCardTxt}>Visitor</Text>
             <Text style={s.actionCardSub} numberOfLines={2}>Patient / VIP token</Text>
           </PressableScale>
           <PressableScale
-            style={[s.actionCard, {backgroundColor: colors.primary}]}
+            style={[s.actionCard, {backgroundColor: colors.primary, borderColor: '#E5393540'}]}
             onPress={() => { setInboxSection('retrievals'); setScreen('retrievals'); }}>
-            <View style={s.actionIconWrap}><Icon name="inbox" size={24} color="#fff" /></View>
+            <Icon name="chevronRight" size={14} color="rgba(255,255,255,0.3)" style={s.actionChevron} />
+            <View style={[s.actionIconWrap, {backgroundColor: '#E5393526'}]}><Icon name="inbox" size={24} color="#F1786F" /></View>
             <Text style={s.actionCardTxt}>Retrieval Requests</Text>
             <Text style={s.actionCardSub} numberOfLines={2}>Cars waiting to leave</Text>
             <View style={[s.actionBadge, {backgroundColor: retrievalRequests.length > 0 ? '#E53935' : 'rgba(255,255,255,0.14)'}]}>
@@ -1492,9 +1505,10 @@ export function ValetHomeScreen() {
             </View>
           </PressableScale>
           <PressableScale
-            style={[s.actionCard, {backgroundColor: colors.primary}]}
+            style={[s.actionCard, {backgroundColor: colors.primary, borderColor: '#2F6FA840'}]}
             onPress={() => { setInboxSection('arrivals'); setScreen('retrievals'); }}>
-            <View style={s.actionIconWrap}><Icon name="bellAlert" size={24} color="#fff" /></View>
+            <Icon name="chevronRight" size={14} color="rgba(255,255,255,0.3)" style={s.actionChevron} />
+            <View style={[s.actionIconWrap, {backgroundColor: '#2F6FA826'}]}><Icon name="bellAlert" size={24} color="#6FA8DC" /></View>
             <Text style={s.actionCardTxt}>Expected Arrivals</Text>
             <Text style={s.actionCardSub} numberOfLines={2}>Heads-up, on the way in</Text>
             <View style={[s.actionBadge, {backgroundColor: arrivalNotices.length > 0 ? '#2F6FA8' : 'rgba(255,255,255,0.14)'}]}>
@@ -1505,13 +1519,16 @@ export function ValetHomeScreen() {
 
         {/* Driver status — reacts to whichever header stat is tapped above. */}
         <View style={{flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12}}>
-          <Text style={[s.sectionTitle, {color: colors.textPrimary, marginBottom: 0}]}>
-            {driverStatFilter === 'ready' ? `Ready (${driverStatusList.length})`
-              : driverStatFilter === 'onTask' ? `On Task (${driverStatusList.length})`
-              : driverStatFilter === 'offDuty' ? `Off Duty (${driverStatusList.length})`
-              : driverStatFilter === 'doneToday' ? `Top Performers Today`
-              : `Driver Status (${drivers.length})`}
-          </Text>
+          <View style={s.sectionTitleRow}>
+            <Icon name={driverStatFilter === 'doneToday' ? 'trophy' : 'people'} size={15} color={driverStatFilter === 'doneToday' ? '#F5C168' : colors.primary} />
+            <Text style={[s.sectionTitle, {color: colors.textPrimary, marginBottom: 0}]}>
+              {driverStatFilter === 'ready' ? `Ready (${driverStatusList.length})`
+                : driverStatFilter === 'onTask' ? `On Task (${driverStatusList.length})`
+                : driverStatFilter === 'offDuty' ? `Off Duty (${driverStatusList.length})`
+                : driverStatFilter === 'doneToday' ? `Top Performers Today`
+                : `Driver Status (${drivers.length})`}
+            </Text>
+          </View>
           {driverStatFilter != null && (
             <PressableScale onPress={() => setDriverStatFilter(null)}>
               <Text style={{fontSize: 12, fontWeight: '700', color: colors.primary}}>Show all</Text>
@@ -1537,7 +1554,8 @@ export function ValetHomeScreen() {
             const rank = driverStatFilter === 'doneToday' && (d.completedToday ?? 0) > 0 ? i + 1 : null;
             const medal = rank === 1 ? '#F5C168' : rank === 2 ? '#C7CDD6' : rank === 3 ? '#D3946B' : null;
             return (
-              <View key={d.id} style={[s.driverPill, {backgroundColor: colors.surface, borderColor: medal ?? colors.border, borderWidth: medal ? 1.5 : 1}]}>
+              <View key={d.id} style={[s.driverPill, {backgroundColor: colors.surface, borderColor: medal ?? colors.border, borderWidth: medal ? 1.5 : 1}, medal && s.driverPillGlow]}>
+                <View style={[s.driverPillAccent, {backgroundColor: sc}]} />
                 <View style={[s.driverPillTop, {borderBottomColor: colors.divider}]}>
                   <View style={[s.driverAvatar, {backgroundColor: sc + '14'}]}>
                     <Text style={[s.avatarTxt, {color: sc}]}>{d.name[0]}</Text>
@@ -1562,7 +1580,10 @@ export function ValetHomeScreen() {
         {/* Dashboard — every active job, grouped by the stage it's actually
             stuck at, one category visible at a time (an inner tab row under
             My Jobs/Team Jobs, replacing the old stacked-sections layout). */}
-        <Text style={[s.sectionTitle, {color: colors.textPrimary}]}>Dashboard ({dashboardJobsForTab.length})</Text>
+        <View style={s.sectionTitleRow}>
+          <Icon name="dashboard" size={15} color={colors.primary} />
+          <Text style={[s.sectionTitle, {color: colors.textPrimary}]}>Dashboard ({dashboardJobsForTab.length})</Text>
+        </View>
         {/* Counts sit on the tabs so a valet can see there IS team work
             without leaving their own list to check. */}
         <View style={[s.inboxTabs, {borderBottomColor: colors.border, paddingHorizontal: 0, marginBottom: 12}]}>
@@ -1668,8 +1689,13 @@ export function ValetHomeScreen() {
 const s = StyleSheet.create({
   safe:{flex:1}, scroll:{paddingBottom:40},
   body:{padding:16,gap:8},
-  gradHeader:{paddingTop:16,paddingBottom:20,paddingHorizontal:20},
+  gradHeader:{paddingTop:16,paddingBottom:20,paddingHorizontal:20,borderBottomLeftRadius:28,borderBottomRightRadius:28,overflow:'hidden'},
+  glowA:{position:'absolute',top:-60,right:-40,width:160,height:160,borderRadius:80,backgroundColor:'rgba(255,255,255,0.06)'},
+  glowB:{position:'absolute',bottom:-50,left:-30,width:130,height:130,borderRadius:65,backgroundColor:'rgba(245,193,104,0.08)'},
   gradTopRow:{flexDirection:'row',justifyContent:'space-between',alignItems:'flex-start'},
+  eyebrowRow:{flexDirection:'row',alignItems:'center',gap:6,marginBottom:6},
+  liveDot:{width:6,height:6,borderRadius:3,backgroundColor:'#4ADE9A'},
+  eyebrow:{color:'rgba(255,255,255,0.65)',fontSize:10.5,fontWeight:'800',letterSpacing:1.2},
   gradGreetSub:{color:'rgba(255,255,255,0.65)',fontSize:12,fontWeight:'600'},
   gradGreetName:{color:'#fff',fontSize:24,fontWeight:'900',marginTop:2,marginBottom:18},
   inboxBtn:{width:40,height:40,borderRadius:20,alignItems:'center',justifyContent:'center',backgroundColor:'rgba(255,255,255,0.18)'},
@@ -1678,11 +1704,13 @@ const s = StyleSheet.create({
   inboxBadgeTxt:{color:'#fff',fontSize:10,fontWeight:'800'},
   statRow:{flexDirection:'row',alignItems:'center'},
   statItem:{flex:1,paddingVertical:8,paddingHorizontal:6},
+  statIconWrap:{width:24,height:24,borderRadius:8,alignItems:'center',justifyContent:'center',marginBottom:6},
   statIconRow:{flexDirection:'row',alignItems:'center',gap:5,marginBottom:3},
   statActiveDot:{width:5,height:5,borderRadius:3},
-  statNum:{color:'#fff',fontSize:20,fontWeight:'900'},
-  statLbl:{color:'rgba(255,255,255,0.6)',fontSize:11,fontWeight:'600',marginTop:2},
-  statDivider:{width:1,height:28,backgroundColor:'rgba(255,255,255,0.15)',marginHorizontal:4},
+  statNum:{color:'#fff',fontSize:20,fontWeight:'900',fontVariant:['tabular-nums']},
+  statLblRow:{flexDirection:'row',alignItems:'center',gap:4,marginTop:2},
+  statLbl:{color:'rgba(255,255,255,0.6)',fontSize:11,fontWeight:'600'},
+  statDivider:{width:1,height:36,backgroundColor:'rgba(255,255,255,0.15)',marginHorizontal:4},
 
   header:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',padding:16,paddingTop:20},
   headerCompact:{flexDirection:'row',alignItems:'center',gap:12,padding:16,paddingTop:20},
@@ -1695,14 +1723,18 @@ const s = StyleSheet.create({
   // `(100% - gap) / 2` via percentage width keeps it responsive across phone
   // sizes without a hardcoded pixel width like the old 2-card row had.
   actionGrid:{flexDirection:'row',flexWrap:'wrap',justifyContent:'space-between',rowGap:12,marginBottom:24},
-  actionCard:{width:'48.5%',borderRadius:22,padding:18,minHeight:148,alignItems:'center',shadowColor:'#000',shadowOffset:{width:0,height:6},shadowOpacity:0.16,shadowRadius:10,elevation:4},
-  actionIconWrap:{width:46,height:46,borderRadius:14,backgroundColor:'rgba(255,255,255,0.18)',alignItems:'center',justifyContent:'center',marginBottom:10},
+  actionCard:{width:'48.5%',borderRadius:22,padding:18,minHeight:148,alignItems:'center',borderWidth:1,shadowColor:'#000',shadowOffset:{width:0,height:6},shadowOpacity:0.16,shadowRadius:10,elevation:4},
+  actionChevron:{position:'absolute',top:14,right:14},
+  actionIconWrap:{width:46,height:46,borderRadius:14,alignItems:'center',justifyContent:'center',marginBottom:10},
   actionCardTxt:{color:'#fff',fontSize:15,fontWeight:'800',textAlign:'center'},
   actionCardSub:{color:'rgba(255,255,255,0.65)',fontSize:11,lineHeight:14,marginTop:4,textAlign:'center'},
   actionBadge:{alignSelf:'center',borderRadius:99,paddingHorizontal:9,paddingVertical:4,marginTop:10},
   actionBadgeTxt:{color:'#fff',fontSize:10.5,fontWeight:'800'},
+  sectionTitleRow:{flexDirection:'row',alignItems:'center',gap:6},
   sectionTitle:{fontSize:14,fontWeight:'800',marginBottom:12},
   driverPill:{borderRadius:16,borderWidth:1,width:128,overflow:'hidden'},
+  driverPillGlow:{shadowColor:'#F5C168',shadowOpacity:0.3,shadowRadius:8,shadowOffset:{width:0,height:2},elevation:3},
+  driverPillAccent:{height:3,width:'100%'},
   driverPillTop:{flexDirection:'row',alignItems:'center',gap:8,padding:12,borderBottomWidth:1},
   rankBadge:{width:18,height:18,borderRadius:9,alignItems:'center',justifyContent:'center'},
   rankBadgeTxt:{fontSize:10,fontWeight:'900',color:'#15161A'},
