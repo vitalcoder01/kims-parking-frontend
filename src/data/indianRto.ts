@@ -74,12 +74,22 @@ export function statesStartingWith(prefix: string): StateEntry[] {
   return INDIAN_STATES.filter(s => s.code.startsWith(p));
 }
 
+// RTO numbers on an Indian plate are always exactly 2 digits (01-99), so
+// that's the one true ceiling — not each state's own maxRto above. Real
+// plates were being rejected with maxRto as the bound: RTOs are created
+// faster than this file gets updated, and several states' numbers here
+// were already stale (Karnataka capped at 71, Maharashtra at 50, etc.) —
+// exactly the "unusual-but-real plate rejected" failure the file's own
+// top comment says is far worse than being too generous. maxRto stays on
+// StateEntry for documentation/display, it just no longer gates validation.
+const MAX_RTO_NUMBER = 99;
+
 /** Is this a real RTO number for this state? */
 export function isValidRto(stateCode: string, rto: string): boolean {
   const st = findState(stateCode);
   if (!st) return false;
   const n = Number(rto);
-  return Number.isInteger(n) && n >= 1 && n <= st.maxRto;
+  return Number.isInteger(n) && n >= 1 && n <= MAX_RTO_NUMBER;
 }
 
 /**
@@ -93,7 +103,7 @@ export function rtosStartingWith(stateCode: string, digits: string, limit = 8): 
   if (!st) return [];
   const d = (digits ?? '').replace(/\D/g, '');
   const out: string[] = [];
-  for (let i = 1; i <= st.maxRto && out.length < limit; i++) {
+  for (let i = 1; i <= MAX_RTO_NUMBER && out.length < limit; i++) {
     const padded = String(i).padStart(2, '0');
     if (!d || padded.startsWith(d)) out.push(padded);
   }
