@@ -235,6 +235,7 @@ export function ValetHomeScreen() {
     // false, and it used to print the VALET's own name in that slot.
     const why = reassignPrompt.rejected ? 'rejected the job' : "didn't accept in time";
     const noDriverYet = !reassignPrompt.driverName;
+    const isReminder = reassignPrompt.source === 'reminder';
     dialog.show({
       title: noDriverYet ? 'Job still needs a driver' : 'Driver did not accept',
       message: noDriverYet
@@ -243,10 +244,17 @@ export function ValetHomeScreen() {
       tone: 'warning',
       buttons: [
         {text: 'Later', style: 'cancel', onPress: () => {
-          // Acknowledge server-side, not just locally — otherwise the sweep
-          // still treats this job as unattended and pulls in every valet.
           const id = reassignPrompt.kind === 'task' ? reassignPrompt.task?.id : null;
-          if (id) tasksApi.acknowledge(id).catch(() => {});
+          if (id) {
+            // 'reminder' (the repeating 60s loop) means Later STOPS it for
+            // this ticket permanently. 'escalation' (the one-time
+            // grace-period ladder) means Later DEFERS — acknowledge server-
+            // side, not just locally, or the sweep still treats this job as
+            // unattended and pulls in every valet moments after they just
+            // said they'd handle it.
+            if (isReminder) tasksApi.silenceDriverReminder(id).catch(() => {});
+            else tasksApi.acknowledge(id).catch(() => {});
+          }
           clearReassignPrompt();
         }},
         {
@@ -291,19 +299,18 @@ export function ValetHomeScreen() {
     }
   };
 
-  // Creating the ticket and assigning a driver are two separate steps now —
-  // this used to walk straight into the assign screen in one continuous
-  // motion, but that meant a freshly-created ticket only ever existed for
-  // the instant between the two calls, never actually visible as "waiting
-  // for a driver". Splitting them means ANY valet (not just whoever
-  // scanned the card) can pick it up from the Dashboard's "Driver assign
-  // pending" section — the same section an unclaimed retrieval request
-  // already lands in, and the backend already creates a park task at
-  // status 'assigned' with no driverId, so isAssignPending already
-  // recognises it with no server change needed.
+  // Creating the ticket and assigning a driver are still two separate
+  // things at the DATA level — the backend still creates a park task at
+  // status 'assigned' with no driverId, still visible to every valet on
+  // "Driver assign pending" the instant it's created, so anyone else can
+  // still pick it up if this valet backs out of the screen below. What
+  // changed is navigation only: instead of dropping the creating valet
+  // back at Home to go find their own ticket again, walk them straight
+  // into the (same, reused) Assign Driver screen with it pre-selected —
+  // the common case is they already know which driver they want.
   const createKeyTask = async (user: any, plate: string) => {
     try {
-      await addTask({
+      const taskId = await addTask({
         type: 'park',
         doctorId: user.id,
         doctorName: user.name,
@@ -312,11 +319,9 @@ export function ValetHomeScreen() {
         assignedAt: Date.now(),
       });
       setFoundUser(null); setCarNumber('');
-      setScreen('home');
-      dialog.alert(
-        `${plate.toUpperCase()} is now waiting for a driver in "Driver assign pending" on the Dashboard.`,
-        {title: 'Ticket created', tone: 'success'},
-      );
+      setPendingVisitorId(null);
+      setPendingTaskId(taskId);
+      setScreen('assign');
     } catch (err: any) {
       dialog.alert(err.message || 'Something went wrong', {title: 'Error'});
     }
@@ -438,21 +443,26 @@ export function ValetHomeScreen() {
         mobile: vMobileDigits,
         vehicleType: vVehicleType,
       });
-      // Shown regardless of WhatsApp: this token is what the visitor brings
-      // back to the desk to collect their car, and with WhatsApp off it is
-      // the ONLY place it appears. Reading it out is the fallback.
-      // Check-in and driver assignment are separate steps — same reasoning
-      // as createKeyTask above: the token now sits visibly in "Driver
-      // assign pending" on the Dashboard until any valet picks it up,
-      // rather than forcing whoever checked the visitor in to also be the
-      // one who assigns a driver in the same breath.
-      dialog.alert(
-        `Parking token  ${visitor.token}\n\n${visitor.carNumber || 'Vehicle'} — ${vMobileDigits}\n\n` +
-        'Give this token to the visitor. Their car is now waiting for a driver in "Driver assign pending" on the Dashboard.',
-        {title: 'Checked in', tone: 'success'},
-      );
       setVName(''); setVCar(''); setVMobile(''); setVVehicleType('car');
-      setScreen('home');
+      // Check-in and driver assignment are still two separate things at the
+      // DATA level (see createKeyTask above) — the token sits visibly on
+      // "Driver assign pending" the instant it's created, for any valet.
+      // Navigation is what changed: walk the checking-in valet straight
+      // into the (same, reused) Assign Driver screen with it pre-selected,
+      // once they've dismissed the token — shown regardless of WhatsApp,
+      // since with WhatsApp off this dialog is the ONLY place the token
+      // ever appears, so it can't just be skipped past on the way there.
+      dialog.show({
+        title: 'Checked In',
+        tone: 'success',
+        message: `Parking token  ${visitor.token}\n\n${visitor.carNumber || 'Vehicle'} — ${vMobileDigits}\n\n` +
+          'Give this token to the visitor.',
+        buttons: [{text: 'Assign a driver', onPress: () => {
+          setPendingTaskId(null);
+          setPendingVisitorId(visitor.id);
+          setScreen('assign');
+        }}],
+      });
     } catch (err: any) {
       dialog.alert(err.message || 'Something went wrong', {title: 'Error'});
     } finally {
