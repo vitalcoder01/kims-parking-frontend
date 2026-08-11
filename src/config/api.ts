@@ -2,7 +2,14 @@
 // connection (see services/socket.ts, which derives SOCKET_URL from this) at
 // once. No other file should hardcode a backend URL.
 //
-// 'render' — the deployed production backend.
+// 'render' — the deployed production backend + production Supabase DB.
+// 'dev'    — the SEPARATE Render service tracking the backend's `dev`
+//   branch, pointed at a separate/test Supabase project — for testing
+//   without touching real data. Only meaningful on THIS branch (`dev`);
+//   main stays hardcoded to 'render' so a production build can never
+//   accidentally ship pointed at the test backend. Fill in DEV_BASE_URL
+//   once the dev Render service exists (see APK_RELEASE_PROCESS.txt /
+//   the dev-environment discussion for how to set that up).
 // 'local'  — your own computer. Since the phone usually isn't on the same
 //   network as your computer, LOCAL_BASE_URL should point at a tunnel
 //   (cloudflared/ngrok) fronting your local `npm run development` server,
@@ -11,12 +18,13 @@
 //   then paste the https://<random>.trycloudflare.com URL it prints below.
 //   Quick tunnels are randomly generated per run — update LOCAL_BASE_URL
 //   every time you restart cloudflared.
-const ACTIVE_BACKEND: 'render' | 'local' = 'render';
+const ACTIVE_BACKEND: 'render' | 'dev' | 'local' = 'render';
 
-const RENDER_BASE_URL = 'https://kims-parking-backend-2.onrender.com'; // backend
+const RENDER_BASE_URL = 'https://kims-parking-backend-2.onrender.com'; // production
+const DEV_BASE_URL = ''; // e.g. 'https://kims-parking-backend-dev.onrender.com' — set once that service exists
 const LOCAL_BASE_URL = ''; // localhost tunnel — set this before flipping ACTIVE_BACKEND to 'local'
 
-const ROOT_URL = ACTIVE_BACKEND === 'local' ? LOCAL_BASE_URL : RENDER_BASE_URL;
+const ROOT_URL = ACTIVE_BACKEND === 'local' ? LOCAL_BASE_URL : ACTIVE_BACKEND === 'dev' ? DEV_BASE_URL : RENDER_BASE_URL;
 
 export const API_BASE_URL = `${ROOT_URL}/api`;
 
