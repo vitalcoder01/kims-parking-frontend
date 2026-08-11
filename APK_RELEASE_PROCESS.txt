@@ -1,0 +1,199 @@
+KIMS PARKING — HOW THE MOBILE APP GETS BUILT, SIGNED, AND UPDATED
+====================================================================
+(Reference doc — pin this. Written so it stays accurate as long as
+the pipeline below doesn't change.)
+
+
+THE BIG PICTURE
+----------------
+The mobile app is a plain React Native app — NOT Expo, NOT CodePush.
+That one fact explains almost everything about how updates work:
+
+  - The JavaScript code is compiled INTO the APK at build time.
+  - There is no "push a JS update over the air" option. Every code
+    change — even a one-line fix — requires a brand new APK, built,
+    signed, and installed on the phone. There is no shortcut.
+  - The ONLY things that update without a new APK are changes to the
+    BACKEND (the server). If a fix lives entirely on the server (an
+    API behavior, a notification rule, a validation rule enforced
+    server-side), it goes live the moment it's deployed — no app
+    action needed at all.
+
+So every fix this project ships is one of two kinds:
+  1. Backend-only  -> live automatically within ~1 minute of pushing
+     to the backend repo (Render auto-deploys on push).
+  2. App code (anything in kims-parking-frontend/src or android/) ->
+     needs a full build + install cycle, described below.
+
+
+THE THREE VERSION NUMBERS IN PLAY
+----------------------------------
+Don't confuse these — they're independent:
+
+  1. Mobile app version (android/app/build.gradle + src/config/
+     version.ts) — e.g. versionCode 42, versionName "1.9.8".
+     This is what's actually installed on a phone.
+
+  2. Backend's "latest version" gate (kims-parking-backend/src/
+     config/appVersion.js) — the backend's OPINION of what the
+     latest mobile version is, and where to download it. The app
+     asks the backend "what's current?" on every launch and compares
+     the answer to its own versionCode. If the backend says a higher
+     number exists, the app shows the in-app update screen.
+
+  3. Web app version (kims-parking-web/src/config/version.ts) —
+     completely separate, unrelated to the two above. The web app
+     is NOT an APK — it's a normal website (also installable as a
+     PWA). It has no versionCode gate at all; Vercel just deploys
+     whatever was last pushed, live within seconds. Its own version
+     number only exists to show "what's new" text and to bump the
+     service worker's cache (public/sw.js) so an already-installed
+     PWA notices the update and offers a "Refresh" banner.
+
+
+THE FULL RELEASE PROCEDURE (what actually happens each time)
+--------------------------------------------------------------
+
+STEP 1 — Bump the version numbers
+  Edit BOTH of these together (they must always match):
+    - kims-parking-frontend/android/app/build.gradle
+        versionCode <N>          (integer, always +1 from before)
+        versionName "<X.Y.Z>"    (human-readable, semantic-ish)
+    - kims-parking-frontend/src/config/version.ts
+        APP_VERSION_CODE = <N>
+        APP_VERSION_NAME = '<X.Y.Z>'
+  Commit + push this to kims-parking-frontend's main branch.
+
+STEP 2 — Sync the short-path build copy
+  The real repo lives at a long Windows path. Android/Gradle's build
+  tooling chokes on long paths, so there's a second, short-path clone
+  used ONLY for building:
+      C:\_kpf_build\kpf
+  Before every build:
+      cd C:\_kpf_build\kpf
+      git fetch origin
+      git reset --hard origin/main
+  This `reset --hard` always wipes one line from
+  android/gradle.properties (org.gradle.java.home), because that
+  line is gitignored/local-only. It has to be re-added every time:
+      org.gradle.java.home=C:/tools/jdk-17.0.19+10
+  (Forward slashes — backslashes get mangled by shell escaping and
+  silently corrupt the path, which was a real bug hit earlier.)
+
+STEP 3 — Restore the signing keystore
+  The release keystore is NOT committed to git (correctly — it's a
+  secret). It lives only in the main repo and has to be copied into
+  the build copy before every build:
+      kims-parking-frontend/android/keystore.properties
+      kims-parking-frontend/android/app/kims-release.keystore
+  -> copied to the same relative paths under C:\_kpf_build\kpf\android\
+
+STEP 4 — Build
+      cd C:\_kpf_build\kpf\android
+      ./gradlew.bat assembleRelease
+  Produces:
+      android/app/build/outputs/apk/release/app-release.apk
+  Takes roughly 2-7 minutes depending on how much changed.
+
+STEP 5 — Verify the signature
+  Non-negotiable — an apk signed with the wrong (e.g. debug) key
+  can't be installed as an update over the real app; Android treats
+  it as a totally different app and blocks the install.
+      apksigner.bat verify --print-certs app-release.apk
+  Must show:
+      Signer #1 certificate DN: CN=KIMS Hospital, OU=IT,
+        O=KIMS Hospital, L=Secunderabad, ST=Telangana, C=IN
+      Signer #1 certificate SHA-256 digest:
+        db430028b49cc05c0539fa2338ad627cb60d7d997aac0cae32fe481e
+        302a85f1
+  (apksigner.bat lives under the Android SDK's build-tools folder,
+  e.g. .../Sdk/build-tools/36.0.0/apksigner.bat)
+
+STEP 6 — Ship the APK
+  Copy the signed APK into the main repo and commit it:
+      kims-parking-frontend/releases/KIMS-Parking-v<X.Y.Z>.apk
+  Push to GitHub. (GitHub warns about the file being >50MB — it's
+  ~68MB — but allows it up to 100MB, so this is fine, just noisy.)
+  This is the actual file phones download when they update — its
+  raw GitHub URL becomes the apkUrl in step 7.
+
+STEP 7 — Point the backend at the new version
+  Edit kims-parking-backend/src/config/appVersion.js:
+      latestVersionCode: <N>,
+      latestVersionName: '<X.Y.Z>',
+      apkUrl: 'https://raw.githubusercontent.com/vitalcoder01/
+               kims-parking-frontend/main/releases/
+               KIMS-Parking-v<X.Y.Z>.apk',
+      notes: '<what changed, in plain language>',
+  Commit + push. Render auto-deploys on push to main — no manual
+  deploy step, but it takes ~30-90 seconds to actually roll out.
+
+STEP 8 — Verify it's actually live
+      curl https://kims-parking-backend-2.onrender.com/api/app/version
+  Must show the new versionCode/versionName/apkUrl/notes. Until this
+  returns the new numbers, phones are still being told the OLD
+  version is current — nothing update-related happens until this
+  step lands.
+
+
+HOW A PHONE ACTUALLY GETS THE UPDATE (the user-facing side)
+--------------------------------------------------------------
+This is UpdateGate.tsx, the very first thing that runs before any
+other screen mounts:
+
+  1. On every app launch, it calls GET /api/app/version.
+  2. If the backend's latestVersionCode is higher than the number
+     baked into THIS install (APP_VERSION_CODE from version.ts, set
+     at build time), it replaces the ENTIRE app with a blocking
+     "Update Required" screen — nothing else is reachable until the
+     update happens.
+  3. Tapping "Download & Install" downloads the APK from apkUrl using
+     Android's own DownloadManager (survives being backgrounded,
+     resumes a dropped connection instead of restarting from zero),
+     then hands it straight to the system package installer.
+  4. The user taps through Android's normal "install update" prompt
+     (this part is standard OS behavior, not something the app
+     controls) — same as installing a normal APK, works because the
+     signature matches (see Step 5 above).
+
+Beyond the cold-launch check, the app ALSO rechecks:
+  - Every time it resumes to the foreground from being backgrounded
+    (not killed) — catches a release that happened while the app was
+    merely in the background.
+  - Every 5 minutes if the app has been sitting open the whole time
+    without ever backgrounding.
+  Both of these are silent unless they actually find a newer
+  version — no spinner, no interruption to normal use. The moment
+  one DOES find a newer version, it hard-blocks immediately with the
+  same full-screen "Update Required" gate as a cold launch.
+
+Net effect: once step 8 above is confirmed live, every phone that
+opens the app (or already has it open) sees the update prompt within
+at most 5 minutes, no manual "check for updates" needed anywhere.
+
+
+THE ONE STANDING RULE
+------------------------
+An APK is only ever built when explicitly asked for — the trigger
+words used this whole project are "build apk" / "built". Code fixes
+get committed and pushed on their own as they're finished; nothing
+reaches a real phone until that explicit build request happens, even
+though the code has been sitting on GitHub the whole time.
+
+
+IF SOMETHING GOES WRONG MID-RELEASE
+--------------------------------------
+- Signature mismatch (Step 5 fails) -> almost always means the
+  keystore copy in Step 3 didn't happen, or copied stale files. Redo
+  Step 3, rebuild.
+- gradlew fails immediately citing "Java home" -> the
+  org.gradle.java.home line from Step 2 got wiped by reset --hard and
+  wasn't re-added, or was re-added with backslashes instead of
+  forward slashes.
+- git push of the APK times out / 408 error -> just a large-file
+  network hiccup, not a real failure. Retry the same `git push` —
+  it resumes rather than starting over, and the earlier commit is
+  already made locally so nothing is lost.
+- Backend still shows the OLD version after Step 7 -> Render hasn't
+  finished redeploying yet. It's not instant; poll Step 8's curl
+  command every few seconds until the numbers change.
