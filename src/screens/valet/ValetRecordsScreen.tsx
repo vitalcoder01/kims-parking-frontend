@@ -65,8 +65,8 @@ const STAGE_FILTERS: {key: Exclude<StageFilter, 'all'>; label: string}[] = [
 export function ValetRecordsScreen() {
   const dialog = useDialog();
   const {colors, isDark} = useTheme();
-  const {tasks, activeVisitors, availableDrivers, hasActiveRetrievalDriver,
-    assignVisitorPickupDriver, assignVisitorRetrievalDriver, assignStaffRetrievalDriver, cancelVisitor, recallVisitor, confirmVisitorDelivered,
+  const {tasks, visitors, activeVisitors, availableDrivers, hasActiveRetrievalDriver,
+    assignVisitorPickupDriver, assignVisitorRetrievalDriver, assignStaffRetrievalDriver, cancelVisitor, cancelVisitorAssignment, recallVisitor, confirmVisitorDelivered,
     confirmTaskDelivered, fetchTaskHistory} = useValetActions();
 
   const [tab, setTab] = useState<RecordsTab>('visitors');
@@ -82,6 +82,7 @@ export function ValetRecordsScreen() {
   const [assigningDriverId, setAssigningDriverId] = useState<number | null>(null);
   const [confirmingVisitorId, setConfirmingVisitorId] = useState<number | null>(null);
   const [recallingVisitorId, setRecallingVisitorId] = useState<number | null>(null);
+  const [cancellingAssignmentVisitorId, setCancellingAssignmentVisitorId] = useState<number | null>(null);
   const [confirmingTaskId, setConfirmingTaskId] = useState<number | null>(null);
   // Detail sheet — shared by both tabs, holds whichever ticket was tapped.
   const [detailVisitor, setDetailVisitor] = useState<Visitor | null>(null);
@@ -130,7 +131,13 @@ export function ValetRecordsScreen() {
   const visitorStage = (v: Visitor) => selectVisitorStage(v, hasActiveRetrievalDriver);
   const staffStage = (t: ParkingTask) => selectStaffStage(t);
 
-  const visitorsFiltered = activeVisitors
+  // Completed/All need retrieved (and cancelled, for All) visitors too —
+  // activeVisitors is deliberately pre-stripped of both (see useValetActions),
+  // which is exactly why "Completed" here used to always come up empty: every
+  // visitor matchesVisitorStatusFilter('completed') could ever match had
+  // already been filtered out one step earlier, before this check ever ran.
+  const visitorsSource = statusFilter === 'active' ? activeVisitors : visitors;
+  const visitorsFiltered = visitorsSource
     .filter(v => matchesVisitorStatusFilter(v, statusFilter))
     .filter(v => statusFilter !== 'active' || stageFilter === 'all' || visitorStage(v) === stageFilter)
     .filter(v => !q || v.name?.toLowerCase().includes(q) || v.carNumber?.toLowerCase().includes(q) || v.token.toLowerCase().includes(q));
@@ -152,7 +159,7 @@ export function ValetRecordsScreen() {
     .filter(t => statusFilter !== 'active' || stageFilter === 'all' || staffStage(t) === stageFilter)
     .filter(t => !q || t.doctorName?.toLowerCase().includes(q) || t.carNumber?.toLowerCase().includes(q));
 
-  const pendingVisitor = pendingVisitorId ? activeVisitors.find(v => v.id === pendingVisitorId) ?? null : null;
+  const pendingVisitor = pendingVisitorId ? visitors.find(v => v.id === pendingVisitorId) ?? null : null;
   const pendingDoctorTask = pendingDoctorTaskId ? staffHistory.find(t => t.id === pendingDoctorTaskId) ?? null : null;
 
   const handleAssign = async (driverId: number) => {
@@ -206,6 +213,21 @@ export function ValetRecordsScreen() {
       {text: 'Never mind', style: 'cancel'},
       {text: 'Cancel Token', style: 'destructive', onPress: () => cancelVisitor(visitorId, 'valet_cancelled').catch(err => dialog.alert(err.message || 'Something went wrong', {title: 'Error'}))},
     ]});
+  };
+
+  // Driver's assigned but hasn't accepted (or has, but hasn't collected the
+  // key) yet — give up on them now instead of waiting out the accept-timeout
+  // window. Mirrors the staff/task flow's "Cancel Assign" on ValetHomeScreen.
+  const handleCancelAssignment = async (visitorId: number) => {
+    if (cancellingAssignmentVisitorId != null) return;
+    setCancellingAssignmentVisitorId(visitorId);
+    try {
+      await cancelVisitorAssignment(visitorId);
+    } catch (err: any) {
+      dialog.alert(err.message || 'Could not cancel the assignment', {title: 'Error'});
+    } finally {
+      setCancellingAssignmentVisitorId(null);
+    }
   };
 
   // Past the key handover the car is physically with a driver — it can't be
@@ -271,7 +293,16 @@ export function ValetRecordsScreen() {
     // yet" (Cancel/No-Show is still valid) and "a driver already has the
     // key" (only a recall makes sense from here on).
     const linkedTask = tasks.find(t => t.visitorId === v.id && t.type === 'park' && t.status !== 'completed' && t.status !== 'cancelled');
-    const keyWithDriver = v.status === 'pending' && !!v.driverId;
+    // A driver being assigned isn't the same as a driver having the key —
+    // the backend's recall guard only accepts a recall once the linked task
+    // is actually past key handover (key_collected/in_transit; see backend
+    // recallVisitor → taskService().recallTask). pickedUpAt is the moment
+    // the driver confirms they've collected the vehicle from the counter,
+    // so it's the real gate here. Without it, "Bring back my car" showed up
+    // the instant a driver was assigned — even while still "Awaiting
+    // accept" — and tapping it just failed against that backend guard.
+    const keyWithDriver = v.status === 'pending' && !!v.driverId && !!v.pickedUpAt;
+    const awaitingAccept = v.status === 'pending' && !!v.driverId && !v.pickedUpAt;
     const awaitingDriver = v.status === 'pending' && !v.driverId;
     const recalled = !!linkedTask?.recalledAt;
     const chipTone = parkedIdle ? colors.success : colors.warning;
@@ -359,6 +390,29 @@ export function ValetRecordsScreen() {
               <Icon name="close" size={14} color={colors.textSecondary} />
               <Text style={[s.actionTxt, {color: colors.textSecondary}]}>Cancel</Text>
             </PressableScale>
+          )}
+          {/* Driver assigned but hasn't collected the key yet — recall isn't
+              valid until they do (see keyWithDriver above), so the only real
+              action here is giving up on this driver and re-assigning. */}
+          {awaitingAccept && (
+            <View style={{flexDirection: 'row', gap: 8, marginTop: 14}}>
+              <View style={[s.actionBtn, s.actionGhost, {flex: 1, marginTop: 0, borderColor: colors.border}]}>
+                <Icon name="timer" size={13} color={colors.textMuted} />
+                <Text style={[s.actionTxt, {color: colors.textMuted}]} numberOfLines={1}>
+                  {v.acceptedAt ? 'Collecting key…' : 'Waiting to accept…'}
+                </Text>
+              </View>
+              {!v.acceptedAt && (
+                <PressableScale
+                  style={[s.actionBtn, s.actionGhost, {marginTop: 0, borderColor: colors.border, paddingHorizontal: 14}]}
+                  disabled={cancellingAssignmentVisitorId === v.id}
+                  onPress={() => handleCancelAssignment(v.id)}>
+                  <Text style={[s.actionTxt, {color: colors.textSecondary}]}>
+                    {cancellingAssignmentVisitorId === v.id ? 'Cancelling…' : 'Cancel Assign'}
+                  </Text>
+                </PressableScale>
+              )}
+            </View>
           )}
           {/* A driver already has the key — the car is physically gone, so
               cancelling/no-showing it no longer makes sense. The only real
@@ -505,7 +559,7 @@ export function ValetRecordsScreen() {
   };
 
   const filtered = tab === 'visitors' ? visitorsFiltered : tab === 'staff' ? staffFiltered : [];
-  const totalCount = tab === 'visitors' ? activeVisitors.length : tab === 'staff' ? staffHistory.length : 0;
+  const totalCount = tab === 'visitors' ? visitorsSource.length : tab === 'staff' ? staffHistory.length : 0;
 
   return (
     <SafeAreaView edges={['top','bottom','left','right']} style={[s.safe, {backgroundColor: colors.background}]}>
