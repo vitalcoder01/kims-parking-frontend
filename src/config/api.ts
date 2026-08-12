@@ -18,10 +18,10 @@
 //   then paste the https://<random>.trycloudflare.com URL it prints below.
 //   Quick tunnels are randomly generated per run — update LOCAL_BASE_URL
 //   every time you restart cloudflared.
-const ACTIVE_BACKEND: 'render' | 'dev' | 'local' = 'render';
+const ACTIVE_BACKEND: 'render' | 'dev' | 'local' = 'dev';
 
 const RENDER_BASE_URL = 'https://kims-parking-backend-2.onrender.com'; // production
-const DEV_BASE_URL = ''; // e.g. 'https://kims-parking-backend-dev.onrender.com' — set once that service exists
+const DEV_BASE_URL = 'https://kims-parking-backend-3.onrender.com'; // dev Render service + test Supabase DB
 const LOCAL_BASE_URL = ''; // localhost tunnel — set this before flipping ACTIVE_BACKEND to 'local'
 
 const ROOT_URL = ACTIVE_BACKEND === 'local' ? LOCAL_BASE_URL : ACTIVE_BACKEND === 'dev' ? DEV_BASE_URL : RENDER_BASE_URL;
