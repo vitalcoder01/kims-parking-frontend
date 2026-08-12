@@ -66,6 +66,7 @@ export const ICONS = {
   outbox:      'inbox-arrow-up-outline',
   close:       'close',
   chevronRight:'chevron-right',
+  chevronLeft: 'chevron-left',
   carKey:      'car-key',
   target:      'target',
   sparkle:     'creation',

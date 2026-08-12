@@ -3,11 +3,13 @@ import {View, Text, StyleSheet, ScrollView, TextInput, StatusBar, ActivityIndica
 import {useDialog} from '../../components/AppDialog';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useTheme} from '../../context/ThemeContext';
-import {Visitor, ParkingTask} from '../../context/AppStateContext';
+import {Visitor, ParkingTask, mapVisitor} from '../../context/AppStateContext';
 import {Icon} from '../../components/Icon';
 import {PressableScale} from '../../components/PressableScale';
 import {HScrollHint} from '../../components/HScrollHint';
 import {DriverPickerList} from '../../components/DriverPickerList';
+import {CalendarPicker} from '../../components/CalendarPicker';
+import {visitorsApi} from '../../services/api';
 import {useValetActions} from './useValetActions';
 import {ParkingMapScreen} from '../ParkingMapScreen';
 import {selectVisitorStage, selectStaffStage, Stage} from '../../core/valet/selectors/JobStageSelector';
@@ -93,6 +95,32 @@ export function ValetRecordsScreen() {
   const [staffHistory, setStaffHistory] = useState<ParkingTask[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
 
+  // Calendar-wise records view (Visitors tab only) — 'YYYY-MM-DD', or null
+  // for the normal live view. Selecting a date fetches that day's visitors
+  // fresh from the unbounded ?date= endpoint (see backend visitor.service.js
+  // listVisitorsByRange) rather than filtering the live `visitors` array,
+  // which is deliberately capped to the last 24h.
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [dateVisitors, setDateVisitors] = useState<Visitor[] | null>(null);
+  const [dateLoading, setDateLoading] = useState(false);
+
+  useEffect(() => {
+    if (!selectedDate) { setDateVisitors(null); return; }
+    let cancelled = false;
+    setDateLoading(true);
+    visitorsApi.byDate(selectedDate)
+      .then((rows: any[]) => { if (!cancelled) setDateVisitors(rows.map(mapVisitor)); })
+      .catch(() => { if (!cancelled) setDateVisitors([]); })
+      .finally(() => { if (!cancelled) setDateLoading(false); });
+    return () => { cancelled = true; };
+  }, [selectedDate]);
+
+  const todayKey = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; })();
+  const calendarDateLabel = (key: string) => key === todayKey
+    ? 'Today'
+    : new Date(`${key}T00:00:00`).toLocaleDateString(undefined, {month: 'short', day: 'numeric', year: 'numeric'});
+
   // Android hardware/gesture back — the Assign Driver screen (below) is a
   // plain conditional full-screen replace, not a stack route, so React
   // Navigation has no idea it exists. Without this, back skipped straight
@@ -136,9 +164,11 @@ export function ValetRecordsScreen() {
   // which is exactly why "Completed" here used to always come up empty: every
   // visitor matchesVisitorStatusFilter('completed') could ever match had
   // already been filtered out one step earlier, before this check ever ran.
-  const visitorsSource = statusFilter === 'active' ? activeVisitors : visitors;
+  // A selected calendar date overrides all of that — it's its own fetched
+  // snapshot of one specific day, live-bounding doesn't apply to it.
+  const visitorsSource = selectedDate ? (dateVisitors ?? []) : statusFilter === 'active' ? activeVisitors : visitors;
   const visitorsFiltered = visitorsSource
-    .filter(v => matchesVisitorStatusFilter(v, statusFilter))
+    .filter(v => selectedDate || matchesVisitorStatusFilter(v, statusFilter))
     .filter(v => statusFilter !== 'active' || stageFilter === 'all' || visitorStage(v) === stageFilter)
     .filter(v => !q || v.name?.toLowerCase().includes(q) || v.carNumber?.toLowerCase().includes(q) || v.token.toLowerCase().includes(q));
 
@@ -613,7 +643,29 @@ export function ValetRecordsScreen() {
             </PressableScale>
           )}
         </View>
+        {tab === 'visitors' && (
+          <PressableScale
+            style={[s.calendarBtn, {backgroundColor: selectedDate ? colors.primary : colors.surface, borderColor: selectedDate ? colors.primary : colors.border}]}
+            onPress={() => setCalendarOpen(true)}>
+            <Icon name="calendar" size={17} color={selectedDate ? colors.textOnPrimary : colors.textSecondary} />
+          </PressableScale>
+        )}
       </View>
+
+      {/* Selected-date banner — this IS the view (not a filter layered on
+          top of the live one), so it reads as a distinct mode rather than
+          just another chip in the row above. */}
+      {tab === 'visitors' && selectedDate && (
+        <View style={[s.dateBanner, {backgroundColor: colors.cardAlt}]}>
+          <Icon name="calendar" size={14} color={colors.textSecondary} />
+          <Text style={[s.dateBannerTxt, {color: colors.textPrimary}]}>{calendarDateLabel(selectedDate)}</Text>
+          {dateLoading && <ActivityIndicator size="small" color={colors.textMuted} style={{marginLeft: 4}} />}
+          <View style={{flex: 1}} />
+          <PressableScale onPress={() => setSelectedDate(null)}>
+            <Icon name="close" size={16} color={colors.textSecondary} />
+          </PressableScale>
+        </View>
+      )}
 
       <View style={s.filterRow}>
         {(['active', 'completed', 'all'] as StatusFilter[]).map(f => {
@@ -621,8 +673,9 @@ export function ValetRecordsScreen() {
           return (
             <PressableScale
               key={f}
+              disabled={!!selectedDate}
               onPress={() => { setStatusFilter(f); if (f !== 'active') setStageFilter('all'); }}
-              style={[s.statusChip, {backgroundColor: on ? colors.primary : colors.surface, borderColor: on ? colors.primary : colors.border}]}
+              style={[s.statusChip, {backgroundColor: on ? colors.primary : colors.surface, borderColor: on ? colors.primary : colors.border, opacity: selectedDate ? 0.4 : 1}]}
             >
               <Text style={[s.filterChipTxt, {color: on ? colors.textOnPrimary : colors.textSecondary}]}>
                 {f === 'all' ? 'All' : f === 'active' ? 'Active' : 'Completed'}
@@ -681,6 +734,13 @@ export function ValetRecordsScreen() {
       </ScrollView>
       </>
       )}
+
+      <CalendarPicker
+        visible={calendarOpen}
+        value={selectedDate ?? undefined}
+        onClose={() => setCalendarOpen(false)}
+        onSelect={(date) => { setSelectedDate(date); setCalendarOpen(false); }}
+      />
 
       {/* Detail sheet — small extra context beyond what fits on the ticket
           card itself, for either tab. Read-only; the actual actions stay on
@@ -751,12 +811,21 @@ const s = StyleSheet.create({
   tabLabel: {fontSize: 14, fontWeight: '800'},
   tabUnderline: {position: 'absolute', bottom: 0, left: 0, right: 0, height: 2},
 
-  searchRow: {paddingHorizontal: 20, paddingTop: 14, paddingBottom: 4},
+  searchRow: {flexDirection: 'row', gap: 10, paddingHorizontal: 20, paddingTop: 14, paddingBottom: 4},
   searchBox: {
-    flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 16, paddingHorizontal: 15, height: 48,
+    flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 16, paddingHorizontal: 15, height: 48,
     shadowColor: '#000', shadowOffset: {width: 0, height: 1}, shadowOpacity: 0.04, shadowRadius: 2, elevation: 1,
   },
   searchInput: {flex: 1, fontSize: 15, fontWeight: '500', padding: 0},
+  calendarBtn: {
+    width: 48, height: 48, borderRadius: 16, borderWidth: 1, alignItems: 'center', justifyContent: 'center',
+    shadowColor: '#000', shadowOffset: {width: 0, height: 1}, shadowOpacity: 0.04, shadowRadius: 2, elevation: 1,
+  },
+  dateBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 20, marginTop: 10,
+    paddingHorizontal: 14, paddingVertical: 10, borderRadius: 14,
+  },
+  dateBannerTxt: {fontSize: 13, fontWeight: '800'},
 
   filterRow: {flexDirection: 'row', gap: 8, paddingHorizontal: 20, paddingTop: 10},
   // alignItems: 'center' is load-bearing here, unlike filterRow above — a

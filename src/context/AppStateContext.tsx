@@ -312,7 +312,7 @@ function mapTask(t: any): ParkingTask {
   };
 }
 
-function mapVisitor(v: any): Visitor {
+export function mapVisitor(v: any): Visitor {
   return {
     ...v,
     driverAssignedAt: toEpoch(v.driverAssignedAt),
