@@ -971,8 +971,15 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     await stopAssignmentAlarm().catch(() => {});
     const updated = mapVisitor(await visitorsApi.assignDriver(visitorId, driverId));
     setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
-    setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'busy', currentTaskId: visitorId} : d)));
-  }, []);
+    // Driver.currentTaskId is a ParkingTask id, never a visitor id (mixing
+    // the two once left a driver permanently stuck "busy" backend-side — see
+    // visitor.service.js's freeDriverIfStillOn comment). The visitor's
+    // linked ParkingTask (created alongside the visitor row itself — see
+    // backend createVisitor) should already be in `tasks` by now; falling
+    // back to undefined rather than the wrong id if it isn't.
+    const linkedTaskId = tasks.find(t => t.visitorId === visitorId && t.type === 'park' && t.status !== 'completed' && t.status !== 'cancelled')?.id;
+    setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'busy', currentTaskId: linkedTaskId} : d)));
+  }, [tasks]);
 
   // Valet: give up on a driver who hasn't accepted this pickup yet, right
   // now, instead of waiting out the accept-timeout window. Token untouched.
@@ -1005,8 +1012,11 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     await stopAssignmentAlarm().catch(() => {});
     const updated = mapVisitor(await visitorsApi.assignRetrievalDriver(visitorId, driverId));
     setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
-    setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'busy', currentTaskId: visitorId} : d)));
-  }, []);
+    // Same fix as assignVisitorDriver above — currentTaskId must be the
+    // linked ParkingTask's id, not the visitor's.
+    const linkedTaskId = tasks.find(t => t.visitorId === visitorId && t.type === 'retrieve' && t.status !== 'completed' && t.status !== 'cancelled')?.id;
+    setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'busy', currentTaskId: linkedTaskId} : d)));
+  }, [tasks]);
 
   // Valet-initiated "Request retrieval" for a staff/doctor member — the
   // staff/doctor equivalent of assignRetrievalDriver above. Captures the

@@ -47,7 +47,22 @@ export function useValetActions() {
   // A visitor's driverId is reused from the park leg and isn't cleared until
   // retrieval completes, so checking the driver's own currentTaskId is what
   // disambiguates "actively out on this retrieval right now".
-  const hasActiveRetrievalDriver = (v: Visitor) => drivers.some(d => d.currentTaskId === v.id && d.status === 'busy');
+  //
+  // Driver.currentTaskId is a ParkingTask id, never a visitor id (see the
+  // backend's visitor.service.js freeDriverIfStillOn comment — the same mixup
+  // once left a driver stuck "busy" forever because a visitor id happened to
+  // collide with an unrelated task id). Comparing it straight against v.id
+  // here made this look right for one render — right after assigning, the
+  // optimistic patch below sets currentTaskId to visitorId to match — but
+  // the very next driver:patch/refetch from the backend overwrites it with
+  // the real task id, the comparison silently goes back to false, and the
+  // "Assign driver" button reappears for a job that already has an assigned,
+  // accepted driver. Resolving the visitor's actual retrieve task first and
+  // comparing against ITS id is what actually disambiguates this.
+  const hasActiveRetrievalDriver = (v: Visitor) => {
+    const task = tasks.find(t => t.visitorId === v.id && t.type === 'retrieve' && t.status !== 'completed' && t.status !== 'cancelled');
+    return !!task && drivers.some(d => d.currentTaskId === task.id && d.status === 'busy');
+  };
 
   // The driver's assignment alert is sent by the backend now, inside the
   // same operation that creates the assignment — firing it from here meant a
