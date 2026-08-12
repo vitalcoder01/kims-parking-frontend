@@ -18,13 +18,19 @@
 //   then paste the https://<random>.trycloudflare.com URL it prints below.
 //   Quick tunnels are randomly generated per run — update LOCAL_BASE_URL
 //   every time you restart cloudflared.
-const ACTIVE_BACKEND: 'render' | 'dev' | 'local' = 'dev';
+type Backend = 'render' | 'dev' | 'local';
+const ACTIVE_BACKEND: Backend = 'dev';
 
 const RENDER_BASE_URL = 'https://kims-parking-backend-2.onrender.com'; // production
 const DEV_BASE_URL = 'https://kims-parking-backend-3.onrender.com'; // dev Render service + test Supabase DB
 const LOCAL_BASE_URL = ''; // localhost tunnel — set this before flipping ACTIVE_BACKEND to 'local'
 
-const ROOT_URL = ACTIVE_BACKEND === 'local' ? LOCAL_BASE_URL : ACTIVE_BACKEND === 'dev' ? DEV_BASE_URL : RENDER_BASE_URL;
+// A chained ternary here trips up tsc's literal narrowing on a const
+// initialized directly with one of the union's literals (flagged TS2367
+// on the web app's tsc-gated build — see kims-parking-web's identical
+// fix); a lookup table sidesteps it and is what web now uses too.
+const BASE_URLS: Record<Backend, string> = {render: RENDER_BASE_URL, dev: DEV_BASE_URL, local: LOCAL_BASE_URL};
+const ROOT_URL = BASE_URLS[ACTIVE_BACKEND];
 
 export const API_BASE_URL = `${ROOT_URL}/api`;
 
