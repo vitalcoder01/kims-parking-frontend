@@ -129,23 +129,13 @@ export function DriverJobsScreen() {
     if (!activeTask || !slotInput.trim() || markingParked) return;
     setMarkingParked(true);
     try {
+      // Both "Car Parked" notifications are raised by the server inside
+      // markParked now. They used to be fired from here, which meant a
+      // visitor's park addressed the doctor one to `doctor:undefined` (the
+      // app stores a missing id as undefined, and it went straight into the
+      // template), and a phone dying at this exact moment left the owner and
+      // the valet with no word that the car was down.
       await markParked(activeTask.id, slotInput.trim().toUpperCase());
-      pushNotification({
-        targetRole: `doctor:${activeTask.doctorId}`,
-        targetId: activeTask.doctorId,
-        title: 'Car Parked',
-        body: `Your car has been parked at slot ${slotInput.toUpperCase()} by ${user?.name}.`,
-        type: 'info',
-      });
-      // The session's owner, not the whole team — every other valet gets an
-      // inbox entry for a car they have nothing to do with otherwise.
-      const parkOwner = activeTask.arrivalOwnerValetId;
-      pushNotification({
-        targetRole: parkOwner ? `valet:${parkOwner}` : 'valet',
-        title: 'Car Parked',
-        body: `${activeTask.carNumber} parked at ${slotInput.toUpperCase()} by ${user?.name}`,
-        type: 'info',
-      });
       setSlotInput('');
     } catch (err: any) {
       dialog.alert(err.message || 'Could not mark parked', {title: 'Error'});

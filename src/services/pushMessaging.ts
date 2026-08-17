@@ -8,7 +8,7 @@
 // function here silently no-ops — sockets + notifee still cover the
 // foreground/background (not killed) cases.
 import {notificationsApi} from './api';
-import {ringAssignmentAlarm, displayNotification} from './notifications';
+import {ringAssignmentAlarm, displayNotification, stopAssignmentAlarm} from './notifications';
 
 type MessagingModule = any;
 
@@ -48,6 +48,19 @@ export async function handleRemoteMessage(
   const data = remoteMessage?.data ?? {};
   const title = data.title ?? remoteMessage?.notification?.title ?? 'KIMS Parking';
   const body = data.body ?? remoteMessage?.notification?.body ?? '';
+
+  // The assignment was rolled back while this phone was unreachable, so the
+  // `assignment:cancelled` socket event never arrived — this push is the only
+  // thing that can reach it. Kill the alarm first: it is an `ongoing`
+  // notification the user cannot swipe away, and it is ringing about a job
+  // that no longer exists. The server sends this on the assignment's own tray
+  // tag, so the accompanying notice also replaces the original entry.
+  if (data.kind === 'assignment-cancelled') {
+    await stopAssignmentAlarm();
+    // Fall through: the replacement notice still gets displayed below unless
+    // Android already rendered it (background + notification block).
+  }
+
   if (data.type === 'alarm') {
     await ringAssignmentAlarm(title, body);
     return;
