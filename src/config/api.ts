@@ -19,7 +19,7 @@
 //   Quick tunnels are randomly generated per run — update LOCAL_BASE_URL
 //   every time you restart cloudflared.
 type Backend = 'render' | 'dev' | 'local';
-const ACTIVE_BACKEND: Backend = 'local';
+const ACTIVE_BACKEND: Backend = 'dev';
 
 const RENDER_BASE_URL = 'https://kims-parking-backend-2.onrender.com'; // production
 const DEV_BASE_URL = 'https://kims-parking-backend-3.onrender.com'; // dev Render service + test Supabase DB
