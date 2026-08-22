@@ -100,19 +100,48 @@ export function DriverDashboardScreen() {
   // 'delivered' is already off this driver's plate — awaiting valet
   // confirmation only, not something to keep showing as their active job.
   const activeTask = myTasks.find(t => t.status !== 'completed' && t.status !== 'delivered' && t.status !== 'cancelled') ?? null;
-  const pendingVisitors = visitors.filter(v => isMyJob(v.driverId, myDriverId)
-    && (v.status === 'pending' || (v.status === 'parked' && v.retrievalRequested)));
+  // Visitor pickups genuinely still waiting on THIS driver. Two bugs used to
+  // live here:
+  //   1. Matching on `v.status === 'pending'` double-counted a visitor's park
+  //      leg — that job is already the one `activeTask` above surfaces (it's
+  //      the same ParkingTask, see visitor.service.js's createParkTaskForVisitor)
+  //      — so a single open job was showing as "2 open" (activeTask + this).
+  //   2. Matching the retrieval leg on `v.driverId` alone trusted a field
+  //      that's reused from the park leg and NOT cleared once that leg
+  //      completes (see visitor.service.js's assignRetrievalDriver comment).
+  //      So the original parking driver kept seeing "visitor pickup waiting"
+  //      for a retrieval the valet hadn't dispatched to anyone yet — or had
+  //      dispatched to someone else entirely — because the stale id still
+  //      happened to be theirs.
+  // Fixed by requiring an actual live retrieve-type task assigned to this
+  // driver (the same source of truth `tasks`/`activeTask` already use)
+  // instead of trusting the visitor row's own driverId for the retrieval
+  // case, and excluding whichever visitor `activeTask` already represents
+  // so the one live job a driver can hold (currentTaskId is exclusive) never
+  // gets shown — and counted — twice.
+  const pendingVisitors = visitors.filter(v => v.status === 'parked' && v.retrievalRequested
+    && v.id !== activeTask?.visitorId
+    && tasks.some(t => t.visitorId === v.id && t.type === 'retrieve'
+      && isMyJob(t.driverId, myDriverId) && t.status !== 'completed' && t.status !== 'cancelled'));
   const openCount = (activeTask ? 1 : 0) + pendingVisitors.length;
 
   // "Completed"/"Total jobs" need real history, not the live `tasks` array —
   // that's deliberately bounded to "at most one row per doctor" now, so a
   // job retired the moment a doctor's next car comes in would otherwise
   // vanish from these stats even though it genuinely happened today.
+  //
+  // Depends on `tasks` itself, not `tasks.length` — completing a job
+  // replaces an existing row in place (markParked/markRetrieved's
+  // setTasks(p => p.map(...))), so the array's length never changes when
+  // the thing this effect cares about does. With .length as the dep this
+  // never refired right after finishing a job, so "Completed"/"Total jobs"
+  // sat stale until something unrelated elsewhere happened to change the
+  // task count.
   const [history, setHistory] = useState<typeof tasks>([]);
   useEffect(() => {
     if (!myDriverId) return;
     fetchTaskHistory({driverId: myDriverId}).then(setHistory).catch(() => {});
-  }, [myDriverId, fetchTaskHistory, tasks.length]);
+  }, [myDriverId, fetchTaskHistory, tasks]);
 
   const completedToday = history.filter(t => t.status === 'completed' && isToday(t.completedAt));
 

@@ -48,11 +48,15 @@ export function DriverJobsScreen() {
   // The live `tasks` array is bounded to "at most one row per doctor" now —
   // a completed job vanishes from it the moment that doctor's next car comes
   // in, so "completed today" needs the real history, not this list.
+  //
+  // Depends on `tasks` itself, not `tasks.length` — see DriverDashboardScreen's
+  // identical fix/comment for why .length silently never refired this right
+  // after finishing a job.
   const [history, setHistory] = useState<typeof tasks>([]);
   useEffect(() => {
     if (!myDriverId) return;
     fetchTaskHistory({driverId: myDriverId}).then(setHistory).catch(() => {});
-  }, [myDriverId, fetchTaskHistory, tasks.length]);
+  }, [myDriverId, fetchTaskHistory, tasks]);
   const today = new Date().toDateString();
   const completedToday = history.filter(t => t.status === 'completed' && t.completedAt && new Date(t.completedAt).toDateString() === today);
 

@@ -489,6 +489,13 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
         (me?.linkedDriverId != null && n.targetId === me.linkedDriverId) ||
         n.targetRole === me?.role ||
         n.targetRole === `driver:${me?.linkedDriverId}` ||
+        // Owner-scoped valet pushes (e.g. "car parked at the counter" —
+        // see backend DriverJobsScreen's markParked notify, which sends
+        // `valet:${parkOwner}`) use this exact shape, matching driver:<id>
+        // above. Missing this meant the one valet the notification was
+        // actually addressed to never matched any branch and the alarm/
+        // tray entry silently never fired for them.
+        n.targetRole === `valet:${me?.id}` ||
         n.targetRole === 'all';
       if (!isForMe) return;
       // A reassign alert arrives twice: once as `task:needs-reassign` (the
