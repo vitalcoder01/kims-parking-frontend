@@ -22,6 +22,12 @@ export interface CurrentUser {
   profileComplete?: boolean;
   loginTime?: number;
   linkedDriverId?: number; // links a driver login to its backend Driver record
+  // The linked Driver's own live status ('available'|'busy'|'off') — sent
+  // by the backend's serializeUser alongside linkedDriverId whenever this
+  // account has one. Kept in sync by updateProfile() after the driver
+  // toggles their own shift, same as any other profile field. Mirrors
+  // kims-parking-web's identical field/fix.
+  driverStatus?: 'available' | 'busy' | 'off';
 }
 
 interface AuthContextValue {
