@@ -190,6 +190,9 @@ export function AdminAttendanceScreen() {
   useEffect(() => { setLoading(true); load(monthStr); }, [monthStr, load]);
 
   const present = todayRows.filter(r => r.checkIn && !r.checkOut).length;
+  const checkedInToday = todayRows.length;
+  const totalStaff = monthUsers.length;
+  const attendanceRate = totalStaff ? Math.round((checkedInToday / totalStaff) * 100) : 0;
   const isCurrentMonth = monthStr === currentMonthStr();
   const categoryCounts: Record<string, number> = {all: monthUsers.length};
   for (const u of monthUsers) categoryCounts[u.role] = (categoryCounts[u.role] ?? 0) + 1;
@@ -210,9 +213,30 @@ export function AdminAttendanceScreen() {
         contentContainerStyle={s.scroll}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(monthStr); }} tintColor={colors.primary} />}
       >
-        <View style={[s.summaryCard, {backgroundColor: colors.card, borderColor: colors.border}]}>
-          <Text style={[s.summaryNum, {color: colors.success}]}>{present}</Text>
-          <Text style={[s.summaryLbl, {color: colors.textMuted}]}>Present right now</Text>
+        {/* Two paired stats, not one number alone in a box — Mobbin
+            reference: Open's streak hero (two big numbers side by side,
+            small caption below each), Duolingo's bold streak treatment.
+            Both numbers are real, derived data (nothing fabricated):
+            present is today's still-clocked-in count, the rate is
+            checked-in-today over the whole roster. */}
+        <View style={[s.heroCard, {backgroundColor: colors.card, borderColor: colors.border}]}>
+          <View style={s.heroRow}>
+            <View style={s.heroStat}>
+              <Text style={[s.heroNum, {color: colors.success}]}>{present}</Text>
+              <Text style={[s.heroLbl, {color: colors.textMuted}]}>Present{'\n'}right now</Text>
+            </View>
+            <View style={[s.heroDivider, {backgroundColor: colors.divider}]} />
+            <View style={s.heroStat}>
+              <Text style={[s.heroNum, {color: colors.textPrimary}]}>{attendanceRate}%</Text>
+              <Text style={[s.heroLbl, {color: colors.textMuted}]}>Checked in{'\n'}today</Text>
+            </View>
+          </View>
+          <View style={[s.heroFootRow, {borderTopColor: colors.divider}]}>
+            <Icon name="people" size={13} color={colors.textMuted} />
+            <Text style={[s.heroFootTxt, {color: colors.textSecondary}]}>
+              {checkedInToday} of {totalStaff} staff checked in today
+            </Text>
+          </View>
         </View>
 
         <View style={s.monthNav}>
@@ -309,9 +333,14 @@ const s = StyleSheet.create({
   safe: {flex: 1},
   centered: {alignItems: 'center', justifyContent: 'center'},
   scroll: {padding: 16, paddingBottom: 40},
-  summaryCard: {borderRadius: 16, borderWidth: 1, alignItems: 'center', paddingVertical: 18, marginBottom: 16},
-  summaryNum: {fontSize: 32, fontWeight: '900'},
-  summaryLbl: {fontSize: 11, fontWeight: '700', marginTop: 4},
+  heroCard: {borderRadius: 24, borderWidth: 1, marginBottom: 16, overflow: 'hidden'},
+  heroRow: {flexDirection: 'row', alignItems: 'center', paddingVertical: 22},
+  heroStat: {flex: 1, alignItems: 'center'},
+  heroNum: {fontSize: 40, fontWeight: '900', letterSpacing: -1, lineHeight: 42},
+  heroLbl: {fontSize: 11, fontWeight: '700', marginTop: 6, textAlign: 'center', lineHeight: 14},
+  heroDivider: {width: 1, alignSelf: 'stretch', marginVertical: 8},
+  heroFootRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 12, borderTopWidth: 1},
+  heroFootTxt: {fontSize: 12, fontWeight: '600'},
   monthNav: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 16, marginBottom: 14},
   monthBtn: {width: 34, height: 34, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center'},
   monthBtnTxt: {fontSize: 18, fontWeight: '900'},
