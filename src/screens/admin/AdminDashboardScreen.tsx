@@ -97,7 +97,7 @@ export function AdminDashboardScreen() {
               {row.map(m => (
                 <View
                   key={m.l}
-                  style={[s.metricCard, {backgroundColor: colors.card, borderColor: colors.border, shadowColor: m.c}]}>
+                  style={[s.metricCard, {backgroundColor: colors.card, borderColor: colors.border}]}>
                   <View style={[s.metricIcBadge, {backgroundColor: m.c + '18'}]}>
                     <Icon name={m.ic} size={19} color={m.c} />
                   </View>
@@ -231,7 +231,6 @@ const s = StyleSheet.create({
   metricCard: {
     flex: 1, borderRadius: 20, borderWidth: 1,
     paddingHorizontal: 16, paddingVertical: 18,
-    shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.12, shadowRadius: 10, elevation: 3,
   },
   metricIcBadge: {
     width: 40, height: 40, borderRadius: 12,

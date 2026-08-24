@@ -317,7 +317,6 @@ export function AnalyticsScreen() {
                     style={[
                       s.driverCard,
                       {backgroundColor: colors.surface, borderColor: medal ?? colors.border, borderWidth: medal ? 1.5 : 1},
-                      i === 0 && medal ? s.rankGlow : null,
                     ]}>
                     <View style={s.driverTopRow}>
                       <View style={[s.rankWrap, medal ? {backgroundColor: medal} : {backgroundColor: colors.border}]}>
@@ -444,7 +443,6 @@ const styles = StyleSheet.create({
   emptyBox: {borderRadius: 16, borderWidth: 1, borderStyle: 'dashed', alignItems: 'center', justifyContent: 'center', paddingVertical: 32, paddingHorizontal: 20},
   emptyTxt: {fontSize: 13, fontWeight: '600', textAlign: 'center'},
   driverCard: {borderRadius: 16, padding: 14},
-  rankGlow: {shadowColor: '#F5C168', shadowOpacity: 0.35, shadowRadius: 10, shadowOffset: {width: 0, height: 3}, elevation: 4},
   driverTopRow: {flexDirection: 'row', alignItems: 'center', gap: 12},
   rankWrap: {width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center'},
   rankTxt: {fontSize: 13, fontWeight: '900'},

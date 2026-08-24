@@ -1,5 +1,5 @@
-import React, {useRef, useEffect} from 'react';
-import {View, Text, StyleSheet, Animated} from 'react-native';
+import React from 'react';
+import {View, Text, StyleSheet} from 'react-native';
 import {PressableScale} from '../../components/PressableScale';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useNavigation} from '@react-navigation/native';
@@ -11,19 +11,6 @@ export function VirtualCardScreen() {
   const {user} = useAuth();
   const {colors} = useTheme();
   const navigation = useNavigation<any>();
-  const glow = useRef(new Animated.Value(0)).current;
-  const flip = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(glow, {toValue: 1, duration: 1800, useNativeDriver: true}),
-        Animated.timing(glow, {toValue: 0, duration: 1800, useNativeDriver: true}),
-      ])
-    ).start();
-  }, []);
-
-  const glowOpacity = glow.interpolate({inputRange: [0, 1], outputRange: [0.4, 0.9]});
 
   const digits = (user?.cardCode ?? '---').split('');
 
@@ -44,8 +31,6 @@ export function VirtualCardScreen() {
 
         {/* Card */}
         <View style={[s.card, {backgroundColor: colors.primary}]}>
-          <Animated.View style={[s.glowLayer, {opacity: glowOpacity}]} />
-
           <View style={s.cardTop}>
             <View>
               <Text style={s.hospitalName}>KIMS Hospital</Text>
@@ -110,8 +95,7 @@ const s = StyleSheet.create({
   heading: {fontSize: 22, fontWeight: '900', marginBottom: 6},
   sub: {fontSize: 13, textAlign: 'center', marginBottom: 32, lineHeight: 18},
 
-  card: {width: '100%', borderRadius: 24, padding: 24, marginBottom: 24, overflow: 'hidden', shadowColor: '#000', shadowOffset: {width: 0, height: 12}, shadowOpacity: 0.3, shadowRadius: 20, elevation: 16},
-  glowLayer: {position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(255,255,255,0.06)'},
+  card: {width: '100%', borderRadius: 24, padding: 24, marginBottom: 24, overflow: 'hidden', shadowColor: '#000', shadowOffset: {width: 0, height: 6}, shadowOpacity: 0.16, shadowRadius: 12, elevation: 8},
   cardTop: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 32},
   hospitalName: {color: '#fff', fontSize: 16, fontWeight: '900'},
   cardSub: {color: 'rgba(255,255,255,0.7)', fontSize: 11, fontWeight: '600', marginTop: 2},

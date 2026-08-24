@@ -262,7 +262,7 @@ const s = StyleSheet.create({
   heroTitle: {color: '#fff', fontSize: 28, fontWeight: '900', letterSpacing: -0.5},
   heroSub: {color: 'rgba(255,255,255,0.8)', fontSize: 13, marginTop: 6, fontWeight: '500'},
 
-  card: {margin: 20, marginTop: -24, borderRadius: 24, borderWidth: 1, padding: 24, shadowColor: '#000', shadowOffset: {width: 0, height: 8}, shadowOpacity: 0.12, shadowRadius: 24, elevation: 12},
+  card: {margin: 20, marginTop: -24, borderRadius: 24, borderWidth: 1, padding: 24, shadowColor: '#000', shadowOffset: {width: 0, height: 3}, shadowOpacity: 0.05, shadowRadius: 8, elevation: 3},
   cardTitle: {fontSize: 22, fontWeight: '900', marginBottom: 4},
   cardSub: {fontSize: 13, marginBottom: 24},
   quickWrap: {marginBottom: 20},

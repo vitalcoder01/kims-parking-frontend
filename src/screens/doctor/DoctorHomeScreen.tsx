@@ -740,7 +740,7 @@ const s = StyleSheet.create({
   // icon in a rounded square) — a horizontal solo-card layout rather than a
   // centered vertical stack, since a square grid tile sitting alone in a
   // wide row would leave visible empty space next to it.
-  requestCard:{flexDirection:'row',alignItems:'center',gap:14,borderRadius:22,padding:18,shadowColor:'#000',shadowOffset:{width:0,height:6},shadowOpacity:0.16,shadowRadius:10,elevation:4},
+  requestCard:{flexDirection:'row',alignItems:'center',gap:14,borderRadius:22,padding:18,shadowColor:'#000',shadowOffset:{width:0,height:2},shadowOpacity:0.06,shadowRadius:4,elevation:2},
   requestIconWrap:{width:46,height:46,borderRadius:14,backgroundColor:'rgba(255,255,255,0.18)',alignItems:'center',justifyContent:'center'},
   requestCardTxt:{color:'#fff',fontSize:15,fontWeight:'800'},
   requestCardSub:{color:'rgba(255,255,255,0.65)',fontSize:11.5,marginTop:2},

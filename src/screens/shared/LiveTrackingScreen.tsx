@@ -212,7 +212,6 @@ export function LiveTrackingScreen({task: taskProp, onBack}: Props) {
           arrived, whether or not the valet has confirmed the handover yet. */}
       {!arrived && (
         <View style={[s.liveBadge, {backgroundColor: colors.error}]}>
-          <View style={s.liveDot} />
           <Text style={s.liveTxt}>LIVE</Text>
         </View>
       )}
@@ -351,7 +350,6 @@ const s = StyleSheet.create({
   backBtn: {position: 'absolute', top: 52, left: 16, zIndex: 10, width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: {width: 0, height: 2}, shadowOpacity: 0.2, shadowRadius: 8, elevation: 8},
   backTxt: {fontSize: 20, fontWeight: '700'},
   liveBadge: {position: 'absolute', top: 52, right: 16, zIndex: 10, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6},
-  liveDot: {width: 7, height: 7, borderRadius: 4, backgroundColor: '#fff'},
   liveTxt: {color: '#fff', fontSize: 11, fontWeight: '900', letterSpacing: 1},
   gpsBadge: {position: 'absolute', top: 100, right: 16, zIndex: 10, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 5},
   gpsTxt: {color: '#fff', fontSize: 10, fontWeight: '700'},
