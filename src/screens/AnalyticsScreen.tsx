@@ -144,10 +144,7 @@ export function AnalyticsScreen() {
         <LinearGradient colors={isDark ? BRAND_GRADIENT_DARK : BRAND_GRADIENT} style={s.gradHeader} start={{x:0,y:0}} end={{x:1,y:1}}>
           <View style={s.gradTopRow}>
             <View>
-              <View style={s.eyebrowRow}>
-                <Icon name="sparkle" size={12} color="rgba(255,255,255,0.75)" />
-                <Text style={s.eyebrow}>ALL-TIME · LIVE</Text>
-              </View>
+              <Text style={s.eyebrow}>ALL-TIME · LIVE</Text>
               <Text style={s.gradTitle}>Analytics</Text>
             </View>
             <View style={{flexDirection: 'row', gap: 8}}>
@@ -406,8 +403,7 @@ const styles = StyleSheet.create({
   scroll: {paddingBottom: 32},
   gradHeader: {paddingTop: 8, paddingBottom: 18, paddingHorizontal: 20, borderBottomLeftRadius: 28, borderBottomRightRadius: 28, overflow: 'hidden'},
   gradTopRow: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20},
-  eyebrowRow: {flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 4},
-  eyebrow: {color: 'rgba(255,255,255,0.75)', fontSize: 11, fontWeight: '800', letterSpacing: 1.2},
+  eyebrow: {color: 'rgba(255,255,255,0.75)', fontSize: 11, fontWeight: '800', letterSpacing: 1.2, marginBottom: 4},
   gradTitle: {color: '#fff', fontSize: 24, fontWeight: '900'},
   headerBtn: {width: 38, height: 38, borderRadius: 19, backgroundColor: 'rgba(255,255,255,0.14)', alignItems: 'center', justifyContent: 'center'},
   heroRow: {flexDirection: 'row', alignItems: 'center'},

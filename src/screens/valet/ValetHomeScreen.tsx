@@ -1453,10 +1453,7 @@ export function ValetHomeScreen() {
         <LinearGradient colors={isDark ? BRAND_GRADIENT_DARK : BRAND_GRADIENT} style={s.gradHeader} start={{x:0,y:0}} end={{x:1,y:1}}>
           <View style={s.gradTopRow}>
             <View>
-              <View style={s.eyebrowRow}>
-                <View style={s.liveDot} />
-                <Text style={s.eyebrow}>ON SHIFT</Text>
-              </View>
+              <Text style={[s.eyebrow, {marginBottom: 6}]}>ON SHIFT</Text>
               <Text style={s.gradGreetSub}>{todayLabel}</Text>
               <Text style={s.gradGreetName}>{user?.name}</Text>
             </View>
@@ -1500,10 +1497,7 @@ export function ValetHomeScreen() {
                       <Icon name={icon} size={13} color={active ? tint : 'rgba(255,255,255,0.6)'} />
                     </View>
                     <Text style={[s.statNum, active && {color: tint}]}>{num}</Text>
-                    <View style={s.statLblRow}>
-                      <Text style={[s.statLbl, active && {color: 'rgba(255,255,255,0.85)'}]}>{label}</Text>
-                      {active && <View style={[s.statActiveDot, {backgroundColor: tint}]} />}
-                    </View>
+                    <Text style={[s.statLbl, {marginTop: 2}, active && {color: 'rgba(255,255,255,0.85)'}]}>{label}</Text>
                   </PressableScale>
                 </React.Fragment>
               );
@@ -1589,8 +1583,7 @@ export function ValetHomeScreen() {
             const rank = driverStatFilter === 'doneToday' && (d.completedToday ?? 0) > 0 ? i + 1 : null;
             const medal = rank === 1 ? '#F5C168' : rank === 2 ? '#C7CDD6' : rank === 3 ? '#D3946B' : null;
             return (
-              <View key={d.id} style={[s.driverPill, {backgroundColor: colors.surface, borderColor: medal ?? colors.border, borderWidth: medal ? 1.5 : 1}, medal && s.driverPillGlow]}>
-                <View style={[s.driverPillAccent, {backgroundColor: sc}]} />
+              <View key={d.id} style={[s.driverPill, {backgroundColor: colors.surface, borderColor: medal ?? colors.border, borderWidth: medal ? 1.5 : 1}]}>
                 <View style={[s.driverPillTop, {borderBottomColor: colors.divider}]}>
                   <View style={[s.driverAvatar, {backgroundColor: sc + '14'}]}>
                     <Text style={[s.avatarTxt, {color: sc}]}>{d.name[0]}</Text>
@@ -1726,8 +1719,6 @@ const s = StyleSheet.create({
   body:{padding:16,gap:8},
   gradHeader:{paddingTop:16,paddingBottom:20,paddingHorizontal:20,borderBottomLeftRadius:28,borderBottomRightRadius:28,overflow:'hidden'},
   gradTopRow:{flexDirection:'row',justifyContent:'space-between',alignItems:'flex-start'},
-  eyebrowRow:{flexDirection:'row',alignItems:'center',gap:6,marginBottom:6},
-  liveDot:{width:6,height:6,borderRadius:3,backgroundColor:'#4ADE9A'},
   eyebrow:{color:'rgba(255,255,255,0.65)',fontSize:10.5,fontWeight:'800',letterSpacing:1.2},
   gradGreetSub:{color:'rgba(255,255,255,0.65)',fontSize:12,fontWeight:'600'},
   gradGreetName:{color:'#fff',fontSize:24,fontWeight:'900',marginTop:2,marginBottom:18},
@@ -1738,10 +1729,7 @@ const s = StyleSheet.create({
   statRow:{flexDirection:'row',alignItems:'center'},
   statItem:{flex:1,paddingVertical:8,paddingHorizontal:6},
   statIconWrap:{width:24,height:24,borderRadius:8,alignItems:'center',justifyContent:'center',marginBottom:6},
-  statIconRow:{flexDirection:'row',alignItems:'center',gap:5,marginBottom:3},
-  statActiveDot:{width:5,height:5,borderRadius:3},
   statNum:{color:'#fff',fontSize:20,fontWeight:'900',fontVariant:['tabular-nums']},
-  statLblRow:{flexDirection:'row',alignItems:'center',gap:4,marginTop:2},
   statLbl:{color:'rgba(255,255,255,0.6)',fontSize:11,fontWeight:'600'},
   statDivider:{width:1,height:36,backgroundColor:'rgba(255,255,255,0.15)',marginHorizontal:4},
 
@@ -1756,7 +1744,7 @@ const s = StyleSheet.create({
   // `(100% - gap) / 2` via percentage width keeps it responsive across phone
   // sizes without a hardcoded pixel width like the old 2-card row had.
   actionGrid:{flexDirection:'row',flexWrap:'wrap',justifyContent:'space-between',rowGap:12,marginBottom:24},
-  actionCard:{width:'48.5%',borderRadius:22,padding:18,minHeight:148,alignItems:'center',borderWidth:1,shadowColor:'#000',shadowOffset:{width:0,height:6},shadowOpacity:0.16,shadowRadius:10,elevation:4},
+  actionCard:{width:'48.5%',borderRadius:22,padding:18,minHeight:148,alignItems:'center',borderWidth:1},
   actionIconWrap:{width:46,height:46,borderRadius:14,alignItems:'center',justifyContent:'center',marginBottom:10},
   actionCardTxt:{color:'#fff',fontSize:15,fontWeight:'800',textAlign:'center'},
   actionCardSub:{color:'rgba(255,255,255,0.65)',fontSize:11,lineHeight:14,marginTop:4,textAlign:'center'},
@@ -1765,8 +1753,6 @@ const s = StyleSheet.create({
   sectionTitleRow:{flexDirection:'row',alignItems:'center',gap:6},
   sectionTitle:{fontSize:14,fontWeight:'800',marginBottom:12},
   driverPill:{borderRadius:16,borderWidth:1,width:128,overflow:'hidden'},
-  driverPillGlow:{shadowColor:'#F5C168',shadowOpacity:0.3,shadowRadius:8,shadowOffset:{width:0,height:2},elevation:3},
-  driverPillAccent:{height:3,width:'100%'},
   driverPillTop:{flexDirection:'row',alignItems:'center',gap:8,padding:12,borderBottomWidth:1},
   rankBadge:{width:18,height:18,borderRadius:9,alignItems:'center',justifyContent:'center'},
   rankBadgeTxt:{fontSize:10,fontWeight:'900',color:'#15161A'},
