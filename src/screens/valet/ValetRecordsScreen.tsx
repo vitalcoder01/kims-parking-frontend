@@ -357,7 +357,6 @@ export function ValetRecordsScreen() {
           <View style={s.nameRow}>
             <Text style={[s.name, {color: colors.textPrimary}]}>{v.name || 'Visitor'}</Text>
             <View style={[s.chip, {backgroundColor: chipBg}]}>
-              <View style={[s.chipDot, {backgroundColor: chipTone}]} />
               <Text style={[s.chipTxt, {color: chipTone}]}>{chipLabel}</Text>
             </View>
             <PressableScale style={[s.infoBtn, {backgroundColor: colors.cardAlt}]} onPress={() => setDetailVisitor(v)}>
@@ -516,7 +515,6 @@ export function ValetRecordsScreen() {
           <View style={s.nameRow}>
             <Text style={[s.name, {color: colors.textPrimary}]}>{t.doctorName}</Text>
             <View style={[s.chip, {backgroundColor: chipBg}]}>
-              <View style={[s.chipDot, {backgroundColor: chipTone}]} />
               <Text style={[s.chipTxt, {color: chipTone}]}>{chipLabel}</Text>
             </View>
             <PressableScale style={[s.infoBtn, {backgroundColor: colors.cardAlt}]} onPress={() => setDetailTask(t)}>
@@ -851,7 +849,6 @@ const s = StyleSheet.create({
   nameRow: {flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8},
   name: {fontSize: 18, fontWeight: '800'},
   chip: {flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 99, paddingHorizontal: 9, paddingVertical: 4},
-  chipDot: {width: 5, height: 5, borderRadius: 3},
   chipTxt: {fontSize: 11.5, fontWeight: '700'},
   infoBtn: {width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center'},
   carRow: {flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 7},
