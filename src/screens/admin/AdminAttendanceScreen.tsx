@@ -1,5 +1,5 @@
 import React, {useState, useEffect, useCallback} from 'react';
-import {View, Text, StyleSheet, ScrollView, ActivityIndicator, RefreshControl} from 'react-native';
+import {View, Text, StyleSheet, ScrollView, ActivityIndicator, RefreshControl, Modal, Pressable} from 'react-native';
 import {PressableScale} from '../../components/PressableScale';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useTheme} from '../../context/ThemeContext';
@@ -102,6 +102,62 @@ function UserCalendar({user, monthStr, colors}: {user: MonthlyUser; monthStr: st
   );
 }
 
+// A compact roster row, not a full stacked calendar per person — with
+// dozens of staff, rendering everyone's full month grid one after another
+// (the old behavior) turned this screen into an enormous scroll nobody
+// could scan. Mobbin research (Remote Global HR's absences list, Fable's
+// streak log) confirmed the standard pattern at this scale: a flat,
+// scannable roster with each person's summary, drilling into their own
+// calendar only on tap — see the modal below, reusing UserCalendar as-is.
+function RosterRow({user, monthStr, colors, onPress, isLast}: {user: MonthlyUser; monthStr: string; colors: any; onPress: () => void; isLast: boolean}) {
+  const [y, m] = monthStr.split('-').map(Number);
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const presentDates = new Set(user.days.filter(d => d.checkIn).map(d => d.date));
+  const presentCount = presentDates.size;
+  const pct = daysInMonth ? Math.round((presentCount / daysInMonth) * 100) : 0;
+
+  // Last 7 calendar days (not 7 working days) up to today, or the month's
+  // end if viewing a past month — a quick "were they around recently"
+  // glance, the same dot-per-day idiom Journal/Weverse use for a full
+  // month, condensed to a week strip so it fits inline on a roster row.
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const monthEndStr = `${monthStr}-${String(daysInMonth).padStart(2, '0')}`;
+  const anchor = monthEndStr < todayStr ? new Date(y, m - 1, daysInMonth) : new Date();
+  const recentDays = Array.from({length: 7}, (_, i) => {
+    const d = new Date(anchor);
+    d.setDate(d.getDate() - (6 - i));
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return {key, present: presentDates.has(key), inMonth: key.startsWith(monthStr)};
+  });
+
+  return (
+    <PressableScale onPress={onPress} style={[rs.row, {borderBottomColor: colors.divider}, isLast && {borderBottomWidth: 0}]}>
+      <View style={[rs.avatar, {backgroundColor: colors.primary + '15'}]}>
+        <Text style={[rs.avatarTxt, {color: colors.primary}]}>{user.name.split(' ').map(w => w[0]).join('').slice(0, 2)}</Text>
+      </View>
+      <View style={{flex: 1, minWidth: 0}}>
+        <Text style={[rs.name, {color: colors.textPrimary}]} numberOfLines={1}>{user.name}</Text>
+        <Text style={[rs.meta, {color: colors.textMuted}]}>{roleLabel[user.role] ?? user.role} · {user.employeeId}</Text>
+        <View style={rs.dotStrip}>
+          {recentDays.map(d => (
+            <View key={d.key} style={[
+              rs.miniDot,
+              d.present
+                ? {backgroundColor: colors.success}
+                : {backgroundColor: 'transparent', borderWidth: 1.5, borderColor: colors.border, opacity: d.inMonth ? 1 : 0.4},
+            ]} />
+          ))}
+        </View>
+      </View>
+      <View style={{alignItems: 'flex-end'}}>
+        <Text style={[rs.pct, {color: pct >= 80 ? colors.success : pct >= 50 ? colors.warning : colors.textMuted}]}>{pct}%</Text>
+        <Text style={[rs.days, {color: colors.textMuted}]}>{presentCount}/{daysInMonth} days</Text>
+      </View>
+      <Icon name="chevronRight" size={16} color={colors.textMuted} />
+    </PressableScale>
+  );
+}
+
 export function AdminAttendanceScreen() {
   const {colors} = useTheme();
   const [todayRows, setTodayRows] = useState<TodayRow[]>([]);
@@ -110,6 +166,7 @@ export function AdminAttendanceScreen() {
   const [category, setCategory] = useState('all');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<MonthlyUser | null>(null);
 
   const load = useCallback(async (month: string) => {
     try {
@@ -193,12 +250,18 @@ export function AdminAttendanceScreen() {
           })}
         </ScrollView>
 
-        <Text style={[s.sec, {color: colors.textMuted, marginTop: 4}]}>PER-USER CALENDAR</Text>
+        <Text style={[s.sec, {color: colors.textMuted, marginTop: 4}]}>ROSTER — TAP FOR CALENDAR</Text>
         {filteredUsers.length === 0 ? (
           <View style={[s.emptyBox, {borderColor: colors.border}]}>
             <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No one in this category yet</Text>
           </View>
-        ) : filteredUsers.map(u => <UserCalendar key={u.userId} user={u} monthStr={monthStr} colors={colors} />)}
+        ) : (
+          <View style={[s.sheet, {backgroundColor: colors.card, borderColor: colors.border, marginBottom: 8}]}>
+            {filteredUsers.map((u, i) => (
+              <RosterRow key={u.userId} user={u} monthStr={monthStr} colors={colors} onPress={() => setSelectedUser(u)} isLast={i === filteredUsers.length - 1} />
+            ))}
+          </View>
+        )}
 
         <Text style={[s.sec, {color: colors.textMuted, marginTop: 8}]}>TODAY — MARKED AUTOMATICALLY</Text>
         {todayRows.length === 0 ? (
@@ -222,6 +285,22 @@ export function AdminAttendanceScreen() {
           </View>
         )}
       </ScrollView>
+
+      {/* One person's full calendar, on demand — reuses UserCalendar as-is,
+          just no longer stacked for every user at once. */}
+      <Modal visible={!!selectedUser} transparent animationType="fade" onRequestClose={() => setSelectedUser(null)}>
+        <Pressable style={s.modalOverlay} onPress={() => setSelectedUser(null)}>
+          <Pressable style={s.modalBody} onPress={() => {}}>
+            <View style={s.modalHeader}>
+              <Text style={[s.modalTitle, {color: colors.textPrimary}]}>{monthLabel(monthStr)}</Text>
+              <PressableScale style={[s.modalCloseBtn, {backgroundColor: colors.cardAlt}]} onPress={() => setSelectedUser(null)}>
+                <Icon name="close" size={16} color={colors.textPrimary} />
+              </PressableScale>
+            </View>
+            {selectedUser && <UserCalendar user={selectedUser} monthStr={monthStr} colors={colors} />}
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -254,6 +333,24 @@ const s = StyleSheet.create({
   name: {fontSize: 13, fontWeight: '700'},
   meta: {fontSize: 11, marginTop: 2},
   vehicles: {fontSize: 11, fontWeight: '700'},
+
+  modalOverlay: {flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center', padding: 24},
+  modalBody: {width: '100%', maxWidth: 420},
+  modalHeader: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12},
+  modalTitle: {fontSize: 17, fontWeight: '900'},
+  modalCloseBtn: {width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center'},
+});
+
+const rs = StyleSheet.create({
+  row: {flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 1},
+  avatar: {width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', flexShrink: 0},
+  avatarTxt: {fontSize: 12, fontWeight: '900'},
+  name: {fontSize: 13, fontWeight: '700'},
+  meta: {fontSize: 11, marginTop: 2},
+  dotStrip: {flexDirection: 'row', gap: 4, marginTop: 6},
+  miniDot: {width: 7, height: 7, borderRadius: 3.5},
+  pct: {fontSize: 15, fontWeight: '900'},
+  days: {fontSize: 10, fontWeight: '600', marginTop: 1},
 });
 
 const cs = StyleSheet.create({
