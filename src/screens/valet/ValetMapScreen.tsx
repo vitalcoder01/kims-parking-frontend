@@ -58,7 +58,7 @@ export function ValetMapScreen() {
       <ScrollView contentContainerStyle={s.liveScroll} showsVerticalScrollIndicator={false}>
         {/* Leaflet + OpenStreetMap card — free, no API key, markers driven
             purely by socket deltas via injectJavaScript (never a page reload) */}
-        <View style={[s.mapCard, {borderColor: colors.textPrimary}]}>
+        <View style={[s.mapCard, {borderColor: colors.border}]}>
           <WebView
             ref={webviewRef}
             style={s.map}
@@ -75,7 +75,6 @@ export function ValetMapScreen() {
             }}
           />
           <View style={[s.liveBadge, {backgroundColor: colors.error}]}>
-            <View style={s.liveBadgeDot} />
             <Text style={s.liveBadgeTxt}>LIVE</Text>
           </View>
         </View>
@@ -124,13 +123,9 @@ const s = StyleSheet.create({
   safe: {flex: 1},
 
   liveScroll: {padding: 16, paddingBottom: 40},
-  mapCard: {
-    height: 320, borderRadius: 20, borderWidth: 2, overflow: 'hidden', marginBottom: 20,
-    shadowColor: '#000', shadowOffset: {width: 0, height: 6}, shadowOpacity: 0.12, shadowRadius: 12, elevation: 4,
-  },
+  mapCard: {height: 320, borderRadius: 20, borderWidth: 1, overflow: 'hidden', marginBottom: 20},
   map: {flex: 1},
   liveBadge: {position: 'absolute', top: 12, right: 12, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5},
-  liveBadgeDot: {width: 6, height: 6, borderRadius: 3, backgroundColor: '#fff'},
   liveBadgeTxt: {color: '#fff', fontSize: 10, fontWeight: '900', letterSpacing: 1},
 
   sectionTitle: {fontSize: 15, fontWeight: '800', marginBottom: 12},
