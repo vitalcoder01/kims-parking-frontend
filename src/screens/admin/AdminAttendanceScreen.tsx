@@ -1,5 +1,5 @@
 import React, {useState, useEffect, useCallback} from 'react';
-import {View, Text, StyleSheet, ScrollView, ActivityIndicator, RefreshControl, Modal, Pressable} from 'react-native';
+import {View, Text, StyleSheet, ScrollView, ActivityIndicator, RefreshControl, Modal, Pressable, TextInput} from 'react-native';
 import {PressableScale} from '../../components/PressableScale';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useTheme} from '../../context/ThemeContext';
@@ -164,6 +164,7 @@ export function AdminAttendanceScreen() {
   const [monthUsers, setMonthUsers] = useState<MonthlyUser[]>([]);
   const [monthStr, setMonthStr] = useState(currentMonthStr());
   const [category, setCategory] = useState('all');
+  const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedUser, setSelectedUser] = useState<MonthlyUser | null>(null);
@@ -196,7 +197,9 @@ export function AdminAttendanceScreen() {
   const isCurrentMonth = monthStr === currentMonthStr();
   const categoryCounts: Record<string, number> = {all: monthUsers.length};
   for (const u of monthUsers) categoryCounts[u.role] = (categoryCounts[u.role] ?? 0) + 1;
-  const filteredUsers = category === 'all' ? monthUsers : monthUsers.filter(u => u.role === category);
+  const attQ = query.trim().toLowerCase();
+  const filteredUsers = (category === 'all' ? monthUsers : monthUsers.filter(u => u.role === category))
+    .filter(u => !attQ || u.name.toLowerCase().includes(attQ) || u.employeeId.toLowerCase().includes(attQ));
   const visibleCategories = CATEGORIES.filter(c => c.key === 'all' || categoryCounts[c.key] > 0);
 
   if (loading) {
@@ -252,6 +255,27 @@ export function AdminAttendanceScreen() {
           </PressableScale>
         </View>
 
+        {/* Search — same box the Jobs/Records screen uses. Real gap this
+            closes: with only role filter chips, finding one person in a
+            roster of dozens meant scrolling and reading every row. */}
+        <View style={[s.searchBox, {backgroundColor: colors.card, borderColor: colors.border}]}>
+          <Icon name="search" size={17} color={colors.textMuted} />
+          <TextInput
+            style={[s.searchInput, {color: colors.textPrimary}]}
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Search name, employee ID"
+            placeholderTextColor={colors.textMuted}
+            autoCapitalize="none"
+            returnKeyType="search"
+          />
+          {!!query && (
+            <PressableScale onPress={() => setQuery('')}>
+              <Icon name="close" size={15} color={colors.textMuted} />
+            </PressableScale>
+          )}
+        </View>
+
         <Text style={[s.sec, {color: colors.textMuted}]}>CATEGORY</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.catScroll} contentContainerStyle={s.catRow}>
           {visibleCategories.map(c => {
@@ -277,7 +301,7 @@ export function AdminAttendanceScreen() {
         <Text style={[s.sec, {color: colors.textMuted, marginTop: 4}]}>ROSTER — TAP FOR CALENDAR</Text>
         {filteredUsers.length === 0 ? (
           <View style={[s.emptyBox, {borderColor: colors.border}]}>
-            <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No one in this category yet</Text>
+            <Text style={[s.emptyTxt, {color: colors.textMuted}]}>{attQ ? `No match for "${query.trim()}"` : 'No one in this category yet'}</Text>
           </View>
         ) : (
           <View style={[s.sheet, {backgroundColor: colors.card, borderColor: colors.border, marginBottom: 8}]}>
@@ -346,6 +370,8 @@ const s = StyleSheet.create({
   monthBtnTxt: {fontSize: 18, fontWeight: '900'},
   monthLabel: {fontSize: 15, fontWeight: '800', minWidth: 140, textAlign: 'center'},
   sec: {fontSize: 10, fontWeight: '700', letterSpacing: 1.3, textTransform: 'uppercase', marginBottom: 8},
+  searchBox: {flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 16, borderWidth: 1, paddingHorizontal: 15, height: 48, marginBottom: 14},
+  searchInput: {flex: 1, fontSize: 15, fontWeight: '500', padding: 0},
   catScroll: {marginHorizontal: -16, marginBottom: 14},
   catRow: {paddingHorizontal: 16, gap: 8},
   catChip: {

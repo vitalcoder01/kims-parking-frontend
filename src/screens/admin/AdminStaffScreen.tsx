@@ -51,6 +51,7 @@ export function AdminStaffScreen() {
   const dialog = useDialog();
   const {colors} = useTheme();
   const [filter, setFilter] = useState<Filter>('all');
+  const [query, setQuery] = useState('');
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
@@ -234,7 +235,9 @@ export function AdminStaffScreen() {
   };
 
   const driverStaff = users.filter(u => u.role === 'driver');
-  const filtered = filter === 'all' ? users : users.filter(u => u.role === filter);
+  const q = query.trim().toLowerCase();
+  const filtered = (filter === 'all' ? users : users.filter(u => u.role === filter))
+    .filter(u => !q || u.name.toLowerCase().includes(q) || u.username.toLowerCase().includes(q) || u.employeeId.toLowerCase().includes(q));
 
   const onDuty  = driverStaff.filter(d => d.driverStatus === 'available').length;
   const onTask  = driverStaff.filter(d => d.driverStatus === 'busy').length;
@@ -415,6 +418,28 @@ export function AdminStaffScreen() {
           ))}
         </View>
 
+        {/* Search — same box the Jobs/Records screen already uses, for
+            consistency. Real gap this closes: with only role filter chips,
+            finding one specific person in a roster of dozens meant
+            scrolling and reading every row. */}
+        <View style={[s.searchBox, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+          <Icon name="search" size={17} color={colors.textMuted} />
+          <TextInput
+            style={[s.searchInput, {color: colors.textPrimary}]}
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Search name, username, ID"
+            placeholderTextColor={colors.textMuted}
+            autoCapitalize="none"
+            returnKeyType="search"
+          />
+          {!!query && (
+            <PressableScale onPress={() => setQuery('')}>
+              <Icon name="close" size={15} color={colors.textMuted} />
+            </PressableScale>
+          )}
+        </View>
+
         {/* Filter tabs */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.filterRow}>
           {FILTER_TABS.map(tab => (
@@ -431,7 +456,7 @@ export function AdminStaffScreen() {
           <ActivityIndicator style={{marginTop: 20}} color={colors.primary} />
         ) : filtered.length === 0 ? (
           <View style={[s.emptyBox, {borderColor: colors.border}]}>
-            <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No staff in this category yet</Text>
+            <Text style={[s.emptyTxt, {color: colors.textMuted}]}>{q ? `No match for "${query.trim()}"` : 'No staff in this category yet'}</Text>
           </View>
         ) : (
           <View style={[s.listCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
@@ -477,6 +502,8 @@ const s = StyleSheet.create({
   statLabelRow: {flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3},
   statDot: {width: 6, height: 6, borderRadius: 3},
   statLabel: {fontSize: 11, fontWeight: '600', textAlign: 'center'},
+  searchBox: {flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 16, borderWidth: 1, paddingHorizontal: 15, height: 48, marginBottom: 12},
+  searchInput: {flex: 1, fontSize: 15, fontWeight: '500', padding: 0},
   filterRow: {paddingBottom: 14, gap: 8},
   filterChip: {paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5},
   filterLabel: {fontSize: 13, fontWeight: '700'},
