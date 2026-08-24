@@ -375,7 +375,7 @@ export function VehicleSetupScreen() {
           {mode === 'edit' ? 'Add your vehicle details and pick a colour' : 'Your saved vehicle details'}
         </Text>
 
-        <View style={[s.previewCard, {backgroundColor: colors.surface, borderColor: colors.textPrimary}]}>
+        <View style={[s.previewCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
           <WebView
             ref={webRef}
             style={s.preview}
@@ -579,10 +579,7 @@ const s = StyleSheet.create({
   title: {fontSize: 28, fontWeight: '900'},
   subtitle: {fontSize: 13, marginTop: 4, marginBottom: 18},
 
-  previewCard: {
-    borderRadius: 20, borderWidth: 2, overflow: 'hidden', marginBottom: 24, height: 220,
-    shadowColor: '#000', shadowOffset: {width: 0, height: 6}, shadowOpacity: 0.1, shadowRadius: 12, elevation: 4,
-  },
+  previewCard: {borderRadius: 20, borderWidth: 1, overflow: 'hidden', marginBottom: 24, height: 220},
   preview: {flex: 1, backgroundColor: 'transparent'},
 
   fieldLabel: {fontSize: 10, fontWeight: '700', letterSpacing: 1, marginBottom: 8, marginTop: 4},
