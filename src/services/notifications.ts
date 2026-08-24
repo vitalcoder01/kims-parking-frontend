@@ -14,9 +14,25 @@ const CHANNEL_ID = 'kims_parking_v2';
 const ALARM_CHANNEL_ID = 'kims_parking_alarm_v2';
 // Android channels are immutable after creation — the loud full-alarm config
 // (sound + bypass DND + alarm category) needs a fresh channel id on devices
-// that already created the old silent-ish one.
-const RING_CHANNEL_ID = 'kims_parking_ring_v2';
+// that already created the old silent-ish one. Bumped to v3 for the longer,
+// more insistent vibrationPattern below (used for the app-killed case, where
+// Android vibrates from the channel directly — no JS ever runs to call
+// Vibration.vibrate itself); v2 installs would otherwise keep the old
+// pattern forever since the channel can't be edited after creation.
+const RING_CHANNEL_ID = 'kims_parking_ring_v3';
 const RING_NOTIFICATION_ID = 'kims-assignment-alarm';
+
+// A single 3-buzz/one-shot-sound burst (the old behaviour) is over in about
+// 3 seconds — trivially easy to miss with the phone in a pocket or face-down
+// on a desk, and nothing rings again after it. This is a real dispatch-flow
+// problem, not a polish one: a valet who doesn't notice a retrieval request,
+// or a driver who doesn't notice their assignment, is the entire reason jobs
+// stall. Every alarm-grade alert now rings — sound AND vibration, both
+// looping — for a full 20 seconds or until whatever triggered it resolves
+// (accepted, reassigned, cancelled), whichever comes first. No lighter
+// version for any one role: everyone gets the same aggressive alert.
+const CRITICAL_RING_MS = 20000;
+const CRITICAL_VIBRATION_PATTERN = [0, 700, 300, 700, 300, 700, 300];
 
 let channelsReady = false;
 
@@ -46,20 +62,22 @@ export async function initNotifications(): Promise<void> {
       importance: AndroidImportance.HIGH,
       sound: 'default',
       vibration: true,
-      vibrationPattern: [300, 600, 300, 600],
+      vibrationPattern: CRITICAL_VIBRATION_PATTERN,
       bypassDnd: true,
     });
     channelsReady = true;
   }
 }
 
+let ringTimer: ReturnType<typeof setTimeout> | null = null;
+
 /**
- * The driver assignment alarm — native Android notification on the alarm
- * channel (sound + vibration + full-screen intent when locked), plus an
- * in-process vibration loop when we're actually running in the foreground.
- * Works from the FCM background handler too (app killed / after reboot):
- * there it's just the notification part, which is exactly the requirement's
- * "send the alarm like a push notification" fallback.
+ * The assignment/arrival/retrieval alarm — native Android notification on
+ * the alarm channel (looping sound + vibration + full-screen intent when
+ * locked), for the full 20-second window. Works from the FCM background
+ * handler too (app killed / after reboot): there it's just the notification
+ * part, which is exactly the requirement's "send the alarm like a push
+ * notification" fallback.
  */
 export async function ringAssignmentAlarm(title: string, body: string): Promise<void> {
   try {
@@ -77,19 +95,19 @@ export async function ringAssignmentAlarm(title: string, body: string): Promise<
         pressAction: {id: 'default', launchActivity: 'default'},
         // Rings over the lock screen like an incoming call.
         fullScreenAction: {id: 'default', launchActivity: 'default'},
-        // 3 rings, not an indefinite loop — still gets attention without
-        // ringing forever if nobody's near the phone to dismiss it.
-        loopSound: false,
+        loopSound: true,
         sound: 'default',
         ongoing: true,
         autoCancel: false,
       },
     });
     if (Platform.OS === 'android') {
-      // Fixed-length pattern (3 buzzes), not an infinite repeat — same
-      // "insistent but bounded" behaviour as the sound above.
-      Vibration.vibrate([0, 600, 400, 600, 400, 600, 400], false);
+      // `true` repeats the pattern indefinitely — the timer below is what
+      // actually bounds it to 20s, same cap that governs the ring sound.
+      Vibration.vibrate(CRITICAL_VIBRATION_PATTERN, true);
     }
+    if (ringTimer) clearTimeout(ringTimer);
+    ringTimer = setTimeout(() => { stopAssignmentAlarm().catch(() => {}); }, CRITICAL_RING_MS);
   } catch {
     // Alarms are best-effort; never crash over them.
   }
@@ -98,6 +116,7 @@ export async function ringAssignmentAlarm(title: string, body: string): Promise<
 /** Stop the vibration loop + dismiss the ongoing alarm notification. */
 export async function stopAssignmentAlarm(): Promise<void> {
   try {
+    if (ringTimer) { clearTimeout(ringTimer); ringTimer = null; }
     Vibration.cancel();
     await notifee.cancelNotification(RING_NOTIFICATION_ID);
   } catch {
