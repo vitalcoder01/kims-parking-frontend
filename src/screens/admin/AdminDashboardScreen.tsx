@@ -1,34 +1,71 @@
 import React, {useEffect, useState} from 'react';
 import {View, Text, StyleSheet, ScrollView} from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
+import {useNavigation} from '@react-navigation/native';
 import {useTheme} from '../../context/ThemeContext';
 import {useAuth} from '../../context/AuthContext';
 import {useAppState} from '../../context/AppStateContext';
-import {Badge} from '../../components/Badge';
+import {PressableScale} from '../../components/PressableScale';
 import {Icon, IconName} from '../../components/Icon';
+import {HScrollHint} from '../../components/HScrollHint';
+import {spacing, radius, typography} from '../../theme';
 
-type ActivityType = 'success' | 'info' | 'primary' | 'warning';
+// Ports kims-parking-web's Mobbin-researched redesign of this same screen —
+// "understand the whole operation in 3-5 seconds, details only after
+// tapping." The old version put a 2x2 metric grid, a full block-by-block
+// list AND a full driver list on one screen — all real data, arranged so
+// nothing read faster than scrolling to the bottom. This shows one compact
+// occupancy card (overall + per-block chips, no 90-slot render), at most 3
+// live operations with a way to see more, and a compact driver strip — the
+// full roster is one tap away on Staff. No map tab exists on mobile admin
+// (unlike web), so the occupancy card is informational only, not tappable.
+type StatusTone = 'success' | 'info' | 'warning' | 'muted';
+
+function taskStatusLabel(t: {type: string; status: string}): {label: string; tone: StatusTone; isLive: boolean} {
+  if (t.status === 'requested' || t.status === 'accepted' || t.status === 'assigned') {
+    return {label: 'Awaiting driver', tone: 'warning', isLive: true};
+  }
+  if (t.status === 'key_collected') return {label: 'Key collected', tone: 'info', isLive: true};
+  if (t.status === 'in_transit') return {label: t.type === 'park' ? 'Parking' : 'Retrieving', tone: 'info', isLive: true};
+  if (t.status === 'delivered') return {label: 'Delivered', tone: 'success', isLive: true};
+  return {label: t.type === 'park' ? 'Parked' : 'Retrieved', tone: 'success', isLive: false};
+}
+
+function taskActivityTime(t: {completedAt?: number; startedAt?: number; keyCollectedAt?: number; assignedAt?: number; requestedAt?: number}): number {
+  return t.completedAt ?? t.startedAt ?? t.keyCollectedAt ?? t.assignedAt ?? t.requestedAt ?? 0;
+}
+
+function relativeAgo(ms: number): string {
+  if (!ms) return '';
+  const mins = Math.max(0, Math.round((Date.now() - ms) / 60000));
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  return `${hrs}h ago`;
+}
+
+// How long a completed job still counts as "live" — long enough to see what
+// just happened, short enough to stay a snapshot, not a history log.
+const RECENT_COMPLETION_MS = 2 * 60 * 60 * 1000;
 
 export function AdminDashboardScreen() {
-  const {colors, isDark} = useTheme();
+  const {colors} = useTheme();
   const {user} = useAuth();
-  const {tasks, drivers, slots, fetchTaskHistory} = useAppState();
+  const {tasks, drivers, slots} = useAppState();
+  const navigation = useNavigation<any>();
 
-  // The live `tasks` array is bounded to "at most one row per doctor" now,
-  // so a completed job disappears from it the moment that doctor's next car
-  // comes in — this feed needs the real history to stay populated over time.
-  const [history, setHistory] = useState<typeof tasks>([]);
-  useEffect(() => {
-    fetchTaskHistory().then(setHistory).catch(() => {});
-  }, [fetchTaskHistory, tasks.length]);
+  const [showAllOps, setShowAllOps] = useState(false);
 
-  const liveTasks    = tasks.filter(t => t.status !== 'completed');
-  const busyDrivers  = drivers.filter(d => d.status === 'busy').length;
-  const parkedCars   = slots.filter(s => s.status === 'occupied').length;
-  const pendingRetrieval = tasks.filter(t => t.type === 'retrieve' && t.status !== 'completed').length;
+  const liveTasks = tasks
+    .filter(t => t.status !== 'cancelled')
+    .filter(t => t.status !== 'completed' || (t.completedAt != null && Date.now() - t.completedAt < RECENT_COMPLETION_MS))
+    .sort((a, b) => taskActivityTime(b) - taskActivityTime(a));
+  const occupied = slots.filter(s => s.status === 'occupied').length;
+  const total = slots.length;
+  const free = total - occupied;
+  const occupancyPct = total ? Math.round((occupied / total) * 100) : 0;
+  const fillColor = occupancyPct > 90 ? colors.error : occupancyPct > 70 ? colors.warning : colors.success;
 
-  // Real per-block occupancy — replaces the old hardcoded 4-block mockup,
-  // which didn't even match this hospital's actual 3-block/90-slot layout.
   const blockStats = React.useMemo(() => {
     const byBlock = new Map<string, {total: number; used: number}>();
     for (const sl of slots) {
@@ -37,175 +74,152 @@ export function AdminDashboardScreen() {
       if (sl.status === 'occupied') entry.used += 1;
       byBlock.set(sl.block, entry);
     }
-    return [...byBlock.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([name, v]) => ({name: `Block ${name}`, ...v}));
+    return [...byBlock.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([name, v]) => ({name, ...v}));
   }, [slots]);
 
-  const totalSlots = slots.length;
-  const usedSlots  = parkedCars;
-  const fillPct    = totalSlots ? Math.round((usedSlots / totalSlots) * 100) : 0;
-
-  const fillColor = (pct: number) =>
-    pct > 80 ? colors.error : pct > 60 ? colors.warning : colors.primary;
-
-  const actColor: Record<ActivityType, string> = {
-    success: colors.success,
-    info:    colors.info,
-    primary: colors.primary,
-    warning: colors.warning,
-  };
-
-  const liveActivity = history.slice(0, 5).map(t => ({
-    icon: (t.status === 'completed' ? 'check' : t.type === 'park' ? 'car' : 'refresh') as IconName,
-    text: `${t.carNumber} — ${t.type === 'park' ? 'parked' : 'retrieved'}${t.slotId ? ` at ${t.slotId}` : ''}`,
-    sub: `${t.doctorName} · ${t.driverName ?? 'Unassigned'}`,
-    type: t.status === 'completed' ? 'success' as const : t.type === 'park' ? 'primary' as const : 'info' as const,
-  }));
-
-  const today = new Date().toLocaleDateString(undefined, {weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'});
+  const availableDrivers = drivers.filter(d => d.status === 'available');
+  const today = new Date().toLocaleDateString(undefined, {weekday: 'long', month: 'long', day: 'numeric'});
 
   return (
-    <SafeAreaView edges={['bottom','left','right']} style={[s.safe, {backgroundColor: colors.background}]}>
+    <SafeAreaView edges={['bottom', 'left', 'right']} style={[s.safe, {backgroundColor: colors.background}]}>
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
 
         {/* Header */}
-        <View style={[s.header, {backgroundColor: colors.surface, borderBottomColor: colors.border}]}>
-          <View style={{flex: 1}}>
-            <Text style={[s.hSub, {color: colors.textSecondary}]}>Admin Panel</Text>
-            <Text style={[s.hName, {color: colors.textPrimary}]}>{user?.name ?? 'Admin'}</Text>
+        <View style={s.header}>
+          <View style={[s.avatar, {backgroundColor: colors.primary}]}>
+            <Text style={[s.avatarTxt, {color: colors.textOnPrimary}]}>
+              {(user?.name ?? 'Admin').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
+            </Text>
+          </View>
+          <View style={{flex: 1, minWidth: 0}}>
+            <Text style={[s.hName, {color: colors.textPrimary}]} numberOfLines={1}>{user?.name ?? 'Admin'}</Text>
             <Text style={[s.hDate, {color: colors.textMuted}]}>{today}</Text>
           </View>
-          <Badge label="Live" variant="success" dot />
-        </View>
-
-        {/* Metrics 2×2 — two explicit rows rather than a flex-wrap grid, since
-            wrap + percentage widths + borders was rounding just over 100%
-            per row and silently collapsing every card to one-per-row. */}
-        <View style={s.metricsPad}>
-          {[
-            [
-              {n: String(parkedCars),        l: 'Vehicles Parked',   c: colors.primary,  ic: 'parking' as IconName},
-              {n: String(busyDrivers),       l: 'Drivers On Duty',   c: colors.info,      ic: 'people' as IconName},
-            ],
-            [
-              {n: String(liveTasks.length),  l: 'Tasks Active',      c: colors.warning,  ic: 'bolt' as IconName},
-              {n: String(pendingRetrieval),  l: 'Retrieval Pending', c: colors.success,  ic: 'refresh' as IconName},
-            ],
-          ].map((row, ri) => (
-            <View key={ri} style={s.metricsRow}>
-              {row.map(m => (
-                <View
-                  key={m.l}
-                  style={[s.metricCard, {backgroundColor: colors.card, borderColor: colors.border}]}>
-                  <View style={[s.metricIcBadge, {backgroundColor: m.c + '18'}]}>
-                    <Icon name={m.ic} size={19} color={m.c} />
-                  </View>
-                  <Text style={[s.metricNum, {color: colors.textPrimary}]}>{m.n}</Text>
-                  <Text style={[s.metricLbl, {color: colors.textMuted}]}>{m.l}</Text>
-                </View>
-              ))}
-            </View>
-          ))}
+          <View style={[s.liveChip, {backgroundColor: colors.card, borderColor: colors.border}]}>
+            <View style={[s.liveDot, {backgroundColor: colors.success}]} />
+            <Text style={[s.liveTxt, {color: colors.textSecondary}]}>Live</Text>
+          </View>
         </View>
 
         <View style={s.pad}>
 
-          {/* Parking occupancy */}
-          <Text style={[s.sec, {color: colors.textMuted}]}>PARKING OCCUPANCY</Text>
-          <View style={[s.sheet, {backgroundColor: colors.card, borderColor: colors.border}]}>
-
-            {/* Overall */}
+          {/* Compact occupancy overview — the ONE number that matters
+              first, block breakdown as chips, not a 90-slot render. */}
+          <View style={[s.card, {backgroundColor: colors.card, borderColor: colors.border, padding: 20}]}>
             <View style={s.ocvHead}>
               <View>
-                <Text style={[s.ocvLabel, {color: colors.textMuted}]}>OVERALL</Text>
-                <Text style={[s.ocvFrac, {color: colors.textPrimary}]}>
-                  {usedSlots}
-                  <Text style={[s.ocvTotal, {color: colors.textMuted}]}>/{totalSlots}</Text>
-                </Text>
+                <Text style={[s.ocvLabel, {color: colors.textMuted}]}>PARKING</Text>
+                <View style={s.ocvRow}>
+                  <Text style={[s.ocvBig, {color: colors.success}]}>{free}</Text>
+                  <Text style={[s.ocvUnit, {color: colors.textMuted}]}>FREE</Text>
+                </View>
+                <View style={[s.ocvRow, {marginTop: 2}]}>
+                  <Text style={[s.ocvMid, {color: colors.textPrimary}]}>{occupied}</Text>
+                  <Text style={[s.ocvUnit, {color: colors.textMuted}]}>OCCUPIED</Text>
+                </View>
               </View>
               <View style={{alignItems: 'flex-end'}}>
-                <Text style={[s.ocvPctLabel, {color: colors.textMuted}]}>FULL</Text>
-                <Text style={[s.ocvPct, {color: fillColor(fillPct)}]}>{fillPct}%</Text>
+                <Text style={[s.ocvPct, {color: fillColor}]}>{occupancyPct}%</Text>
+                <Text style={[s.ocvPctLbl, {color: colors.textMuted}]}>FULL</Text>
               </View>
             </View>
-            <View style={[s.mainTrack, {backgroundColor: isDark ? '#2A2A2A' : '#EBEBEB'}]}>
-              <View style={[s.mainFill, {width: `${fillPct}%` as any, backgroundColor: fillColor(fillPct)}]} />
+
+            <View style={[s.segTrack, {backgroundColor: colors.cardAlt}]}>
+              {blockStats.map(b => (
+                <View key={b.name} style={{flex: total ? b.total / total : 0}}>
+                  <View style={[s.segFill, {width: `${b.total ? (b.used / b.total) * 100 : 0}%` as any, backgroundColor: fillColor}]} />
+                </View>
+              ))}
             </View>
 
-            <View style={[s.divider, {backgroundColor: colors.divider}]} />
-
-            {/* Per-block */}
             {blockStats.length === 0 ? (
               <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No parking slots configured yet</Text>
-            ) : blockStats.map((b, i) => {
-              const pct = b.total ? Math.round((b.used / b.total) * 100) : 0;
-              const bc  = fillColor(pct);
-              return (
-                <View key={b.name} style={[s.blockRow, i < blockStats.length - 1 && {marginBottom: 10}]}>
-                  <Text style={[s.blockName, {color: colors.textSecondary}]}>{b.name}</Text>
-                  <View style={[s.blockTrack, {backgroundColor: isDark ? '#2A2A2A' : '#EBEBEB'}]}>
-                    <View style={[s.blockFill, {width: `${pct}%` as any, backgroundColor: bc}]} />
+            ) : (
+              <HScrollHint fadeColor={colors.card} contentContainerStyle={{gap: 8}}>
+                {blockStats.map(b => (
+                  <View key={b.name} style={[s.blockChip, {backgroundColor: colors.cardAlt}]}>
+                    <Text style={[s.blockChipTxt, {color: colors.textPrimary}]}>Block {b.name}</Text>
+                    <Text style={[s.blockChipNum, {color: colors.textMuted}]}>{b.used}/{b.total}</Text>
                   </View>
-                  <Text style={[s.blockFrac, {color: colors.textPrimary}]}>
-                    {b.used}/{b.total}
-                  </Text>
-                  <Text style={[s.blockPct, {color: bc}]}>{pct}%</Text>
+                ))}
+              </HScrollHint>
+            )}
+          </View>
+
+          {/* Live operations — 2-3 active jobs, not an endless feed. */}
+          <View style={s.secRow}>
+            <Text style={[s.sec, {color: colors.textPrimary}]}>Live Operations</Text>
+            {liveTasks.length > 3 && (
+              <PressableScale onPress={() => setShowAllOps(v => !v)}>
+                <Text style={[s.secAction, {color: colors.primary}]}>
+                  {showAllOps ? 'Show less' : `View all (${liveTasks.length}) →`}
+                </Text>
+              </PressableScale>
+            )}
+          </View>
+          <View style={[s.card, {backgroundColor: colors.card, borderColor: colors.border, overflow: 'hidden'}]}>
+            {liveTasks.length === 0 ? (
+              <Text style={[s.emptyTxt, {color: colors.textMuted, padding: spacing.xl}]}>No active operations right now</Text>
+            ) : (showAllOps ? liveTasks : liveTasks.slice(0, 3)).map((t, i, arr) => {
+              const st = taskStatusLabel(t);
+              const toneColor = st.tone === 'success' ? colors.success : st.tone === 'info' ? colors.info : st.tone === 'warning' ? colors.warning : colors.textMuted;
+              const ago = relativeAgo(taskActivityTime(t));
+              return (
+                <View key={t.id} style={[s.opRow, i < arr.length - 1 && {borderBottomWidth: 1, borderBottomColor: colors.divider}]}>
+                  {/* Left accent bar, colored by status tone — scan the
+                      color, not the words, to read the list at a glance. */}
+                  <View style={[s.opStripe, {backgroundColor: toneColor}]} />
+                  <View style={[s.opIcon, {backgroundColor: colors.cardAlt}]}>
+                    <Icon name={t.type === 'park' ? 'car' : 'refresh'} size={15} color={colors.textPrimary} />
+                  </View>
+                  <View style={{flex: 1, minWidth: 0}}>
+                    <Text style={[s.opCar, {color: colors.textPrimary}]}>{t.carNumber}</Text>
+                    <Text style={[s.opMeta, {color: colors.textMuted}]} numberOfLines={1}>
+                      {t.doctorName}{t.slotId ? ` · ${t.slotId}` : ''}{t.driverName ? ` · ${t.driverName}` : ''}
+                    </Text>
+                  </View>
+                  <View style={{alignItems: 'flex-end', gap: 3}}>
+                    <Text style={[s.opStatus, {color: toneColor}]}>{st.label.toUpperCase()}</Text>
+                    {!!ago && <Text style={[s.opAgo, {color: colors.textMuted}]}>{ago}</Text>}
+                  </View>
                 </View>
               );
             })}
           </View>
 
-          {/* Drivers on duty */}
-          <Text style={[s.sec, {color: colors.textMuted}]}>DRIVERS ON DUTY</Text>
-          <View style={[s.sheet, {backgroundColor: colors.card, borderColor: colors.border}]}>
+          {/* Drivers — compact strip, full roster is one tap away on Staff. */}
+          <View style={s.secRow}>
+            <Text style={[s.sec, {color: colors.textPrimary}]}>Drivers</Text>
+            <PressableScale onPress={() => navigation.navigate('Staff')}>
+              <Text style={[s.secAction, {color: colors.primary}]}>View all →</Text>
+            </PressableScale>
+          </View>
+          <View style={[s.card, {backgroundColor: colors.card, borderColor: colors.border, padding: 14}]}>
             {drivers.length === 0 ? (
               <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No drivers added yet</Text>
-            ) : drivers.map((d, i) => {
-              const initials = d.name.split(' ').map(w => w[0]).join('').slice(0, 2);
-              const busy     = d.status === 'busy';
-              return (
-                <View
-                  key={d.id}
-                  style={[
-                    s.staffRow,
-                    {borderBottomColor: colors.divider},
-                    i === drivers.length - 1 && {borderBottomWidth: 0},
-                  ]}>
-                  <View style={[s.avatar, {backgroundColor: colors.primary + '1A', borderColor: colors.primary + '30'}]}>
-                    <Text style={[s.avatarTxt, {color: colors.primary}]}>{initials}</Text>
-                  </View>
-                  <View style={{flex: 1}}>
-                    <Text style={[s.staffName, {color: colors.textPrimary}]}>{d.name}</Text>
-                    <Text style={[s.staffMeta, {color: colors.textSecondary}]}>Driver</Text>
-                  </View>
-                  <Badge label={d.status === 'off' ? 'Off Duty' : busy ? 'On Task' : 'Free'} variant={d.status === 'off' ? 'muted' : busy ? 'warning' : 'success'} dot />
-                </View>
-              );
-            })}
-          </View>
-
-          {/* Live activity */}
-          <Text style={[s.sec, {color: colors.textMuted}]}>LIVE ACTIVITY</Text>
-          <View style={[s.sheet, {backgroundColor: colors.card, borderColor: colors.border}]}>
-            {liveActivity.length === 0 ? (
-              <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No activity yet today</Text>
-            ) : liveActivity.map((a, i) => (
-              <View
-                key={i}
-                style={[
-                  s.actRow,
-                  {borderBottomColor: colors.divider},
-                  i === liveActivity.length - 1 && {borderBottomWidth: 0},
-                ]}>
-                <View style={[s.actStripe, {backgroundColor: actColor[a.type]}]} />
-                <Icon name={a.icon} size={16} color={actColor[a.type]} />
-                <View style={{flex: 1}}>
-                  <Text style={[s.actText, {color: colors.textPrimary}]}>{a.text}</Text>
-                  <Text style={[s.actSub, {color: colors.textMuted}]}>{a.sub}</Text>
-                </View>
-              </View>
-            ))}
+            ) : (
+              <>
+                <HScrollHint fadeColor={colors.card} contentContainerStyle={{gap: 14, paddingBottom: 4}}>
+                  {drivers.map(d => {
+                    const tone = d.status === 'off' ? colors.textMuted : d.status === 'busy' ? colors.warning : colors.success;
+                    return (
+                      <View key={d.id} style={s.driverCol}>
+                        <View>
+                          <View style={[s.driverAvatar, {backgroundColor: colors.cardAlt}]}>
+                            <Text style={[s.driverAvatarTxt, {color: colors.textPrimary}]}>{d.name.split(' ').map(w => w[0]).join('').slice(0, 2)}</Text>
+                          </View>
+                          <View style={[s.driverDot, {backgroundColor: tone, borderColor: colors.card}]} />
+                        </View>
+                        <Text style={[s.driverName, {color: colors.textSecondary}]} numberOfLines={1}>{d.name.split(' ')[0]}</Text>
+                      </View>
+                    );
+                  })}
+                </HScrollHint>
+                <Text style={[s.driverSummary, {color: colors.textMuted, borderTopColor: colors.divider}]}>
+                  {availableDrivers.length} of {drivers.length} available
+                </Text>
+              </>
+            )}
           </View>
 
         </View>
@@ -218,70 +232,52 @@ const s = StyleSheet.create({
   safe: {flex: 1},
   scroll: {paddingBottom: 40},
 
-  header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1,
-  },
-  hSub: {fontSize: 11, fontWeight: '600'},
-  hName: {fontSize: 20, fontWeight: '900', letterSpacing: -0.4, marginTop: 2},
-  hDate: {fontSize: 11, marginTop: 3},
+  header: {flexDirection: 'row', alignItems: 'center', gap: spacing.md, padding: 16, paddingTop: 20, paddingBottom: 16},
+  avatar: {width: 44, height: 44, borderRadius: radius.full, alignItems: 'center', justifyContent: 'center', flexShrink: 0},
+  avatarTxt: {fontSize: typography.sizes.base, fontWeight: typography.weights.bold},
+  hName: {fontSize: typography.sizes['2xl'], fontWeight: '900', letterSpacing: -0.5},
+  hDate: {fontSize: typography.sizes.sm, marginTop: 2},
+  liveChip: {flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 6, borderRadius: radius.full, borderWidth: 1},
+  liveDot: {width: 6, height: 6, borderRadius: 3},
+  liveTxt: {fontSize: typography.sizes.xs, fontWeight: '700'},
 
-  metricsPad: {paddingHorizontal: 16, paddingTop: 16, gap: 12},
-  metricsRow: {flexDirection: 'row', gap: 12},
-  metricCard: {
-    flex: 1, borderRadius: 20, borderWidth: 1,
-    paddingHorizontal: 16, paddingVertical: 18,
-  },
-  metricIcBadge: {
-    width: 40, height: 40, borderRadius: 12,
-    alignItems: 'center', justifyContent: 'center', marginBottom: 12,
-  },
-  metricNum: {fontSize: 30, fontWeight: '900', letterSpacing: -1},
-  metricLbl: {fontSize: 11, fontWeight: '600', marginTop: 4},
+  pad: {paddingHorizontal: spacing.base},
+  card: {borderRadius: radius['2xl'], borderWidth: 1},
 
-  pad: {padding: 16},
-  sec: {
-    fontSize: 10, fontWeight: '700', letterSpacing: 1.3,
-    textTransform: 'uppercase', marginBottom: 8, marginTop: 4,
-  },
+  ocvHead: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 16},
+  ocvLabel: {fontSize: 11, fontWeight: '700', letterSpacing: 1, marginBottom: 4},
+  ocvRow: {flexDirection: 'row', alignItems: 'baseline', gap: 10},
+  ocvBig: {fontSize: typography.sizes['4xl'], fontWeight: '900', lineHeight: 38},
+  ocvMid: {fontSize: typography.sizes.xl, fontWeight: '900', lineHeight: 22},
+  ocvUnit: {fontSize: 12, fontWeight: '700'},
+  ocvPct: {fontSize: typography.sizes['2xl'], fontWeight: '900'},
+  ocvPctLbl: {fontSize: 10, fontWeight: '700'},
 
-  sheet: {borderRadius: 18, borderWidth: 1, overflow: 'hidden', marginBottom: 4},
-  emptyTxt: {fontSize: 12, fontWeight: '600', padding: 16, textAlign: 'center'},
+  segTrack: {height: 8, borderRadius: 4, overflow: 'hidden', flexDirection: 'row', marginBottom: 14},
+  segFill: {height: '100%'},
 
-  ocvHead: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', padding: 14, paddingBottom: 10},
-  ocvLabel: {fontSize: 9, fontWeight: '800', letterSpacing: 1.5, textTransform: 'uppercase', marginBottom: 2},
-  ocvFrac: {fontSize: 28, fontWeight: '900'},
-  ocvTotal: {fontSize: 18},
-  ocvPctLabel: {fontSize: 9, fontWeight: '800', letterSpacing: 1.5, textTransform: 'uppercase', marginBottom: 2},
-  ocvPct: {fontSize: 28, fontWeight: '900'},
-  mainTrack: {height: 10, marginHorizontal: 14, borderRadius: 5, overflow: 'hidden', marginBottom: 14},
-  mainFill: {height: '100%', borderRadius: 5},
-  divider: {height: 1, marginHorizontal: 14, marginBottom: 14},
+  emptyTxt: {fontSize: 12, fontWeight: '600', textAlign: 'center'},
 
-  blockRow: {flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14},
-  blockName: {width: 58, fontSize: 12, fontWeight: '600'},
-  blockTrack: {flex: 1, height: 6, borderRadius: 3, overflow: 'hidden'},
-  blockFill: {height: '100%', borderRadius: 3},
-  blockFrac: {width: 40, fontSize: 11, fontWeight: '700', textAlign: 'right', fontVariant: ['tabular-nums']},
-  blockPct: {width: 32, fontSize: 10, fontWeight: '700', textAlign: 'right'},
+  blockChip: {flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 7, borderRadius: radius.full},
+  blockChipTxt: {fontSize: 12, fontWeight: '800'},
+  blockChipNum: {fontSize: 11, fontWeight: '700', fontVariant: ['tabular-nums']},
 
-  staffRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1,
-  },
-  avatar: {
-    width: 36, height: 36, borderRadius: 10,
-    borderWidth: 1, alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-  },
-  avatarTxt: {fontSize: 11, fontWeight: '900'},
-  staffName: {fontSize: 13, fontWeight: '700'},
-  staffMeta: {fontSize: 11, marginTop: 2},
+  secRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.lg, marginBottom: spacing.sm},
+  sec: {fontSize: typography.sizes.base, fontWeight: '900', letterSpacing: -0.2},
+  secAction: {fontSize: 12, fontWeight: '700'},
 
-  actRow: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingVertical: 10, borderBottomWidth: 1, gap: 10,
-  },
-  actStripe: {width: 3, alignSelf: 'stretch', borderRadius: 2, flexShrink: 0},
-  actText: {fontSize: 13, fontWeight: '600'},
-  actSub: {fontSize: 11, marginTop: 2},
+  opRow: {flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 13, paddingHorizontal: 16},
+  opStripe: {width: 3, alignSelf: 'stretch', borderRadius: 2},
+  opIcon: {width: 34, height: 34, borderRadius: radius.full, alignItems: 'center', justifyContent: 'center'},
+  opCar: {fontSize: 13, fontWeight: '800', letterSpacing: 0.3},
+  opMeta: {fontSize: 11, marginTop: 2},
+  opStatus: {fontSize: 10.5, fontWeight: '800'},
+  opAgo: {fontSize: 10, fontWeight: '600'},
+
+  driverCol: {alignItems: 'center', gap: 5, width: 56},
+  driverAvatar: {width: 40, height: 40, borderRadius: radius.full, alignItems: 'center', justifyContent: 'center'},
+  driverAvatarTxt: {fontSize: 12, fontWeight: '800'},
+  driverDot: {position: 'absolute', bottom: -1, right: -1, width: 12, height: 12, borderRadius: 6, borderWidth: 2},
+  driverName: {fontSize: 10.5, fontWeight: '700', maxWidth: 56},
+  driverSummary: {fontSize: 11.5, fontWeight: '700', marginTop: 10, paddingTop: 10, borderTopWidth: 1},
 });
