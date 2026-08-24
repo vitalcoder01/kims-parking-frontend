@@ -392,11 +392,13 @@ export function AdminStaffScreen() {
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
 
         <PressableScale style={[s.addBtn, {backgroundColor: colors.primary}]} onPress={() => setShowAdd(true)}>
-          <Icon name="user" size={18} color="#fff" />
-          <Text style={s.addBtnTxt}>+ Add Staff</Text>
+          <Icon name="plus" size={18} color="#fff" />
+          <Text style={s.addBtnTxt}>Add Staff</Text>
         </PressableScale>
 
-        {/* Driver summary */}
+        {/* Driver summary — number stays neutral/bold (it's the content that
+            matters); a small colored dot carries the status meaning, not
+            the number itself, matching the Dashboard's stat-card language. */}
         <View style={s.statsRow}>
           {[
             {n: String(onDuty),  l: 'Drivers Ready', c: colors.success},
@@ -404,8 +406,11 @@ export function AdminStaffScreen() {
             {n: String(offDuty), l: 'Off Duty',       c: colors.textMuted},
           ].map(st => (
             <View key={st.l} style={[s.statCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
-              <Text style={[s.statNum, {color: st.c}]}>{st.n}</Text>
-              <Text style={[s.statLabel, {color: colors.textMuted}]}>{st.l}</Text>
+              <Text style={[s.statNum, {color: colors.textPrimary}]}>{st.n}</Text>
+              <View style={s.statLabelRow}>
+                <View style={[s.statDot, {backgroundColor: st.c}]} />
+                <Text style={[s.statLabel, {color: colors.textMuted}]}>{st.l}</Text>
+              </View>
             </View>
           ))}
         </View>
@@ -464,12 +469,14 @@ export function AdminStaffScreen() {
 const s = StyleSheet.create({
   safe: {flex: 1},
   scroll: {padding: 16, paddingBottom: 40},
-  addBtn: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 14, paddingVertical: 14, marginBottom: 14},
-  addBtnTxt: {color: '#fff', fontSize: 14, fontWeight: '800'},
+  addBtn: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 999, paddingVertical: 16, marginBottom: 16},
+  addBtnTxt: {color: '#fff', fontSize: 14, fontWeight: '700'},
   statsRow: {flexDirection: 'row', gap: 10, marginBottom: 12},
-  statCard: {flex: 1, alignItems: 'center', paddingVertical: 14, borderRadius: 14, borderWidth: 1},
+  statCard: {flex: 1, alignItems: 'center', paddingVertical: 18, borderRadius: 24, borderWidth: 1},
   statNum: {fontSize: 24, fontWeight: '900'},
-  statLabel: {fontSize: 11, fontWeight: '600', marginTop: 2, textAlign: 'center'},
+  statLabelRow: {flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3},
+  statDot: {width: 6, height: 6, borderRadius: 3},
+  statLabel: {fontSize: 11, fontWeight: '600', textAlign: 'center'},
   filterRow: {paddingBottom: 14, gap: 8},
   filterChip: {paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5},
   filterLabel: {fontSize: 13, fontWeight: '700'},
