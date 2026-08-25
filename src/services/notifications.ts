@@ -32,41 +32,85 @@ const RING_NOTIFICATION_ID = 'kims-assignment-alarm';
 // (accepted, reassigned, cancelled), whichever comes first. No lighter
 // version for any one role: everyone gets the same aggressive alert.
 const CRITICAL_RING_MS = 20000;
-const CRITICAL_VIBRATION_PATTERN = [0, 700, 300, 700, 300, 700, 300];
+
+// TWO patterns, because the two APIs have genuinely different contracts and
+// mixing them up is what broke every notification in 1.9.12–1.9.14:
+//
+//   notifee createChannel() -> validated in JS BEFORE the native call, and
+//   requires an EVEN number of STRICTLY POSITIVE values (see
+//   validateAndroidChannel.js -> isValidVibratePattern). An odd length or a
+//   leading 0 makes createChannel THROW.
+//
+//   React Native Vibration.vibrate() -> first entry is an initial delay, so
+//   0 is legal there and an odd length is fine.
+//
+// Passing the Vibration-style pattern to createChannel threw, which meant
+// channelsReady never flipped, initNotifications() rejected on every call,
+// and the bare catch in each caller swallowed it — so notifications AND
+// vibration silently stopped working app-wide, with nothing in the logs.
+// The signature rhythm: three quick taps, then one long buzz — "· · · —".
+// Deliberately NOT an even pulse, because an even pulse is what every other
+// app on the phone uses; an irregular rhythm is recognisable as "this is a
+// KIMS job alert" from a pocket without looking. One cycle ≈ 2.3s, so it
+// repeats roughly 8 times across the 20-second window.
+//
+//                        tap  gap  tap  gap  tap  gap  LONG  gap
+const CHANNEL_VIBRATION_PATTERN = [100, 250, 120, 250, 120, 250, 200, 700];
+//                       delay  tap  gap  tap  gap  tap  gap  LONG  gap
+const RN_VIBRATION_PATTERN = [0, 250, 120, 250, 120, 250, 200, 700, 400];
 
 let channelsReady = false;
 
+// One bad channel must never take down the others (or every other
+// notification path). Isolated + logged rather than thrown: a
+// misconfiguration should be loud in development, not invisible forever.
+async function createChannelSafe(config: Parameters<typeof notifee.createChannel>[0]): Promise<void> {
+  try {
+    await notifee.createChannel(config);
+  } catch (err) {
+    console.warn(`[notifications] channel "${config.id}" could not be created — ` +
+      'notifications on this channel will not display.', err);
+  }
+}
+
 export async function initNotifications(): Promise<void> {
   // Ask for permission (Android 13+ requires POST_NOTIFICATIONS at runtime).
-  await notifee.requestPermission();
-
-  if (!channelsReady) {
-    await notifee.createChannel({
-      id: CHANNEL_ID,
-      name: 'KIMS Parking Updates',
-      importance: AndroidImportance.HIGH,
-      sound: 'default',
-      vibration: true,
-    });
-    await notifee.createChannel({
-      id: ALARM_CHANNEL_ID,
-      name: 'KIMS Parking Alerts',
-      importance: AndroidImportance.HIGH,
-      sound: 'default',
-      vibration: true,
-      vibrationPattern: [300, 500, 300, 500],
-    });
-    await notifee.createChannel({
-      id: RING_CHANNEL_ID,
-      name: 'KIMS Job Assignment Alarm',
-      importance: AndroidImportance.HIGH,
-      sound: 'default',
-      vibration: true,
-      vibrationPattern: CRITICAL_VIBRATION_PATTERN,
-      bypassDnd: true,
-    });
-    channelsReady = true;
+  try {
+    await notifee.requestPermission();
+  } catch (err) {
+    console.warn('[notifications] requestPermission failed', err);
   }
+
+  if (channelsReady) return;
+
+  await createChannelSafe({
+    id: CHANNEL_ID,
+    name: 'KIMS Parking Updates',
+    importance: AndroidImportance.HIGH,
+    sound: 'default',
+    vibration: true,
+  });
+  await createChannelSafe({
+    id: ALARM_CHANNEL_ID,
+    name: 'KIMS Parking Alerts',
+    importance: AndroidImportance.HIGH,
+    sound: 'default',
+    vibration: true,
+    vibrationPattern: [300, 500, 300, 500],
+  });
+  await createChannelSafe({
+    id: RING_CHANNEL_ID,
+    name: 'KIMS Job Assignment Alarm',
+    importance: AndroidImportance.HIGH,
+    sound: 'default',
+    vibration: true,
+    vibrationPattern: CHANNEL_VIBRATION_PATTERN,
+    bypassDnd: true,
+  });
+
+  // Set regardless: the channels that DID create are usable, and retrying a
+  // rejected one on every notification just burns work to fail identically.
+  channelsReady = true;
 }
 
 let ringTimer: ReturnType<typeof setTimeout> | null = null;
@@ -104,12 +148,15 @@ export async function ringAssignmentAlarm(title: string, body: string): Promise<
     if (Platform.OS === 'android') {
       // `true` repeats the pattern indefinitely — the timer below is what
       // actually bounds it to 20s, same cap that governs the ring sound.
-      Vibration.vibrate(CRITICAL_VIBRATION_PATTERN, true);
+      // RN_VIBRATION_PATTERN, not the channel one: see the note above them.
+      Vibration.vibrate(RN_VIBRATION_PATTERN, true);
     }
     if (ringTimer) clearTimeout(ringTimer);
     ringTimer = setTimeout(() => { stopAssignmentAlarm().catch(() => {}); }, CRITICAL_RING_MS);
-  } catch {
-    // Alarms are best-effort; never crash over them.
+  } catch (err) {
+    // Alarms are best-effort; never crash over them — but say so, because a
+    // silent catch here is exactly what hid the broken-channel bug.
+    console.warn('[notifications] ringAssignmentAlarm failed', err);
   }
 }
 
@@ -172,8 +219,11 @@ export async function displayNotification(
         onlyAlertOnce: true,
       },
     });
-  } catch {
-    // Notifications are best-effort; never crash the app over them.
+  } catch (err) {
+    // Best-effort; never crash the app over a notification — but log it.
+    // A bare catch here is what let a bad channel config silently disable
+    // every notification in the app with nothing to go on.
+    console.warn('[notifications] displayNotification failed', err);
   }
 }
 
