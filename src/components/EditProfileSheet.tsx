@@ -400,7 +400,7 @@ function PasswordField({label, value, onChangeText, reveal, onToggleReveal, help
 }
 
 const s = StyleSheet.create({
-  backdrop: {...StyleSheet.absoluteFillObject},
+  backdrop: {position: 'absolute', top: 0, left: 0, right: 0, bottom: 0},
   wrap: {flex: 1, justifyContent: 'flex-end'},
   sheet: {borderTopLeftRadius: 24, borderTopRightRadius: 24, borderWidth: 1, borderBottomWidth: 0, paddingTop: 8, maxHeight: '92%'},
   handle: {alignSelf: 'center', width: 44, height: 4, borderRadius: 2, backgroundColor: 'rgba(150,150,150,0.5)', marginBottom: 6},
