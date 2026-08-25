@@ -15,7 +15,7 @@ export const isMyJobToRun = canRun;
 export function useValetActions() {
   const {drivers, tasks, visitors, arrivalNotices, dismissArrivalNotice, addTask, assignDriver, cancelTaskAssignment, markKeyCollected, pushNotification, addVisitor,
     assignVisitorDriver, cancelVisitorAssignment, assignRetrievalDriver, assignStaffRetrievalDriver, cancelVisitor, recallVisitor,
-    confirmTaskDelivered, confirmVisitorDelivered, cancelTask, recallTask, fetchTaskHistory,
+    confirmTaskDelivered, confirmVisitorDelivered, cancelTask, closeParkedSession, recallTask, fetchTaskHistory,
     acceptRetrieval} = useAppState();
   const {user} = useAuth();
   const myValetId = user?.role === 'valet' ? user.id : null;
@@ -89,6 +89,6 @@ export function useValetActions() {
     activeTasks, availableDrivers, retrievalRequests, activeVisitors, hasActiveRetrievalDriver,
     assignTaskDriver, assignVisitorPickupDriver, assignVisitorRetrievalDriver, assignStaffRetrievalDriver,
     cancelTaskAssignment, cancelVisitorAssignment,
-    confirmTaskDelivered, confirmVisitorDelivered, cancelTask, recallTask, fetchTaskHistory,
+    confirmTaskDelivered, confirmVisitorDelivered, cancelTask, closeParkedSession, recallTask, fetchTaskHistory,
   };
 }

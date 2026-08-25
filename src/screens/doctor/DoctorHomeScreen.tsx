@@ -1,5 +1,5 @@
 import React, {useState, useEffect, useRef} from 'react';
-import {View, Text, StyleSheet, ScrollView, Animated, Modal, Pressable, Easing} from 'react-native';
+import {View, Text, StyleSheet, ScrollView, Animated, Modal, Pressable, Easing, ActivityIndicator} from 'react-native';
 import {useDialog} from '../../components/AppDialog';
 import {computeTrip} from '../../utils/geo';
 import {PressableScale} from '../../components/PressableScale';
@@ -93,7 +93,35 @@ function BottomSheetModal({visible, onClose, children}: {visible: boolean; onClo
 export function DoctorHomeScreen() {
   const dialog = useDialog();
   const {user} = useAuth();
-  const {tasks, sendArrivalNotice, cancelMyRetrieval, hydrated} = useAppState();
+  const {tasks, sendArrivalNotice, cancelMyRetrieval, hydrated,
+    myArrivalNotice, cancelMyArrival} = useAppState();
+  const [cancellingArrival, setCancellingArrival] = useState(false);
+
+  // Plans changed before they set off — take the heads-up back so the valet
+  // isn't holding a spot for someone who isn't coming.
+  const handleCancelArrival = () => {
+    if (!myArrivalNotice || cancellingArrival) return;
+    dialog.show({
+      title: 'Not coming after all?',
+      message: 'This clears the heads-up you sent the valet team.',
+      tone: 'warning',
+      buttons: [
+        {text: 'Keep it', style: 'cancel'},
+        {text: 'Cancel arrival', style: 'destructive', onPress: async () => {
+          setCancellingArrival(true);
+          try {
+            await cancelMyArrival(myArrivalNotice.id);
+            setArrivalSent(null);
+            setArrivalEta(null);
+          } catch (err: any) {
+            dialog.alert(err.message || 'Could not cancel', {title: 'Error'});
+          } finally {
+            setCancellingArrival(false);
+          }
+        }},
+      ],
+    });
+  };
   const {colors, isDark} = useTheme();
   const navigation = useNavigation<any>();
   const {activeRetrieve, now, requestRetrieval} = useRetrievalRequest();
@@ -428,12 +456,33 @@ export function DoctorHomeScreen() {
             </PressableScale>
           )}
 
-          {arrivalSent && showEmptyState && (
+          {/* Driven by myArrivalNotice (the server's own record) rather than
+              the local arrivalSent flag alone — that flag is lost on every
+              app restart, which meant a heads-up you'd already sent quietly
+              disappeared from your side while still sitting in the valet's
+              queue. With the real record here, plans changing has an answer:
+              take it back. */}
+          {(myArrivalNotice || arrivalSent) && showEmptyState && (
             <View style={[s.noticeBanner, {backgroundColor: colors.success + '10', borderColor: colors.success + '30'}]}>
               <Icon name="bellAlert" size={16} color={colors.success} />
-              <Text style={[s.noticeBannerTxt, {color: colors.success}]}>
-                Valet notified — arriving in ~{arrivalSent >= 60 ? `${arrivalSent / 60} hr` : `${arrivalSent} min`}
-              </Text>
+              <View style={{flex: 1}}>
+                <Text style={[s.noticeBannerTxt, {color: colors.success}]}>
+                  {(() => {
+                    const eta = myArrivalNotice?.eta ?? arrivalSent ?? 0;
+                    return `Valet notified — arriving in ~${eta >= 60 ? `${eta / 60} hr` : `${eta} min`}`;
+                  })()}
+                </Text>
+              </View>
+              {!!myArrivalNotice && (
+                <PressableScale
+                  onPress={handleCancelArrival}
+                  disabled={cancellingArrival}
+                  hitSlop={{top: 8, bottom: 8, left: 8, right: 8}}>
+                  {cancellingArrival
+                    ? <ActivityIndicator size="small" color={colors.success} />
+                    : <Text style={[s.noticeCancelTxt, {color: colors.success}]}>Cancel</Text>}
+                </PressableScale>
+              )}
             </View>
           )}
 
@@ -747,6 +796,7 @@ const s = StyleSheet.create({
 
   noticeBanner:{flexDirection:'row',alignItems:'center',gap:8,borderRadius:14,borderWidth:1,padding:12},
   noticeBannerTxt:{flex:1,fontSize:12,fontWeight:'700'},
+  noticeCancelTxt:{fontSize:12.5,fontWeight:'800',textDecorationLine:'underline'},
 
   modalBackdrop:{position:'absolute',top:0,left:0,right:0,bottom:0,backgroundColor:'rgba(0,0,0,0.5)'},
   modalWrap:{flex:1,justifyContent:'flex-end'},

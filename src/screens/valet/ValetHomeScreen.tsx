@@ -83,7 +83,7 @@ export function ValetHomeScreen() {
   const {drivers, tasks, visitors, addTask, addVisitor, markKeyCollected,
     activeTasks, availableDrivers, retrievalRequests, assignTaskDriver, assignVisitorPickupDriver,
     cancelTaskAssignment,
-    confirmTaskDelivered, cancelTask, recallTask, arrivalNotices, dismissArrivalNotice,
+    confirmTaskDelivered, cancelTask, closeParkedSession, recallTask, arrivalNotices, dismissArrivalNotice,
     acceptRetrieval, myValetId} = useValetActions();
   const {hydrated} = useAppState();
   const {colors, isDark} = useTheme();
@@ -153,6 +153,7 @@ export function ValetHomeScreen() {
   // Which job's pending assignment is being cancelled right now — guards
   // against a double-tap firing the cancel-assignment call twice.
   const [cancellingAssignmentId, setCancellingAssignmentId] = useState<number | null>(null);
+  const [closingParkedId, setClosingParkedId] = useState<number | null>(null);
   // Same guard pattern for the other one-tap job actions that had none at
   // all — a slow response left the button tappable and a second tap either
   // fired a genuine duplicate (arrival -> two key tasks) or hit the server
@@ -581,6 +582,31 @@ export function ValetHomeScreen() {
     } finally {
       setDismissingArrivalId(null);
     }
+  };
+
+  // Frees the slot as well as closing the session, so the confirm has to be
+  // explicit about that: if the car is in fact still in the bay, the next
+  // park job could be sent to an occupied space.
+  const handleCloseParked = (taskId: number, carNumber: string, slotId: string) => {
+    if (closingParkedId != null) return;
+    dialog.show({
+      title: 'Car already left?',
+      message: `This closes ${carNumber}'s parking session and marks slot ${slotId} FREE for the next car.\n\nOnly do this if the car has physically gone — nobody ever asked for a retrieval.`,
+      tone: 'warning',
+      buttons: [
+        {text: 'Never mind', style: 'cancel'},
+        {text: 'Yes, free the slot', style: 'destructive', onPress: async () => {
+          setClosingParkedId(taskId);
+          try {
+            await closeParkedSession(taskId);
+          } catch (err: any) {
+            dialog.alert(err.message || 'Could not close this session', {title: 'Error'});
+          } finally {
+            setClosingParkedId(null);
+          }
+        }},
+      ],
+    });
   };
 
   const handleCancelTask = (taskId: number) => {
@@ -1687,6 +1713,25 @@ export function ValetHomeScreen() {
                     <Text style={s.departureBadgeTxt}>PARKED</Text>
                   </View>
                 </View>
+                {/* The escape hatch for a car that physically left without
+                    anyone ever requesting a retrieval. Nothing else in the
+                    lifecycle can clear it — the park task is already
+                    completed — so without this the session and its slot
+                    stay held forever. Destructive (it frees the slot), so
+                    the confirm spells out exactly that. */}
+                {!!ownerTask && (
+                  <PressableScale
+                    style={[s.parkedCloseBtn, {borderColor: colors.border, opacity: closingParkedId === ownerTask.id ? 0.6 : 1}]}
+                    disabled={closingParkedId != null}
+                    onPress={() => handleCloseParked(ownerTask.id, sl.carNumber ?? 'this car', sl.id)}>
+                    {closingParkedId === ownerTask.id
+                      ? <ActivityIndicator size="small" color={colors.textSecondary} />
+                      : <Icon name="close" size={14} color={colors.textSecondary} />}
+                    <Text style={[s.parkedCloseTxt, {color: colors.textSecondary}]}>
+                      {closingParkedId === ownerTask.id ? 'Closing…' : 'Car already left'}
+                    </Text>
+                  </PressableScale>
+                )}
               </View>
             );
           })
@@ -1752,6 +1797,8 @@ const s = StyleSheet.create({
   actionBadgeTxt:{color:'#fff',fontSize:10.5,fontWeight:'800'},
   sectionTitleRow:{flexDirection:'row',alignItems:'center',gap:6},
   sectionTitle:{fontSize:14,fontWeight:'800',marginBottom:12},
+  parkedCloseBtn:{flexDirection:'row',alignItems:'center',justifyContent:'center',gap:6,borderRadius:12,borderWidth:1,paddingVertical:10,marginTop:12},
+  parkedCloseTxt:{fontSize:12.5,fontWeight:'700'},
   driverPill:{borderRadius:16,borderWidth:1,width:128,overflow:'hidden'},
   driverPillTop:{flexDirection:'row',alignItems:'center',gap:8,padding:12,borderBottomWidth:1},
   rankBadge:{width:18,height:18,borderRadius:9,alignItems:'center',justifyContent:'center'},
