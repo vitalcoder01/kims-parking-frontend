@@ -16,7 +16,6 @@ import {Icon} from '../../components/Icon';
 import {SkeletonBlock} from '../../components/Skeleton';
 import {
   PLANNED_DEPARTURE_OPTIONS, ARRIVAL_ETA_OPTIONS, clockToMinutes, fmtClock12, to12, to24,
-  enRouteSeconds,
 } from '../../utils/retrievalClocks';
 
 // The doctor's PLANNED DEPARTURE — "I intend to leave in X minutes".
@@ -124,7 +123,7 @@ export function DoctorHomeScreen() {
   };
   const {colors, isDark} = useTheme();
   const navigation = useNavigation<any>();
-  const {activeRetrieve, now, requestRetrieval} = useRetrievalRequest();
+  const {activeRetrieve, requestRetrieval} = useRetrievalRequest();
   // Popups over the home screen, not separate full-screen views — the
   // doctor never leaves Home, Vehicle Status etc. stay visible underneath.
   const [showArrivalModal, setShowArrivalModal] = useState(false);
@@ -324,8 +323,7 @@ export function DoctorHomeScreen() {
             // What was here before counted UP in mm:ss — elapsed time since
             // the driver set off. "02:47" answers a question nobody asked; a
             // doctor deciding whether to walk down needs time REMAINING.
-            const enRoute = enRouteSeconds(activeRetrieve, now);
-            const onTheWay = activeRetrieve.status === 'in_transit' && enRoute != null;
+            const onTheWay = activeRetrieve.status === 'in_transit' && activeRetrieve.startedAt != null;
             const trip = onTheWay
               ? computeTrip({
                   startLat: activeRetrieve.driverStartLat, startLng: activeRetrieve.driverStartLng,

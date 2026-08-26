@@ -1,4 +1,4 @@
-import React, {createContext, useContext, useState, useCallback, useEffect, useRef} from 'react';
+import React, {createContext, useContext, useState, useCallback, useMemo, useEffect, useRef} from 'react';
 import {Platform, PermissionsAndroid, AppState as RNAppState} from 'react-native';
 import Geolocation from 'react-native-geolocation-service';
 import {displayNotification, ringAssignmentAlarm, stopAssignmentAlarm} from '../services/notifications';
@@ -197,8 +197,6 @@ interface AppState {
   // offered during an empty startup render (the doctor's Arrival card)
   // could fire against data that hadn't arrived yet.
   hydrated: boolean;
-  driverLocations: Record<number, DriverLocation>;
-  onlineDriverIds: number[];
   reassignPrompt: ReassignPrompt | null;
   clearReassignPrompt: () => void;
 
@@ -242,6 +240,25 @@ interface AppState {
 }
 
 const Ctx = createContext<AppState>({} as AppState);
+
+/*
+ * The live-map feed lives in its own context, deliberately.
+ *
+ * Drivers emit GPS on a ~2-3s watch (see the watchPosition config below),
+ * so with a handful of drivers on shift these two values change several
+ * times a second. They were part of the main AppState value, which meant
+ * every one of those pings changed that value's identity and re-rendered
+ * every screen subscribed to it -- the doctor's home, the driver's job
+ * list, the admin dashboards -- none of which read a driver's coordinates.
+ *
+ * Exactly one screen does (ValetMapScreen). Splitting the feed out means a
+ * ping now re-renders that screen and nothing else.
+ */
+interface DriverLocationsState {
+  driverLocations: Record<number, DriverLocation>;
+  onlineDriverIds: number[];
+}
+const LocationsCtx = createContext<DriverLocationsState>({driverLocations: {}, onlineDriverIds: []});
 
 // A driver's marker goes stale if no GPS ping for this long (phone offline
 // but socket not yet timed out) — the map drops it rather than lying.
@@ -936,20 +953,77 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
 
   const clearNotifications = useCallback(() => setNotifs([]), []);
 
+  // Memoized so its identity only changes when something in it actually
+  // changes. Every entry below is useState/useCallback/useMemo, and the
+  // object references nothing else, so this dependency list is exactly
+  // the value's own keys — there is no dep to forget.
+  //
+  // Without this the object was rebuilt on every provider render, so any
+  // state change anywhere in here re-rendered every consumer in the app.
+  const value = useMemo(() => ({
+    drivers,
+    tasks,
+    slots,
+    visitors,
+    arrivalNotices,
+    notifications,
+    hydrated,
+    reassignPrompt,
+    clearReassignPrompt,
+    addTask,
+    requestRetrieval,
+    cancelMyRetrieval,
+    sendArrivalNotice,
+    acceptRetrieval,
+    dismissArrivalNotice,
+    updateTask,
+    assignDriver,
+    cancelTaskAssignment,
+    acceptTask,
+    rejectTask,
+    markKeyCollected,
+    markParked,
+    markRetrieved,
+    confirmTaskDelivered,
+    cancelTask,
+    closeParkedSession,
+    recallTask,
+    markTaskReturned,
+    fetchTaskHistory,
+    reportLocation,
+    myArrivalNotice,
+    refreshMyArrival,
+    cancelMyArrival,
+    setDriverStatus,
+    addVisitor,
+    assignVisitorDriver,
+    cancelVisitorAssignment,
+    cancelVisitor,
+    recallVisitor,
+    assignRetrievalDriver,
+    assignStaffRetrievalDriver,
+    confirmVisitorDelivered,
+    pushNotification,
+    markNotificationRead,
+    clearNotifications,
+    refreshTasks: fetchAll,
+  }), [drivers, tasks, slots, visitors, arrivalNotices, notifications, hydrated, reassignPrompt, clearReassignPrompt, addTask, requestRetrieval, cancelMyRetrieval, sendArrivalNotice, acceptRetrieval, dismissArrivalNotice, updateTask, assignDriver, cancelTaskAssignment, acceptTask, rejectTask, markKeyCollected, markParked, markRetrieved, confirmTaskDelivered, cancelTask, closeParkedSession, recallTask, markTaskReturned, fetchTaskHistory, reportLocation, myArrivalNotice, refreshMyArrival, cancelMyArrival, setDriverStatus, addVisitor, assignVisitorDriver, cancelVisitorAssignment, cancelVisitor, recallVisitor, assignRetrievalDriver, assignStaffRetrievalDriver, confirmVisitorDelivered, pushNotification, markNotificationRead, clearNotifications, fetchAll]);
+
+  const locationsValue = useMemo(
+    () => ({driverLocations, onlineDriverIds}),
+    [driverLocations, onlineDriverIds],
+  );
+
   return (
-    <Ctx.Provider value={{
-      drivers, tasks, slots, visitors, arrivalNotices, notifications, hydrated,
-      driverLocations, onlineDriverIds, reassignPrompt, clearReassignPrompt,
-      addTask, requestRetrieval, cancelMyRetrieval, sendArrivalNotice, acceptRetrieval, dismissArrivalNotice, updateTask, assignDriver, cancelTaskAssignment, acceptTask, rejectTask, markKeyCollected, markParked, markRetrieved, confirmTaskDelivered, cancelTask, closeParkedSession, recallTask, markTaskReturned, fetchTaskHistory, reportLocation,
-      myArrivalNotice, refreshMyArrival, cancelMyArrival,
-      setDriverStatus, addVisitor,
-      assignVisitorDriver, cancelVisitorAssignment, cancelVisitor, recallVisitor,
-      assignRetrievalDriver, assignStaffRetrievalDriver, confirmVisitorDelivered,
-      pushNotification, markNotificationRead, clearNotifications, refreshTasks: fetchAll,
-    }}>
-      {children}
+    <Ctx.Provider value={value}>
+      <LocationsCtx.Provider value={locationsValue}>
+        {children}
+      </LocationsCtx.Provider>
     </Ctx.Provider>
   );
 }
 
 export function useAppState() { return useContext(Ctx); }
+
+/** Live driver positions. Separate on purpose — see LocationsCtx. */
+export function useDriverLocations() { return useContext(LocationsCtx); }

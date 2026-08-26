@@ -3,7 +3,7 @@ import {View, Text, StyleSheet, ScrollView, StatusBar} from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {WebView} from 'react-native-webview';
 import {useTheme} from '../../context/ThemeContext';
-import {useAppState} from '../../context/AppStateContext';
+import {useAppState, useDriverLocations} from '../../context/AppStateContext';
 import {Icon} from '../../components/Icon';
 import {LEAFLET_MAP_HTML} from '../../components/leafletMapHtml';
 
@@ -12,7 +12,9 @@ import {LEAFLET_MAP_HTML} from '../../components/leafletMapHtml';
 // of record) so this screen is GPS-only now.
 export function ValetMapScreen() {
   const {colors, isDark} = useTheme();
-  const {drivers, tasks, driverLocations, onlineDriverIds} = useAppState();
+  const {drivers, tasks} = useAppState();
+  // Separate context — a GPS ping re-renders this screen and nothing else.
+  const {driverLocations, onlineDriverIds} = useDriverLocations();
   const webviewRef = useRef<any>(null);
   const fittedOnce = useRef(false);
 
