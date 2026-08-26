@@ -340,7 +340,26 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
   // Drivers need `visitors` too — DriverJobsScreen filters it to their own assignments.
   const needsVisitors = needsOpsData || user?.role === 'driver';
 
+  /*
+   * Guards against two refreshes overwriting each other out of order.
+   *
+   * Resuming the app fires this twice at once -- once from the
+   * foreground/visibility handler and once from the socket's `connect`
+   * after it reconnects -- which is the single most common way the app is
+   * used, not a rare interleaving. Both call Promise.all and then setState
+   * with whatever they got; whichever HTTP response happens to land second
+   * wins, even when it is the older snapshot. The result is a screen that
+   * silently reverts: a job that just completed reappears, a new assignment
+   * disappears, until the next socket event happens to correct it.
+   *
+   * Each call takes a ticket and only commits if it still holds the latest
+   * one. A superseded response is dropped rather than applied, because a
+   * newer request is already in flight with better data.
+   */
+  const fetchSeqRef = useRef(0);
+
   const fetchAll = useCallback(async () => {
+    const seq = ++fetchSeqRef.current;
     const [t, s, n, d, v, a] = await Promise.all([
       tasksApi.list(),
       slotsApi.list(),
@@ -349,6 +368,10 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
       needsVisitors ? visitorsApi.list() : Promise.resolve(null),
       needsOpsData ? arrivalsApi.list() : Promise.resolve(null),
     ]);
+    // Superseded while we were awaiting — a newer fetchAll is already
+    // in flight, so applying this would move the UI backwards.
+    if (seq !== fetchSeqRef.current) return;
+
     const tasks: ParkingTask[] = t.map(mapTask);
     const visitorRows: Visitor[] | null = v ? v.map(mapVisitor) : null;
     setTasks(tasks);
