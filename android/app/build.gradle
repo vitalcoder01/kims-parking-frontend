@@ -80,23 +80,26 @@ react {
 }
 
 /**
- * Run R8 on release builds to shrink the Java bytecode.
+ * Run R8 on release builds to shrink the Java bytecode. Off, on purpose.
  *
- * The dex is 22 MB of the APK with this off. Keep rules for everything
- * reached reflectively -- the React Native bridge, notifee, FCM, WebView's
- * JavascriptInterface -- are in proguard-rules.pro.
+ * The dex looks like 22 MB when measured uncompressed, which makes R8 look
+ * like the biggest win available. In the APK it compresses to 8.23 MB, so
+ * R8 can take off roughly 2.5-4 MB -- against the 30.9 MB that dropping
+ * the x86 ABIs and the unused fonts removes for free.
  *
- * MUST be verified on a real device before any release built with it goes
- * out. R8 failures do not show up at build or install time: the APK is
- * produced, installs, and opens normally, and something reached only by
- * reflection is simply gone. Check, at minimum, that notifications arrive
- * and vibrate, both maps render, and login works. Notifications are the
- * one to actually wait for -- 1.9.12 shipped an app that looked completely
- * healthy and silently alerted nobody.
+ * That is about 7% of the total saving in exchange for the one risk in
+ * this area that does not announce itself. R8 strips what it cannot see
+ * referenced, and the bridge, notifee, FCM and WebView are all reached by
+ * reflection or JNI; when a keep rule is missing the APK still builds,
+ * installs and opens perfectly, and something simply never runs. That is
+ * the exact shape of 1.9.12, which looked healthy and alerted nobody.
  *
- * Setting this back to false is a complete revert.
+ * Not worth 4 MB. proguard-rules.pro is written and kept ready, so this is
+ * a one-line change if the trade ever looks different -- but flipping it
+ * to true means the next build MUST be checked on a real device:
+ * notifications arriving AND vibrating, both maps rendering, login.
  */
-def enableProguardInReleaseBuilds = true
+def enableProguardInReleaseBuilds = false
 
 /**
  * The preferred build flavor of JavaScriptCore (JSC)

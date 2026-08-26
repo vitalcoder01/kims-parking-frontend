@@ -1,5 +1,11 @@
 # ProGuard/R8 rules for the release build.
 #
+# NOT CURRENTLY ACTIVE. enableProguardInReleaseBuilds is false in
+# build.gradle -- see the note there for why (R8 buys ~2.5-4 MB against the
+# 30.9 MB the ABI and font changes already remove, and its failure mode is
+# silent). This file is kept complete and ready so enabling it is a
+# one-line change rather than a research project.
+#
 # R8 removes what it cannot see referenced. Everything below is reached by
 # reflection, by JNI, or from JavaScript at runtime -- none of which R8 can
 # follow -- so without these rules the APK builds and installs cleanly and
