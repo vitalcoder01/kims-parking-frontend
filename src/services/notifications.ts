@@ -54,10 +54,35 @@ const CRITICAL_RING_MS = 20000;
 // KIMS job alert" from a pocket without looking. One cycle ≈ 2.3s, so it
 // repeats roughly 8 times across the 20-second window.
 //
+// One cycle, as React Native on/off pairs (no leading delay):
 //                        tap  gap  tap  gap  tap  gap  LONG  gap
+const SIGNATURE_CYCLE = [250, 120, 250, 120, 250, 200, 700, 400];
+
+// The CHANNEL pattern is one cycle only, with a positive lead-in to satisfy
+// notifee's even-length/all-positive rule. This is what the SYSTEM plays
+// when a notification posts — including when the app is fully killed, since
+// system_server does it with no app process involved. That's the "killed ->
+// notification + one buzz" behaviour, and it is guaranteed.
 const CHANNEL_VIBRATION_PATTERN = [100, 250, 120, 250, 120, 250, 200, 700];
-//                       delay  tap  gap  tap  gap  tap  gap  LONG  gap
-const RN_VIBRATION_PATTERN = [0, 250, 120, 250, 120, 250, 200, 700, 400];
+
+// The full ~20s pattern is built by REPEATING the cycle into one finite
+// array, then played with repeat=false.
+//
+// This is deliberately NOT `Vibration.vibrate(cycle, true)` + a JS timer to
+// stop it. RN maps repeat=true to VibrationEffect.createWaveform(pattern, 0)
+// — repeat forever (VibrationModule.kt) — so that approach only ends if the
+// JS timer actually fires. In the killed-app path the FCM handler starts the
+// buzz and the headless task then dies, so the timer never runs and the
+// phone vibrates until reboot. A finite pattern cannot run away: the OS
+// plays it once and stops, in every app state.
+function buildRingPattern(totalMs: number): number[] {
+  const cycleMs = SIGNATURE_CYCLE.reduce((a, b) => a + b, 0);
+  const reps = Math.max(1, Math.round(totalMs / cycleMs));
+  const out: number[] = [0]; // RN treats entry 0 as the initial delay
+  for (let i = 0; i < reps; i++) out.push(...SIGNATURE_CYCLE);
+  return out;
+}
+const RN_VIBRATION_PATTERN = buildRingPattern(CRITICAL_RING_MS);
 
 let channelsReady = false;
 
@@ -143,14 +168,22 @@ export async function ringAssignmentAlarm(title: string, body: string): Promise<
         sound: 'default',
         ongoing: true,
         autoCancel: false,
+        // OS-level self-destruct. loopSound keeps the alarm sound going
+        // "until the notification is cancelled", and ongoing+autoCancel:false
+        // means the user cannot swipe it away — so if the only thing that
+        // ever cancelled it were a JS timer, a killed app would leave an
+        // undismissable notification looping sound forever. Android cancels
+        // it at this deadline whether or not any JS is still alive.
+        timeoutAfter: CRITICAL_RING_MS,
       },
     });
     if (Platform.OS === 'android') {
-      // `true` repeats the pattern indefinitely — the timer below is what
-      // actually bounds it to 20s, same cap that governs the ring sound.
-      // RN_VIBRATION_PATTERN, not the channel one: see the note above them.
-      Vibration.vibrate(RN_VIBRATION_PATTERN, true);
+      // repeat=false: a finite ~20s pattern that ends itself. See
+      // buildRingPattern for why an infinite pattern + JS timer was unsafe.
+      Vibration.vibrate(RN_VIBRATION_PATTERN, false);
     }
+    // Belt-and-braces only — both the vibration and the notification now
+    // terminate on their own, so nothing depends on this firing.
     if (ringTimer) clearTimeout(ringTimer);
     ringTimer = setTimeout(() => { stopAssignmentAlarm().catch(() => {}); }, CRITICAL_RING_MS);
   } catch (err) {
