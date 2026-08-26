@@ -36,21 +36,6 @@ function relativeTime(iso: string | undefined): string {
   return `Updated ${Math.floor(secs / 3600)}h ago`;
 }
 
-// Tunable heuristics, not contractual SLAs — just enough to turn a raw
-// minutes figure into an at-a-glance "is this good" signal.
-function parkRating(m: number | null): {label: string; tone: 'good' | 'ok' | 'bad'} | null {
-  if (m == null) return null;
-  if (m <= 5) return {label: 'Excellent', tone: 'good'};
-  if (m <= 9) return {label: 'Good', tone: 'ok'};
-  return {label: 'Needs attention', tone: 'bad'};
-}
-function retrieveRating(m: number | null): {label: string; tone: 'good' | 'ok' | 'bad'} | null {
-  if (m == null) return null;
-  if (m <= 3) return {label: 'Excellent', tone: 'good'};
-  if (m <= 6) return {label: 'Good', tone: 'ok'};
-  return {label: 'Needs attention', tone: 'bad'};
-}
-
 function buildShareText(data: AnalyticsOverview): string {
   const visitorTotal = data.visitorJobs + data.staffJobs;
   const visitorPct = visitorTotal > 0 ? Math.round((data.visitorJobs / visitorTotal) * 100) : 0;
@@ -94,8 +79,6 @@ export function AnalyticsScreen() {
   const visitorPct = visitorTotal > 0 ? Math.round(((data?.visitorJobs ?? 0) / visitorTotal) * 100) : 0;
   const activeDrivers = (data?.drivers ?? []).filter(d => d.totalCompleted > 0);
   const idleDrivers = (data?.drivers ?? []).filter(d => d.totalCompleted === 0);
-  const pRating = parkRating(data?.avgParkMinutes ?? null);
-  const rRating = retrieveRating(data?.avgRetrieveMinutes ?? null);
 
   // Crowns: the fastest average among drivers who actually have a
   // qualifying average — a single job's lucky timing shouldn't outrank a
@@ -129,10 +112,6 @@ export function AnalyticsScreen() {
       setSharing(false);
     }
   };
-
-  const toneColor = (tone: 'good' | 'ok' | 'bad') =>
-    tone === 'good' ? colors.success : tone === 'ok' ? colors.warning : colors.error;
-
   return (
     <SafeAreaView edges={['top','bottom','left','right']} style={[s.safe, {backgroundColor: colors.background}]}>
       <StatusBar barStyle="light-content" backgroundColor={isDark ? BRAND_GRADIENT_DARK[0] : BRAND_GRADIENT[0]} />
@@ -195,35 +174,25 @@ export function AnalyticsScreen() {
         ) : (
         <View style={s.body}>
           {/* Performance — rated, not just reported */}
+          {/* The measured time, and nothing invented on top of it.
+              This used to carry a coloured left stripe and a "Excellent /
+              Good / Needs attention" verdict chip driven by hardcoded
+              thresholds nobody at KIMS ever agreed to — which is how the
+              same 7 minutes could read "Good" for parking and "Needs
+              attention" for retrieval, side by side, and look arbitrary.
+              A real SLA would come from admin-configurable targets, not a
+              constant in this file. Until it does, show the number. */}
           <View style={s.rowGap}>
             <View style={[s.perfCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
-              <View style={[s.perfAccent, {backgroundColor: pRating ? toneColor(pRating.tone) : colors.border}]} />
               <View style={s.perfBody}>
-                <View style={[s.timeIconWrap, {backgroundColor: colors.success + '18'}]}>
-                  <Icon name="carKey" size={17} color={colors.success} />
-                </View>
                 <Text style={[s.timeVal, {color: colors.textPrimary}]}>{minutesLabel(data?.avgParkMinutes ?? null)}</Text>
                 <Text style={[s.timeLbl, {color: colors.textMuted}]}>Avg. park time</Text>
-                {pRating && (
-                  <View style={[s.ratingChip, {backgroundColor: toneColor(pRating.tone) + '18'}]}>
-                    <Text style={[s.ratingChipTxt, {color: toneColor(pRating.tone)}]}>{pRating.label}</Text>
-                  </View>
-                )}
               </View>
             </View>
             <View style={[s.perfCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
-              <View style={[s.perfAccent, {backgroundColor: rRating ? toneColor(rRating.tone) : colors.border}]} />
               <View style={s.perfBody}>
-                <View style={[s.timeIconWrap, {backgroundColor: colors.info + '18'}]}>
-                  <Icon name="route" size={17} color={colors.info} />
-                </View>
                 <Text style={[s.timeVal, {color: colors.textPrimary}]}>{minutesLabel(data?.avgRetrieveMinutes ?? null)}</Text>
                 <Text style={[s.timeLbl, {color: colors.textMuted}]}>Avg. retrieve time</Text>
-                {rRating && (
-                  <View style={[s.ratingChip, {backgroundColor: toneColor(rRating.tone) + '18'}]}>
-                    <Text style={[s.ratingChipTxt, {color: toneColor(rRating.tone)}]}>{rRating.label}</Text>
-                  </View>
-                )}
               </View>
             </View>
           </View>
@@ -231,10 +200,7 @@ export function AnalyticsScreen() {
           {/* Activity by hour — real 24h histogram, tap any bar to inspect it */}
           <View style={[s.chartCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
             <View style={s.chartHeadRow}>
-              <View style={{flexDirection: 'row', alignItems: 'center', gap: 6}}>
-                <Icon name="trending" size={15} color={colors.primary} />
-                <Text style={[s.chartTitle, {color: colors.textPrimary}]}>Activity by Hour</Text>
-              </View>
+              <Text style={[s.chartTitle, {color: colors.textPrimary}]}>Activity by Hour</Text>
               {activeHour != null && (
                 <Text style={[s.chartCaption, {color: colors.textMuted}]}>
                   {activeHourCount} job{activeHourCount === 1 ? '' : 's'} · {hourLabel(activeHour)}
@@ -286,10 +252,7 @@ export function AnalyticsScreen() {
           </View>
 
           {/* Leaderboard — tap a row to expand */}
-          <View style={{flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 12}}>
-            <Icon name="trophy" size={16} color="#F5C168" />
-            <Text style={[s.sectionTitle, {color: colors.textPrimary, marginBottom: 0}]}>Top Performers</Text>
-          </View>
+          <Text style={[s.sectionTitle, {color: colors.textPrimary}]}>Top Performers</Text>
 
           {activeDrivers.length === 0 && idleDrivers.length === 0 ? (
             <View style={[s.emptyBox, {borderColor: colors.border}]}>
@@ -416,13 +379,9 @@ const styles = StyleSheet.create({
   body: {paddingHorizontal: 20, paddingTop: 18},
   rowGap: {flexDirection: 'row', gap: 12, marginBottom: 14},
   perfCard: {flex: 1, borderRadius: 16, borderWidth: 1, overflow: 'hidden', flexDirection: 'row'},
-  perfAccent: {width: 4},
   perfBody: {flex: 1, padding: 14, alignItems: 'flex-start'},
-  timeIconWrap: {width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginBottom: 10},
   timeVal: {fontSize: 17, fontWeight: '900', fontVariant: ['tabular-nums']},
   timeLbl: {fontSize: 11, fontWeight: '700', marginTop: 2},
-  ratingChip: {marginTop: 8, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999},
-  ratingChipTxt: {fontSize: 10, fontWeight: '800'},
   chartCard: {borderRadius: 16, borderWidth: 1, padding: 14, marginBottom: 14},
   chartHeadRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12},
   chartTitle: {fontSize: 13.5, fontWeight: '800'},
