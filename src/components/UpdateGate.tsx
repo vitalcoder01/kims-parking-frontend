@@ -3,11 +3,21 @@ import {View, Text, StyleSheet, Linking, ActivityIndicator, Platform, AppState} 
 import ReactNativeBlobUtil from 'react-native-blob-util';
 import {PressableScale} from './PressableScale';
 import {useTheme} from '../context/ThemeContext';
+import {useAuth} from '../context/AuthContext';
 import {appApi} from '../services/api';
 import {Icon} from './Icon';
 import {APP_VERSION_CODE, APP_VERSION_NAME} from '../config/version';
 
-type UpdateInfo = {latestVersionCode: number; latestVersionName: string; apkUrl: string; notes?: string};
+type UpdateInfo = {
+  latestVersionCode: number;
+  latestVersionName: string;
+  apkUrl: string;
+  notes?: string;
+  // Absent on responses from before role-scoped releases existed. Undefined
+  // means "no floor" — never coerce it to 0, which would read as a floor
+  // every build clears, or to Infinity, which would block every build.
+  minimumSupportedVersionCode?: number;
+};
 type GateState = {status: 'checking'} | {status: 'ok'} | {status: 'blocked'; info: UpdateInfo};
 type DownloadState = {phase: 'idle'} | {phase: 'downloading'; pct: number; attempt: number} | {phase: 'error'; message: string};
 
@@ -107,6 +117,12 @@ const STILL_OPEN_RECHECK_MS = 5 * 60 * 1000;
 
 export function UpdateGate({children}: {children: React.ReactNode}) {
   const {colors} = useTheme();
+  // Which release channel to ask about. The gate deliberately renders above
+  // the login screen, so on a fresh install or a signed-out phone there is
+  // no role yet and the backend answers with the default channel — that is
+  // the correct answer for someone who has not said who they are.
+  const {user, isLoading: authLoading} = useAuth();
+  const role = user?.role;
   const [state, setState] = useState<GateState>({status: 'checking'});
   const [download, setDownload] = useState<DownloadState>({phase: 'idle'});
   // Read inside listeners without re-subscribing them on every state change.
@@ -122,10 +138,20 @@ export function UpdateGate({children}: {children: React.ReactNode}) {
     // finds a real block, so an already-open session isn't interrupted by
     // anything except the update gate itself when one genuinely lands.
     const check = (isInitial: boolean) => {
-      appApi.checkVersion()
+      appApi.checkVersion(role)
         .then(data => {
           if (cancelled) return;
-          if (data.latestVersionCode > APP_VERSION_CODE) {
+          // Two independent reasons to block, and the floor is not
+          // redundant with the first. A role held back on an older release
+          // is not behind ITS channel's latest, so the first test passes it
+          // — the floor is what stops that hold from drifting below what
+          // the backend still speaks to. The server refuses to advertise a
+          // channel below its own floor, so this can always be satisfied by
+          // installing what it points at.
+          const behindChannel = data.latestVersionCode > APP_VERSION_CODE;
+          const belowFloor = data.minimumSupportedVersionCode != null
+            && data.minimumSupportedVersionCode > APP_VERSION_CODE;
+          if (behindChannel || belowFloor) {
             setState({status: 'blocked', info: data});
           } else if (isInitial) {
             setState({status: 'ok'});
@@ -139,6 +165,13 @@ export function UpdateGate({children}: {children: React.ReactNode}) {
           if (!cancelled && isInitial) setState({status: 'ok'});
         });
     };
+
+    // Wait for the session to hydrate before the first check, so a signed-in
+    // valet is asked about the valet channel rather than the default one.
+    // AuthProvider reads a single AsyncStorage key, so this is a very short
+    // wait; without it the launch check would always fire role-less and the
+    // right channel would only arrive on some later recheck.
+    if (authLoading) return () => { cancelled = true; };
 
     check(true);
 
@@ -160,7 +193,10 @@ export function UpdateGate({children}: {children: React.ReactNode}) {
     }, STILL_OPEN_RECHECK_MS);
 
     return () => { cancelled = true; sub.remove(); clearInterval(interval); };
-  }, []);
+    // Re-checks when the role appears or changes: signing in as a valet has
+    // to be able to pull that phone onto the valet channel straight away,
+    // not at whatever the next resume or 5-minute tick happens to be.
+  }, [authLoading, role]);
 
   if (state.status === 'checking') {
     return (

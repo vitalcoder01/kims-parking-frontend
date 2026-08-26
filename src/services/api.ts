@@ -367,8 +367,20 @@ export const analyticsApi = {
 
 // ── App version / updates ───────────────────────────────────────────────
 export const appApi = {
-  checkVersion: (): Promise<{latestVersionCode: number; latestVersionName: string; apkUrl: string; notes?: string}> =>
-    client.get('/app/version').then(r => r.data),
+  // `role` is a targeting hint so the backend can answer with that role's
+  // release channel (see backend config/appVersion.js). Omitted before
+  // login and on a fresh install, which resolves to the default channel.
+  //
+  // minimumSupportedVersionCode is optional because older APKs in the field
+  // predate it — treat its absence as "no floor", never as zero-blocks-all.
+  checkVersion: (role?: string): Promise<{
+    latestVersionCode: number;
+    latestVersionName: string;
+    apkUrl: string;
+    notes?: string;
+    minimumSupportedVersionCode?: number;
+  }> =>
+    client.get('/app/version', {params: role ? {role} : undefined}).then(r => r.data),
 };
 
 export default client;
