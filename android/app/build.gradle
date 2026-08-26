@@ -80,9 +80,23 @@ react {
 }
 
 /**
- * Set this to true to Run Proguard on Release builds to minify the Java bytecode.
+ * Run R8 on release builds to shrink the Java bytecode.
+ *
+ * The dex is 22 MB of the APK with this off. Keep rules for everything
+ * reached reflectively -- the React Native bridge, notifee, FCM, WebView's
+ * JavascriptInterface -- are in proguard-rules.pro.
+ *
+ * MUST be verified on a real device before any release built with it goes
+ * out. R8 failures do not show up at build or install time: the APK is
+ * produced, installs, and opens normally, and something reached only by
+ * reflection is simply gone. Check, at minimum, that notifications arrive
+ * and vibrate, both maps render, and login works. Notifications are the
+ * one to actually wait for -- 1.9.12 shipped an app that looked completely
+ * healthy and silently alerted nobody.
+ *
+ * Setting this back to false is a complete revert.
  */
-def enableProguardInReleaseBuilds = false
+def enableProguardInReleaseBuilds = true
 
 /**
  * The preferred build flavor of JavaScriptCore (JSC)
@@ -160,6 +174,14 @@ android {
 
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+
+            // shrinkResources is deliberately NOT enabled alongside the
+            // above. React Native resolves drawables by name at runtime
+            // (require('./img.png') becomes a getIdentifier lookup), so the
+            // resource shrinker sees no reference to them and strips images
+            // that are genuinely used -- they then fail to render with no
+            // build-time warning. res/ is only 0.7 MB here, so it would buy
+            // very little for a real risk of missing artwork.
         }
     }
 }
