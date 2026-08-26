@@ -1,6 +1,24 @@
 apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
+
+// Ship only the icon font we actually use.
+//
+// fonts.gradle packages all 12 vector-icons families by default -- 3.7 MB,
+// of which 2.6 MB is fonts nothing references. src/components/Icon.tsx has
+// the only vector-icons import in the app (MaterialCommunityIcons), and no
+// dependency pulls the package either, so the other eleven were pure
+// weight.
+//
+// fonts.gradle reads project.vectoricons inside afterEvaluate and defaults
+// to ["*.ttf"] when it is absent, so the name has to match exactly -- a
+// typo'd key silently falls back to copying all twelve again. If a second
+// family is ever imported, add its .ttf here or its glyphs render as empty
+// boxes.
+project.ext.vectoricons = [
+    iconFontNames: ['MaterialCommunityIcons.ttf']
+]
+
 apply from: "../../node_modules/react-native-vector-icons/fonts.gradle"
 
 def keystorePropertiesFile = rootProject.file("keystore.properties")
@@ -119,6 +137,27 @@ android {
             // can still build for local testing — never use that fallback
             // for anything actually distributed.
             signingConfig keystorePropertiesFile.exists() ? signingConfigs.release : signingConfigs.debug
+
+            // Ship ARM only.
+            //
+            // x86 and x86_64 are emulator architectures -- no Android phone
+            // runs them -- and they were 29.5 MB of the APK's 53.4 MB of
+            // native libraries. Every user was downloading two full copies
+            // of the native runtime that their device can never load.
+            //
+            // Deliberately scoped to the release build rather than set via
+            // gradle.properties' reactNativeArchitectures, so debug builds
+            // keep all four and an x86_64 emulator still works for local
+            // development. Nothing about the dev workflow changes.
+            //
+            // armeabi-v7a stays: it covers older 32-bit handsets, and a
+            // phone that cannot install the APK at all is a far worse
+            // outcome than 9.7 MB. Drop it only once the device fleet is
+            // confirmed to be entirely arm64.
+            ndk {
+                abiFilters "armeabi-v7a", "arm64-v8a"
+            }
+
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
@@ -144,4 +183,36 @@ if (googleServicesJson.exists()) {
     apply plugin: 'com.google.gms.google-services'
 } else {
     logger.warn('google-services.json not found - building WITHOUT Firebase push (FCM disabled)')
+}
+
+/*
+ * Make the vector-icons font copy behave like a sync.
+ *
+ * fonts.gradle uses a plain Copy task, which only ever ADDS files -- it
+ * never removes a font that has left iconFontNames. The whole intermediates
+ * directory is registered as an assets source dir, so fonts copied by an
+ * earlier build keep getting packaged: after narrowing iconFontNames to one
+ * family, an incremental build still shipped all nineteen sitting in that
+ * folder from before, and the APK would not shrink by a single byte with
+ * nothing to indicate why.
+ *
+ * Clearing the directory first makes the output match the declared list on
+ * every build, clean or not. upToDateWhen(false) is required alongside it:
+ * without it Gradle can skip the task as up-to-date while doFirst has
+ * already deleted the fonts, packaging none at all and rendering every icon
+ * as an empty box. Re-copying one 1.1 MB file per build is not worth
+ * optimising.
+ *
+ * Registered from here, after fonts.gradle has been applied, so its own
+ * afterEvaluate has already created the task by the time this runs.
+ */
+afterEvaluate {
+    def fontsTask = tasks.findByName("copyReactNativeVectorIconFonts")
+    if (fontsTask != null) {
+        def stagedFontsDir = file("$buildDir/intermediates/ReactNativeVectorIcons/fonts")
+        fontsTask.outputs.upToDateWhen { false }
+        fontsTask.doFirst {
+            delete stagedFontsDir
+        }
+    }
 }
