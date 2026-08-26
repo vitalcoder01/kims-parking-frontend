@@ -310,13 +310,14 @@ export const notificationsApi = {
     client.post('/notifications/unregister-device', {token}).then(() => undefined),
 };
 
-// ── Attendance ───────────────────────────────────────────────────────────
-export const attendanceApi = {
-  checkIn: (gate?: string) => client.post('/attendance/check-in', {gate}).then(r => r.data.attendance),
-  checkOut: () => client.post('/attendance/check-out').then(r => r.data.attendance),
-  myHistory: (limit?: number) =>
-    client.get('/attendance/me', {params: {limit}}).then(r => r.data.attendance),
-};
+// No attendanceApi here on purpose. Attendance is not something anyone
+// checks into: the backend marks presence itself (attendance.service's
+// ensurePresent, called when a valet raises a task or a driver acts on
+// one), and the Attendance screen reads it back through adminApi. The
+// manual check-in/check-out/history wrappers that used to sit here were
+// never called by any screen — they described a flow this app does not
+// have, and their presence made the web port look like it was missing a
+// feature that does not exist.
 
 // ── Admin ────────────────────────────────────────────────────────────────
 export const adminApi = {
