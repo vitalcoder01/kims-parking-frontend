@@ -236,6 +236,9 @@ export function ValetHomeScreen() {
   const {reassignPrompt, clearReassignPrompt, slots} = useAppState();
   useEffect(() => {
     if (!reassignPrompt) return;
+    // Marked true when this prompt is superseded or the screen unmounts —
+    // see the Reassign/Later handlers below.
+    let stale = false;
     const what = reassignPrompt.kind === 'task'
       ? `${reassignPrompt.task?.carNumber ?? 'this car'} (${reassignPrompt.task?.doctorName ?? ''})`
       : `${reassignPrompt.visitor?.name ?? 'this visitor'}'s car`;
@@ -265,11 +268,18 @@ export function ValetHomeScreen() {
             if (isReminder) tasksApi.silenceDriverReminder(id).catch(() => {});
             else tasksApi.acknowledge(id).catch(() => {});
           }
-          clearReassignPrompt();
+          // Not ours to clear if superseded — that would dismiss a newer
+          // prompt the valet has not answered yet.
+          if (!stale) clearReassignPrompt();
         }},
         {
           text: 'Reassign now',
           onPress: () => {
+            // Alert buttons fire whenever the valet gets round to them, and
+            // the prompt they were opened for may have been superseded by a
+            // newer reassign since. Acting then would jump to a job nobody
+            // was asked about. Same guard as the web port.
+            if (stale) return;
             if (reassignPrompt.kind === 'task' && reassignPrompt.task) {
               setPendingVisitorId(null);
               setPendingTaskId(reassignPrompt.task.id);
@@ -278,11 +288,14 @@ export function ValetHomeScreen() {
               setPendingVisitorId(reassignPrompt.visitor.id);
             }
             setScreen('assign');
-            clearReassignPrompt();
+            // Not ours to clear if superseded — that would dismiss a newer
+          // prompt the valet has not answered yet.
+          if (!stale) clearReassignPrompt();
           },
         },
       ],
     });
+    return () => { stale = true; };
   }, [reassignPrompt, clearReassignPrompt]);
 
   const handleScanCode = async () => {
