@@ -15,6 +15,9 @@
     "node_modules",
     "android",
     "ios",
-    "__tests__"
+    "__tests__",
+    "scripts",
+    "**/*.test.ts",
+    "**/*.test.tsx"
   ]
 }
