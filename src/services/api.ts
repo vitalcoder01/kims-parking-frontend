@@ -367,6 +367,36 @@ export const analyticsApi = {
 };
 
 // ── App version / updates ───────────────────────────────────────────────
+// ── Diagnostics ──────────────────────────────────────────────────────────
+export const diagnosticsApi = {
+  /*
+   * Fire-and-forget crash intake.
+   *
+   * Answers 202 whether or not the row was written (the backend drops
+   * duplicates from a looping client), so there is nothing here for the
+   * caller to branch on — deliberately. A crash reporter that hands the app
+   * a result to handle is a second failure waiting to happen inside the
+   * error path of the first.
+   */
+  reportError: (report: {
+    fingerprint: string;
+    platform: 'android' | 'web';
+    appVersion: string;
+    name: string;
+    message: string;
+    stack?: string;
+    screen?: string;
+  }): Promise<void> =>
+    client.post('/diagnostics/errors', report).then(() => undefined),
+
+  /** Admin triage view — one row per distinct fault, newest first. */
+  listErrors: (includeResolved = false) =>
+    client.get('/diagnostics/errors', {params: {includeResolved}}).then(r => r.data.errors),
+
+  resolveError: (id: number) =>
+    client.patch(`/diagnostics/errors/${id}/resolve`).then(r => r.data.error),
+};
+
 export const appApi = {
   // `role` is a targeting hint so the backend can answer with that role's
   // release channel (see backend config/appVersion.js). Omitted before

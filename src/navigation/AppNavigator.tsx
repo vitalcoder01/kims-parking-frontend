@@ -1,6 +1,8 @@
-import React from 'react';
+import React, {useState} from 'react';
 import {Text, View, ActivityIndicator} from 'react-native';
-import {NavigationContainer, DefaultTheme, DarkTheme} from '@react-navigation/native';
+import {NavigationContainer, DefaultTheme, DarkTheme, createNavigationContainerRef} from '@react-navigation/native';
+import {CopilotOverlay} from '../components/copilot/CopilotOverlay';
+import {setCurrentScreen} from '../services/crashReporting';
 import {createBottomTabNavigator} from '@react-navigation/bottom-tabs';
 import {createNativeStackNavigator} from '@react-navigation/native-stack';
 import {useTheme} from '../context/ThemeContext';
@@ -125,9 +127,36 @@ function RoleRouter() {
   return <DoctorNavigator />;
 }
 
+const navRef = createNavigationContainerRef();
+
+/*
+ * Where the creature is allowed to wander, by role.
+ *
+ * Opt-in, and deliberately short. The navigator only knows the ROUTE, and
+ * several routes host their own internal sub-screens: ValetHomeScreen alone
+ * switches between scan, assign, visitor and retrievals entirely in local
+ * state, so the route still reads "Queue" while a valet is halfway through
+ * assigning a driver. Roaming there on the strength of the route name would
+ * put a drifting character over exactly the work it must never cover.
+ *
+ * So valet keeps the creature on every screen — corner-anchored, still
+ * reporting — and only wanders on Analytics, which is a page you read rather
+ * than operate. Doctor, driver and admin wander on their genuinely idle
+ * screens: a doctor waiting for a car, a driver between jobs, an admin
+ * looking at dashboards.
+ */
+const ROAMS_ON: Record<string, readonly string[]> = {
+  valet: ['Analytics'],
+  driver: ['Dashboard'],
+  admin: ['Dashboard', 'Analytics'],
+  doctor: ['Home'],
+  staff: ['Home'],
+};
+
 export function AppNavigator() {
   const {colors, isDark} = useTheme();
   const {user, isLoading} = useAuth();
+  const [route, setRoute] = useState<string | undefined>(undefined);
 
   if (isLoading) {
     return (
@@ -147,14 +176,43 @@ export function AppNavigator() {
     },
   };
 
+  const roams = user?.role ? ROAMS_ON[user.role] ?? [] : [];
+
+  const trackRoute = () => {
+    const name = navRef.isReady() ? navRef.getCurrentRoute()?.name : undefined;
+    setRoute(name);
+    // Gives every crash report a screen name, so a fault arrives as
+    // "ValetRecordsScreen" rather than an anonymous stack.
+    setCurrentScreen(name);
+  };
+
   return (
-    <NavigationContainer theme={navTheme}>
+    <NavigationContainer ref={navRef} theme={navTheme} onReady={trackRoute} onStateChange={trackRoute}>
       <Stack.Navigator screenOptions={{headerShown: false}}>
         {user
           ? <Stack.Screen name="App"   component={RoleRouter}  />
           : <Stack.Screen name="Login" component={LoginScreen} />
         }
       </Stack.Navigator>
+
+      {/* Only once signed in: there is nothing to observe on the login
+          screen, and no session to report a crash against anyway. */}
+      {!!user && (
+        <CopilotOverlay
+          idleScreen={!!route && roams.includes(route)}
+          onNavigate={insight => {
+            if (!navRef.isReady() || !insight.action) return;
+            const target = insight.action.target;
+            const screen =
+                target === 'records'   ? (user.role === 'valet' ? 'Records' : 'Home')
+              : target === 'dashboard' ? (user.role === 'valet' ? 'Queue' : 'Dashboard')
+              : target === 'map'       ? 'Map'
+              : 'Home';
+            // @ts-expect-error — route names are per-role and not in one union.
+            navRef.navigate(screen);
+          }}
+        />
+      )}
     </NavigationContainer>
   );
 }

@@ -9,6 +9,17 @@ import {AppNavigator} from './src/navigation/AppNavigator';
 import {UpdateGate} from './src/components/UpdateGate';
 import {DialogProvider} from './src/components/AppDialog';
 import {initNotifications} from './src/services/notifications';
+import {installCrashReporting} from './src/services/crashReporting';
+import {ErrorBoundary} from './src/components/ErrorBoundary';
+
+/*
+ * Installed at module scope, not in an effect.
+ *
+ * A fault thrown during the very first render happens before any effect has
+ * run, and that is precisely the crash worth catching — an app that dies on
+ * launch reports nothing and looks, from the outside, like a phone problem.
+ */
+installCrashReporting();
 
 function AppContent() {
   const {isDark} = useTheme();
@@ -28,7 +39,12 @@ function AppContent() {
           tray (via notifee — see src/services/notifications.ts) which is
           where iOS/Android natively show them; the app itself stays clean. */}
       <UpdateGate>
-        <AppNavigator />
+        {/* Inside the gate, not around it: a screen crashing must never take
+            down the update prompt, which is the only route out of a broken
+            build. */}
+        <ErrorBoundary>
+          <AppNavigator />
+        </ErrorBoundary>
       </UpdateGate>
     </View>
   );
