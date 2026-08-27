@@ -51,25 +51,75 @@ export function Creature({mood, severity, size = 46, restColor, eyeColor}: Props
   const breathe = useRef(new Animated.Value(0)).current;
   const blink = useRef(new Animated.Value(1)).current;
   const hop = useRef(new Animated.Value(0)).current;
-  const dim = useRef(new Animated.Value(mood === 'asleep' ? 0.4 : 1)).current;
+  const dim = useRef(new Animated.Value(mood === 'asleep' ? 0.55 : 1)).current;
+  const bob = useRef(new Animated.Value(0)).current;
+  const glance = useRef(new Animated.Value(0)).current;
 
-  // Breathing — the baseline "this thing is alive" signal. Runs while awake
-  // and is stopped outright when asleep so a backgrounded or idle app is not
-  // holding the compositor awake for nothing.
+  /*
+   * Breathing — the baseline "this thing is alive" signal.
+   *
+   * Runs in EVERY mood including asleep, just slower and shallower there.
+   * The first version stopped it outright when there was nothing to report,
+   * and the result read as a broken graphic rather than a resting animal:
+   * a flat circle at 40% opacity that never moves is indistinguishable from
+   * a rendering bug. Something asleep still breathes.
+   *
+   * It is a native-driven transform, so an idle creature costs the UI thread
+   * a scale interpolation and the JS thread nothing at all.
+   */
   useEffect(() => {
-    if (mood === 'asleep') {
-      breathe.stopAnimation();
-      return;
-    }
+    const asleep = mood === 'asleep';
     const loop = Animated.loop(
       Animated.sequence([
-        Animated.timing(breathe, {toValue: 1, duration: 1800, easing: Easing.inOut(Easing.quad), useNativeDriver: true}),
-        Animated.timing(breathe, {toValue: 0, duration: 1800, easing: Easing.inOut(Easing.quad), useNativeDriver: true}),
+        Animated.timing(breathe, {toValue: 1, duration: asleep ? 3200 : 1700, easing: Easing.inOut(Easing.quad), useNativeDriver: true}),
+        Animated.timing(breathe, {toValue: 0, duration: asleep ? 3200 : 1700, easing: Easing.inOut(Easing.quad), useNativeDriver: true}),
       ]),
     );
     loop.start();
     return () => loop.stop();
   }, [mood, breathe]);
+
+  /*
+   * A slow vertical bob, offset from the breath so the two never sync up.
+   *
+   * Two periodic motions at different periods is what stops it looking
+   * mechanical — in sync they read as one pulsing button, drifting apart
+   * they read as something idling.
+   */
+  useEffect(() => {
+    if (mood === 'asleep') { bob.stopAnimation(); return; }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(bob, {toValue: 1, duration: 2300, easing: Easing.inOut(Easing.sin), useNativeDriver: true}),
+        Animated.timing(bob, {toValue: 0, duration: 2300, easing: Easing.inOut(Easing.sin), useNativeDriver: true}),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [mood, bob]);
+
+  /*
+   * Glancing about. Irregular, like the blink, and the single strongest cue
+   * that something is paying attention rather than animating on a timer.
+   */
+  useEffect(() => {
+    if (mood === 'asleep') { glance.setValue(0); return; }
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const schedule = () => {
+      timer = setTimeout(() => {
+        if (cancelled) return;
+        const to = Math.random() < 0.5 ? -1 : 1;
+        Animated.sequence([
+          Animated.timing(glance, {toValue: to, duration: 260, easing: Easing.out(Easing.quad), useNativeDriver: true}),
+          Animated.delay(700 + Math.random() * 900),
+          Animated.timing(glance, {toValue: 0, duration: 320, easing: Easing.inOut(Easing.quad), useNativeDriver: true}),
+        ]).start(() => { if (!cancelled) schedule(); });
+      }, 3000 + Math.random() * 4500);
+    };
+    schedule();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [mood, glance]);
 
   // Blinking. Deliberately irregular — a perfectly periodic blink reads as a
   // loading spinner, not a creature.
@@ -122,7 +172,7 @@ export function Creature({mood, severity, size = 46, restColor, eyeColor}: Props
   useEffect(() => {
     if (mood === 'working') return;
     Animated.timing(dim, {
-      toValue: mood === 'asleep' ? 0.4 : 1,
+      toValue: mood === 'asleep' ? 0.55 : 1,
       duration: 400,
       useNativeDriver: true,
     }).start();
@@ -142,8 +192,9 @@ export function Creature({mood, severity, size = 46, restColor, eyeColor}: Props
           backgroundColor: body,
           opacity: dim,
           transform: [
-            {scale: breathe.interpolate({inputRange: [0, 1], outputRange: [1, 1.045]})},
-            {translateY: hop.interpolate({inputRange: [0, 1], outputRange: [0, -size * 0.28]})},
+            {scale: breathe.interpolate({inputRange: [0, 1], outputRange: [1, 1.075]})},
+            {translateY: bob.interpolate({inputRange: [0, 1], outputRange: [0, -size * 0.09]})},
+            {translateY: hop.interpolate({inputRange: [0, 1], outputRange: [0, -size * 0.3]})},
           ],
         },
       ]}
@@ -155,7 +206,15 @@ export function Creature({mood, severity, size = 46, restColor, eyeColor}: Props
         top: size * 0.13, left: size * 0.17,
       }]} />
 
-      <Animated.View style={[s.eyes, {gap: size * 0.19, transform: [{scaleY: blink}]}]}>
+      <Animated.View
+        style={[s.eyes, {
+          gap: size * 0.19,
+          transform: [
+            {scaleY: blink},
+            {translateX: glance.interpolate({inputRange: [-1, 1], outputRange: [-size * 0.06, size * 0.06]})},
+          ],
+        }]}
+      >
         <View style={{width: eye, height: eye, borderRadius: eye / 2, backgroundColor: eyeColor}} />
         <View style={{width: eye, height: eye, borderRadius: eye / 2, backgroundColor: eyeColor}} />
       </Animated.View>

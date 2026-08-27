@@ -168,7 +168,7 @@ const TABS_BY_ROLE: Record<string, readonly string[]> = {
 };
 
 const ROAMS_ON: Record<string, readonly string[]> = {
-  valet: ['Analytics'],
+  valet: ['Queue', 'Analytics'],
   driver: ['Dashboard'],
   admin: ['Dashboard', 'Analytics'],
   doctor: ['Home'],

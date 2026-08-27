@@ -5,6 +5,7 @@ import {displayNotification, ringAssignmentAlarm, stopAssignmentAlarm} from '../
 import {tasksApi, driversApi, slotsApi, visitorsApi, notificationsApi, arrivalsApi, getAuthToken} from '../services/api';
 import {connectSocket, disconnectSocket, emitDriverLocation} from '../services/socket';
 import {initPushMessaging} from '../services/pushMessaging';
+import {markSynced, markSyncFailed} from '../services/syncClock';
 import {getCurrentPositionSafe} from '../utils/location';
 import {useAuth} from './AuthContext';
 
@@ -405,6 +406,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     if (visitorRows) setVisitors(visitorRows);
     if (a) setArrivals(a.map(mapArrival));
     setHydrated(true);
+    markSynced();
 
     // A socket event overtook this snapshot while it was in flight, so what
     // we just applied is stale for whatever that event touched. One more
@@ -452,7 +454,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     if (!token) return;
     const socket = connectSocket(token);
 
-    socket.on('connect', () => { fetchAll().catch(() => {}); });
+    socket.on('connect', () => { fetchAll().catch(() => markSyncFailed()); });
 
     socket.on('task:upsert', (raw: any) => {
       bumpMutation(); // snapshot in flight is now stale — see mutationSeqRef
@@ -637,7 +639,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
   useEffect(() => {
     if (!user) return;
     const sub = RNAppState.addEventListener('change', next => {
-      if (next === 'active') fetchAll().catch(() => {});
+      if (next === 'active') fetchAll().catch(() => markSyncFailed());
     });
     return () => sub.remove();
   }, [user?.id, fetchAll]); // eslint-disable-line react-hooks/exhaustive-deps

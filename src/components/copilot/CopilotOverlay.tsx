@@ -6,6 +6,7 @@ import {PressableScale} from '../PressableScale';
 import {Icon} from '../Icon';
 import {Creature} from './Creature';
 import {useCopilot} from './useCopilot';
+import {CopilotPanel} from './CopilotPanel';
 import type {Insight} from '../../core/copilot/insights';
 
 /*
@@ -54,9 +55,10 @@ interface Props {
 export function CopilotOverlay({idleScreen = false, onNavigate}: Props) {
   const {colors} = useTheme();
   const insets = useSafeAreaInsets();
-  const {top, mood, dismiss, disabled} = useCopilot();
+  const {insights, top, mood, dismiss, disabled} = useCopilot();
 
   const [expanded, setExpanded] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(false);
   const [keyboardUp, setKeyboardUp] = useState(false);
   const [idleSince, setIdleSince] = useState(() => Date.now());
   const [canRoam, setCanRoam] = useState(false);
@@ -112,9 +114,12 @@ export function CopilotOverlay({idleScreen = false, onNavigate}: Props) {
   }, [canRoam, pos]);
 
   if (disabled) return null;
-  // Nothing to say and nowhere interesting to be: render nothing at all
-  // rather than park a decoration on top of someone's work.
-  if (!top && !idleScreen) return null;
+  /*
+   * Rendered even with nothing to report. The earlier version hid itself on
+   * non-idle screens when quiet, which also hid the panel — and the panel is
+   * most of the value. It is dimmed and breathing slowly when idle, so it
+   * costs a corner rather than attention.
+   */
   if (keyboardUp) return null;
 
   const sev = top?.severity ?? null;
@@ -153,18 +158,34 @@ export function CopilotOverlay({idleScreen = false, onNavigate}: Props) {
         </View>
       )}
 
+      <CopilotPanel
+        visible={panelOpen}
+        onClose={() => setPanelOpen(false)}
+        insights={insights}
+        onAct={i => onNavigate?.(i)}
+        onDismiss={dismiss}
+      />
+
       <View style={s.creatureRow}>
         {!expanded && top && (
-          <View style={[s.badge, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+          <PressableScale
+            onPress={() => setExpanded(true)}
+            style={[s.badge, {backgroundColor: colors.surface, borderColor: colors.border}]}
+          >
             <Icon name="alert" size={11} color={sev === 'critical' ? '#E5484D' : colors.textSecondary} />
-          </View>
+          </PressableScale>
         )}
-        <PressableScale
-          onPress={() => { if (top) setExpanded(v => !v); }}
-          // No insight means no bubble to open, so it should not look
-          // pressable either.
-          disabled={!top}
-        >
+        {/*
+          * Always tappable now, insight or not.
+          *
+          * It used to be disabled with nothing to report, which made the
+          * creature dead weight most of the day — and everything behind the
+          * tap (health check, shift summary, find a car, report a problem)
+          * is exactly as useful on a quiet shift as a busy one. A single
+          * tap opens the panel; the one-line bubble is now reserved for the
+          * badge, so nothing is buried behind a long-press.
+          */}
+        <PressableScale onPress={() => setPanelOpen(true)}>
           <Creature
             mood={mood}
             severity={sev}

@@ -86,6 +86,21 @@ const RN_VIBRATION_PATTERN = buildRingPattern(CRITICAL_RING_MS);
 
 let channelsReady = false;
 
+/**
+ * Whether the notification channels were actually created.
+ *
+ * Exposed for the co-pilot's health check, and this is the exact flag whose
+ * silent failure caused 1.9.12-1.9.14 to alert nobody: one malformed
+ * vibration pattern made createChannel throw, a bare catch swallowed it,
+ * this stayed false, and every notification quietly went nowhere while the
+ * app looked perfectly healthy. Being able to read it on the phone is the
+ * difference between diagnosing that in a minute and diagnosing it in three
+ * releases.
+ */
+export function areChannelsReady(): boolean {
+  return channelsReady;
+}
+
 // One bad channel must never take down the others (or every other
 // notification path). Isolated + logged rather than thrown: a
 // misconfiguration should be loud in development, not invisible forever.
