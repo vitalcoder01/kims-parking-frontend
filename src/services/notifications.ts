@@ -36,6 +36,21 @@ const ALARM_CHANNEL_ID = 'kims_parking_alarm_v2';
  * killed-state alarm.
  */
 export const RING_CHANNEL_ID = 'kims_parking_ring_v4';
+
+/**
+ * The short alarm — everything that is not someone waiting on you.
+ *
+ * A 20-second ring is the right answer to a doctor standing at the desk. It
+ * is the wrong answer to "this job still needs a driver", which is a
+ * reminder about something the valet already knows and which repeats. Twenty
+ * seconds of buzzing for that teaches people to ignore the sound, and what
+ * they then miss is the alert that mattered.
+ *
+ * Duration is a property of the CHANNEL on Android — the system plays the
+ * channel's pattern, and channels are immutable — so two ring lengths means
+ * two channels. There is no way to vary it per notification.
+ */
+export const RING_SHORT_CHANNEL_ID = 'kims_parking_ring_short_v1';
 const RING_NOTIFICATION_ID = 'kims-assignment-alarm';
 
 // A single 3-buzz/one-shot-sound burst (the old behaviour) is over in about
@@ -48,6 +63,8 @@ const RING_NOTIFICATION_ID = 'kims-assignment-alarm';
 // (accepted, reassigned, cancelled), whichever comes first. No lighter
 // version for any one role: everyone gets the same aggressive alert.
 const CRITICAL_RING_MS = 20000;
+/** The reminder-grade ring. Matches SHORT_VIBRATION_PATTERN's real length. */
+const SHORT_RING_MS = 7000;
 
 // TWO patterns, because the two APIs have genuinely different contracts and
 // mixing them up is what broke every notification in 1.9.12–1.9.14:
@@ -96,6 +113,9 @@ function repeatCycle(reps: number): number[] {
   return out;
 }
 const CHANNEL_VIBRATION_PATTERN = repeatCycle(9);
+// Three cycles ≈ 6.9s — the same signature rhythm, so it is still
+// recognisable as a KIMS alert, just over quickly.
+const SHORT_VIBRATION_PATTERN = repeatCycle(3);
 
 /** How long the alarm buzz should actually last — the health check compares
  *  the device's real channel against this to spot a stale one. */
@@ -171,11 +191,23 @@ export async function initNotifications(): Promise<void> {
   });
   await createChannelSafe({
     id: RING_CHANNEL_ID,
-    name: 'KIMS Job Assignment Alarm',
+    name: 'Car requested / arrival (20s)',
     importance: AndroidImportance.HIGH,
     sound: 'default',
     vibration: true,
     vibrationPattern: CHANNEL_VIBRATION_PATTERN,
+    bypassDnd: true,
+  });
+  // Named so the two are distinguishable in Android's own settings — a user
+  // who finds the long one too much can mute it without silencing every
+  // alert the app has.
+  await createChannelSafe({
+    id: RING_SHORT_CHANNEL_ID,
+    name: 'Reminders (6s)',
+    importance: AndroidImportance.HIGH,
+    sound: 'default',
+    vibration: true,
+    vibrationPattern: SHORT_VIBRATION_PATTERN,
     bypassDnd: true,
   });
 
@@ -219,11 +251,19 @@ export async function ringAssignmentAlarm(
    * title+body is used, which still collapses the common duplicate.
    */
   eventKey?: string,
+  /**
+   * 'long' (~20s) is reserved for someone actually waiting on the recipient:
+   * a retrieval request, an arrival heads-up, or a driver's own assignment.
+   * Everything else is 'short' (~7s). Defaults to short so an alert added
+   * later cannot accidentally inherit the loudest behaviour in the app.
+   */
+  level: 'long' | 'short' = 'short',
 ): Promise<void> {
   try {
     const key = eventKey ?? `${title}|${body}`;
     const now = Date.now();
-    if (lastRing && lastRing.key === key && now - lastRing.at < CRITICAL_RING_MS) {
+    const window = level === 'long' ? CRITICAL_RING_MS : SHORT_RING_MS;
+    if (lastRing && lastRing.key === key && now - lastRing.at < window) {
       // Same event, still inside its own ring window — this is the socket and
       // the push both arriving, or the app being reopened. Already ringing.
       return;
@@ -236,7 +276,7 @@ export async function ringAssignmentAlarm(
       title,
       body,
       android: {
-        channelId: RING_CHANNEL_ID,
+        channelId: level === 'long' ? RING_CHANNEL_ID : RING_SHORT_CHANNEL_ID,
         importance: AndroidImportance.HIGH,
         category: AndroidCategory.ALARM,
         color: AndroidColor.RED,
@@ -254,13 +294,17 @@ export async function ringAssignmentAlarm(
         // ever cancelled it were a JS timer, a killed app would leave an
         // undismissable notification looping sound forever. Android cancels
         // it at this deadline whether or not any JS is still alive.
-        timeoutAfter: CRITICAL_RING_MS,
+        // Must track the LEVEL. The notification is ongoing and cannot be
+        // swiped away, so a short alarm using the long deadline would leave
+        // an undismissable entry sitting there for 20s after a 7s buzz.
+        timeoutAfter: level === 'long' ? CRITICAL_RING_MS : SHORT_RING_MS,
       },
     });
     // Belt-and-braces only — both the vibration and the notification now
     // terminate on their own, so nothing depends on this firing.
     if (ringTimer) clearTimeout(ringTimer);
-    ringTimer = setTimeout(() => { stopAssignmentAlarm().catch(() => {}); }, CRITICAL_RING_MS);
+    ringTimer = setTimeout(() => { stopAssignmentAlarm().catch(() => {}); },
+      level === 'long' ? CRITICAL_RING_MS : SHORT_RING_MS);
   } catch (err) {
     // Alarms are best-effort; never crash over them — but say so, because a
     // silent catch here is exactly what hid the broken-channel bug.
