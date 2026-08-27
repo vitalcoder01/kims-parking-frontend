@@ -124,8 +124,8 @@ android {
         applicationId "com.kimsparking"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 50
-        versionName "1.9.16"
+        versionCode 51
+        versionName "1.9.17"
     }
     signingConfigs {
         debug {
