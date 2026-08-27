@@ -62,7 +62,9 @@ export async function handleRemoteMessage(
   }
 
   if (data.type === 'alarm') {
-    await ringAssignmentAlarm(title, body);
+    // notifId is the server's own row id and rides BOTH delivery paths, so
+    // the socket and the push collapse onto one ring instead of two.
+    await ringAssignmentAlarm(title, body, data.notifId ? String(data.notifId) : undefined);
     return;
   }
   if (fromBackground && remoteMessage?.notification) return;

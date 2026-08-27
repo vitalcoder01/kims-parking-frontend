@@ -522,7 +522,10 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
       // alarm's duplicate for a short window after the dialog shows.
       if (Date.now() - reassignShownAt.current < 4000) return;
       if (n.type === 'alarm') {
-        ringAssignmentAlarm(n.title, n.body).catch(() => {});
+        // n.id is the same row id the FCM push carries, so the socket and the
+        // push collapse onto one ring — and reopening the app replays this
+        // event without buzzing a second time for a job already announced.
+        ringAssignmentAlarm(n.title, n.body, String(n.id)).catch(() => {});
       } else {
         // n.id matches the FCM push's id, so the two deliveries of this one
         // event collapse into a single tray entry.

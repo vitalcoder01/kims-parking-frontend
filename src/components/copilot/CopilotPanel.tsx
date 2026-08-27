@@ -8,7 +8,7 @@ import {Icon} from '../Icon';
 import {Creature} from './Creature';
 import {selectShiftSummary, hourLabel} from '../../core/copilot/summary';
 import {syncAgeLabel} from '../../services/syncClock';
-import {runHealthCheck, requestNotificationPermission, HealthItem} from '../../services/healthCheck';
+import {runHealthCheck, applyFix, HealthItem} from '../../services/healthCheck';
 import {diagnosticsApi, appApi} from '../../services/api';
 import {buildReport} from '../../core/copilot/reporter';
 import {APP_VERSION_NAME} from '../../config/version';
@@ -37,6 +37,21 @@ interface Props {
 }
 
 const STATE_COLOR = {ok: '#2FA84F', warn: '#F5A524', fail: '#E5484D', checking: '#8A8F98'} as const;
+
+/*
+ * Each button says what it will DO, not what is wrong.
+ *
+ * Three of these open an Android settings screen rather than changing
+ * anything, because nothing in the app can override battery optimisation or
+ * an OEM auto-start restriction — and those two cause more missed alarms in
+ * the field than every bug in this app put together.
+ */
+const FIX_LABEL = {
+  requestPermission: 'Allow alerts',
+  openNotificationSettings: 'Open alert settings',
+  openBatterySettings: 'Open battery settings',
+  openPowerSettings: 'Open auto-start settings',
+} as const;
 
 export function CopilotPanel({visible, onClose, insights, onAct, onDismiss}: Props) {
   const {colors} = useTheme();
@@ -198,13 +213,13 @@ export function CopilotPanel({visible, onClose, insights, onAct, onDismiss}: Pro
                       <Text style={[s.cardSub, {color: colors.textMuted}]}>{h.detail}</Text>
                     </View>
                   </View>
-                  {h.fix === 'requestPermission' && (
+                  {h.fix && (
                     <View style={s.cardRow}>
                       <PressableScale
-                        onPress={async () => { await requestNotificationPermission(); check(); }}
+                        onPress={async () => { await applyFix(h.fix!); check(); }}
                         style={[s.primary, {backgroundColor: colors.primary}]}
                       >
-                        <Text style={[s.primaryTxt, {color: colors.textOnPrimary}]}>Allow alerts</Text>
+                        <Text style={[s.primaryTxt, {color: colors.textOnPrimary}]}>{FIX_LABEL[h.fix]}</Text>
                       </PressableScale>
                     </View>
                   )}

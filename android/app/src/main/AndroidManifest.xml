@@ -32,7 +32,7 @@
       <!-- FCM pushes land on the loud assignment-alarm channel by default -->
       <meta-data
         android:name="com.google.firebase.messaging.default_notification_channel_id"
-        android:value="kims_parking_ring_v2"
+        android:value="kims_parking_ring_v4"
         tools:replace="android:value" />
       <activity
         android:name=".MainActivity"

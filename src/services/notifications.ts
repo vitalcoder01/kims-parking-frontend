@@ -1,5 +1,5 @@
 import notifee, {AndroidImportance, AndroidColor, AndroidCategory, TriggerType, TimestampTrigger, AuthorizationStatus} from '@notifee/react-native';
-import {Vibration, Platform} from 'react-native';
+import {Vibration} from 'react-native';
 
 // Central place for OS-level (system tray) notifications.
 // Works while the app is backgrounded; scheduled ones fire even when the app is fully closed.
@@ -12,14 +12,30 @@ import {Vibration, Platform} from 'react-native';
 // already exist (same reason the ring channel below is already on `_v2`).
 const CHANNEL_ID = 'kims_parking_v2';
 const ALARM_CHANNEL_ID = 'kims_parking_alarm_v2';
-// Android channels are immutable after creation — the loud full-alarm config
-// (sound + bypass DND + alarm category) needs a fresh channel id on devices
-// that already created the old silent-ish one. Bumped to v3 for the longer,
-// more insistent vibrationPattern below (used for the app-killed case, where
-// Android vibrates from the channel directly — no JS ever runs to call
-// Vibration.vibrate itself); v2 installs would otherwise keep the old
-// pattern forever since the channel can't be edited after creation.
-const RING_CHANNEL_ID = 'kims_parking_ring_v3';
+// Android channels are IMMUTABLE once created — a device that already made
+// an older id keeps that id's sound and vibration forever, whatever this
+// file says. So every change to the ring behaviour needs a fresh id.
+//
+// v4 carries the full ~20s vibration pattern. Up to v3 the channel held a
+// single ~2s cycle and the 20 seconds came from a JS Vibration.vibrate()
+// call, which needs the app's JS thread — so backgrounded and killed phones
+// only ever buzzed for two seconds. Moving the whole pattern onto the
+// channel is what makes the alarm identical in all three app states.
+//
+// This id MUST match, exactly:
+//   - push.service.js  fallbackMessage.android.notification.channelId
+//   - AndroidManifest  com.google.firebase.messaging.default_notification_channel_id
+// They were left on _v2 while this moved to _v3, which meant the
+// killed-state alarm was posted to a channel that did not exist on the
+// device — dropped or demoted to system defaults by Android.
+/**
+ * Exported so the co-pilot's health check can read the channel BACK from the
+ * device rather than trust that createChannel was called. That readback is
+ * what catches a stale channel (immutable, so an old install keeps its old
+ * pattern forever) and a wrong id — the exact fault that broke the
+ * killed-state alarm.
+ */
+export const RING_CHANNEL_ID = 'kims_parking_ring_v4';
 const RING_NOTIFICATION_ID = 'kims-assignment-alarm';
 
 // A single 3-buzz/one-shot-sound burst (the old behaviour) is over in about
@@ -58,31 +74,46 @@ const CRITICAL_RING_MS = 20000;
 //                        tap  gap  tap  gap  tap  gap  LONG  gap
 const SIGNATURE_CYCLE = [250, 120, 250, 120, 250, 200, 700, 400];
 
-// The CHANNEL pattern is one cycle only, with a positive lead-in to satisfy
-// notifee's even-length/all-positive rule. This is what the SYSTEM plays
-// when a notification posts — including when the app is fully killed, since
-// system_server does it with no app process involved. That's the "killed ->
-// notification + one buzz" behaviour, and it is guaranteed.
-const CHANNEL_VIBRATION_PATTERN = [100, 250, 120, 250, 120, 250, 200, 700];
-
-// The full ~20s pattern is built by REPEATING the cycle into one finite
-// array, then played with repeat=false.
+// THE CHANNEL PATTERN IS THE ALARM. Nothing else is.
 //
-// This is deliberately NOT `Vibration.vibrate(cycle, true)` + a JS timer to
-// stop it. RN maps repeat=true to VibrationEffect.createWaveform(pattern, 0)
-// — repeat forever (VibrationModule.kt) — so that approach only ends if the
-// JS timer actually fires. In the killed-app path the FCM handler starts the
-// buzz and the headless task then dies, so the timer never runs and the
-// phone vibrates until reboot. A finite pattern cannot run away: the OS
-// plays it once and stops, in every app state.
-function buildRingPattern(totalMs: number): number[] {
-  const cycleMs = SIGNATURE_CYCLE.reduce((a, b) => a + b, 0);
-  const reps = Math.max(1, Math.round(totalMs / cycleMs));
-  const out: number[] = [0]; // RN treats entry 0 as the initial delay
+// This is what system_server plays when a notification posts on this
+// channel, with no app process involved — so it is the ONLY mechanism that
+// works identically whether the app is open, backgrounded, or force-killed.
+//
+// It used to be a single ~2s cycle, and that was the whole bug: the 20
+// seconds lived in a JS Vibration.vibrate() call that needs the app's JS
+// thread, so 20s only ever happened with the app open. Backgrounded and
+// killed both got two seconds, which is what "the vibration only works when
+// the app is open" actually meant.
+//
+// Nine repeats of the signature cycle: 72 entries, 20,610ms. Even-length and
+// all strictly positive, which is what notifee's isValidVibratePattern
+// demands — violating that is what made createChannel throw in 1.9.12 and
+// silently disabled every notification in the app.
+function repeatCycle(reps: number): number[] {
+  const out: number[] = [];
   for (let i = 0; i < reps; i++) out.push(...SIGNATURE_CYCLE);
   return out;
 }
-const RN_VIBRATION_PATTERN = buildRingPattern(CRITICAL_RING_MS);
+const CHANNEL_VIBRATION_PATTERN = repeatCycle(9);
+
+/** How long the alarm buzz should actually last — the health check compares
+ *  the device's real channel against this to spot a stale one. */
+export const EXPECTED_RING_VIBRATION_MS =
+  CHANNEL_VIBRATION_PATTERN.reduce((a, b) => a + b, 0);
+
+// There is deliberately NO JS-side vibration any more.
+//
+// ringAssignmentAlarm used to post the notification (which makes the channel
+// vibrate) and then ALSO call Vibration.vibrate() with a ~20s waveform.
+// Android runs one vibration at a time: whichever of those two started last
+// cancelled the other, which is why the foreground buzz cut out early and
+// unpredictably. Two sources for one vibrator is not something to tune — it
+// is something to remove.
+//
+// With the pattern on the channel, every app state now takes the identical
+// code path through system_server, and there is nothing left that behaves
+// differently depending on whether JS happens to be alive.
 
 let channelsReady = false;
 
@@ -155,6 +186,22 @@ export async function initNotifications(): Promise<void> {
 
 let ringTimer: ReturnType<typeof setTimeout> | null = null;
 
+/*
+ * Which alarm is already ringing, and when it started.
+ *
+ * Without this, reopening the app re-rang the alarm every time: the socket
+ * replays notification:new on reconnect and the FCM foreground handler may
+ * deliver the same event again, so a valet who backgrounded the app and came
+ * straight back got buzzed a second time for a job they had already been
+ * told about. That is the "if I open the app immediately it triggers again"
+ * behaviour.
+ *
+ * Keyed by the event's own id so a genuinely NEW assignment always rings.
+ * The window is the ring length: past it the alarm is over, and the same job
+ * alerting again is a real re-notification rather than an echo.
+ */
+let lastRing: {key: string; at: number} | null = null;
+
 /**
  * The assignment/arrival/retrieval alarm — native Android notification on
  * the alarm channel (looping sound + vibration + full-screen intent when
@@ -163,8 +210,26 @@ let ringTimer: ReturnType<typeof setTimeout> | null = null;
  * part, which is exactly the requirement's "send the alarm like a push
  * notification" fallback.
  */
-export async function ringAssignmentAlarm(title: string, body: string): Promise<void> {
+export async function ringAssignmentAlarm(
+  title: string,
+  body: string,
+  /**
+   * Stable id for the event being alarmed about — the server's notification
+   * row id, carried identically by the socket and the FCM push. Omitted, the
+   * title+body is used, which still collapses the common duplicate.
+   */
+  eventKey?: string,
+): Promise<void> {
   try {
+    const key = eventKey ?? `${title}|${body}`;
+    const now = Date.now();
+    if (lastRing && lastRing.key === key && now - lastRing.at < CRITICAL_RING_MS) {
+      // Same event, still inside its own ring window — this is the socket and
+      // the push both arriving, or the app being reopened. Already ringing.
+      return;
+    }
+    lastRing = {key, at: now};
+
     await initNotifications();
     await notifee.displayNotification({
       id: RING_NOTIFICATION_ID,
@@ -192,11 +257,6 @@ export async function ringAssignmentAlarm(title: string, body: string): Promise<
         timeoutAfter: CRITICAL_RING_MS,
       },
     });
-    if (Platform.OS === 'android') {
-      // repeat=false: a finite ~20s pattern that ends itself. See
-      // buildRingPattern for why an infinite pattern + JS timer was unsafe.
-      Vibration.vibrate(RN_VIBRATION_PATTERN, false);
-    }
     // Belt-and-braces only — both the vibration and the notification now
     // terminate on their own, so nothing depends on this firing.
     if (ringTimer) clearTimeout(ringTimer);
@@ -208,9 +268,22 @@ export async function ringAssignmentAlarm(title: string, body: string): Promise<
   }
 }
 
-/** Stop the vibration loop + dismiss the ongoing alarm notification. */
+/**
+ * Dismiss the alarm notification and stop its sound.
+ *
+ * Vibration.cancel() is best-effort. The buzz now comes from the channel, so
+ * it is system_server playing it — attributed to this app, so cancelling
+ * usually does stop it, but only while this app's process is alive to make
+ * the call. A killed phone rings out the full pattern regardless, which is
+ * the correct trade: a guaranteed 20s alarm that occasionally overruns its
+ * reason by a few seconds is far better than one that silently does not
+ * fire at all.
+ */
 export async function stopAssignmentAlarm(): Promise<void> {
   try {
+    // Clear the dedupe key too: once an alarm has been resolved, the same
+    // job alerting again is a real event, not an echo of this one.
+    lastRing = null;
     if (ringTimer) { clearTimeout(ringTimer); ringTimer = null; }
     Vibration.cancel();
     await notifee.cancelNotification(RING_NOTIFICATION_ID);
