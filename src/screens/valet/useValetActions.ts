@@ -14,7 +14,7 @@ export const isMyJobToRun = canRun;
 
 export function useValetActions() {
   const {drivers, tasks, visitors, arrivalNotices, dismissArrivalNotice, addTask, assignDriver, cancelTaskAssignment, markKeyCollected, pushNotification, addVisitor,
-    assignVisitorDriver, cancelVisitorAssignment, assignRetrievalDriver, assignStaffRetrievalDriver, cancelVisitor, recallVisitor,
+    assignVisitorDriver, cancelVisitorAssignment, assignRetrievalDriver, assignStaffRetrievalDriver, cancelVisitor, recallVisitor, closeParkedVisitor,
     confirmTaskDelivered, confirmVisitorDelivered, cancelTask, closeParkedSession, recallTask, fetchTaskHistory,
     acceptRetrieval} = useAppState();
   const {user} = useAuth();
@@ -81,7 +81,7 @@ export function useValetActions() {
   };
 
   return {
-    drivers, tasks, visitors, dismissArrivalNotice, addTask, addVisitor, pushNotification, markKeyCollected, cancelVisitor, recallVisitor,
+    drivers, tasks, visitors, dismissArrivalNotice, addTask, addVisitor, pushNotification, markKeyCollected, cancelVisitor, recallVisitor, closeParkedVisitor,
     // Every valet sees every expected arrival — it is a heads-up, not a job,
     // so there is nothing to claim and nobody to filter it for.
     arrivalNotices,

@@ -35,7 +35,7 @@ const ALARM_CHANNEL_ID = 'kims_parking_alarm_v2';
  * pattern forever) and a wrong id — the exact fault that broke the
  * killed-state alarm.
  */
-export const RING_CHANNEL_ID = 'kims_parking_ring_v4';
+export const RING_CHANNEL_ID = 'kims_parking_ring_v5';
 
 /**
  * The short alarm — everything that is not someone waiting on you.
@@ -50,7 +50,7 @@ export const RING_CHANNEL_ID = 'kims_parking_ring_v4';
  * channel's pattern, and channels are immutable — so two ring lengths means
  * two channels. There is no way to vary it per notification.
  */
-export const RING_SHORT_CHANNEL_ID = 'kims_parking_ring_short_v1';
+export const RING_SHORT_CHANNEL_ID = 'kims_parking_ring_short_v2';
 const RING_NOTIFICATION_ID = 'kims-assignment-alarm';
 
 // A single 3-buzz/one-shot-sound burst (the old behaviour) is over in about
@@ -193,7 +193,19 @@ export async function initNotifications(): Promise<void> {
     id: RING_CHANNEL_ID,
     name: 'Car requested / arrival (20s)',
     importance: AndroidImportance.HIGH,
-    sound: 'default',
+    /*
+     * res/raw/kims_alarm.wav — 20.61s, the SAME rhythm as the vibration
+     * pattern, so the buzz and the sound are one signature rather than two
+     * unrelated noises.
+     *
+     * A file is the only way to get sustained sound when the app is killed.
+     * 'default' is a ~2s system tone, and notifee's loopSound needs the app's
+     * process alive to keep looping it — so a force-closed phone got one
+     * short chime against a twenty-second buzz. The system plays a channel
+     * sound to completion with no app process involved, exactly as it does
+     * the vibration pattern.
+     */
+    sound: 'kims_alarm',
     vibration: true,
     vibrationPattern: CHANNEL_VIBRATION_PATTERN,
     bypassDnd: true,
@@ -203,9 +215,11 @@ export async function initNotifications(): Promise<void> {
   // alert the app has.
   await createChannelSafe({
     id: RING_SHORT_CHANNEL_ID,
-    name: 'Reminders (6s)',
+    name: 'Reminders (7s)',
     importance: AndroidImportance.HIGH,
-    sound: 'default',
+    // 6.87s — matched to SHORT_VIBRATION_PATTERN so the sound finishes with
+    // the buzz instead of being cut off mid-tone by timeoutAfter.
+    sound: 'kims_alarm_short',
     vibration: true,
     vibrationPattern: SHORT_VIBRATION_PATTERN,
     bypassDnd: true,
@@ -284,8 +298,11 @@ export async function ringAssignmentAlarm(
         pressAction: {id: 'default', launchActivity: 'default'},
         // Rings over the lock screen like an incoming call.
         fullScreenAction: {id: 'default', launchActivity: 'default'},
-        loopSound: true,
-        sound: 'default',
+        // No loopSound and no per-notification sound: the CHANNEL owns both
+        // now. Looping would restart a 20s alarm at 20s, and a notification
+        // sound would override the channel's on some Android builds — which
+        // is exactly how the killed-state case ends up different from the
+        // foreground one again.
         ongoing: true,
         autoCancel: false,
         // OS-level self-destruct. loopSound keeps the alarm sound going

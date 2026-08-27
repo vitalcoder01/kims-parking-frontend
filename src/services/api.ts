@@ -278,6 +278,10 @@ export const visitorsApi = {
     client.patch(`/visitors/${id}/assign-retrieval`, {driverId}).then(r => r.data.visitor),
   confirmDelivered: (id: number) =>
     client.patch(`/visitors/${id}/confirm-delivered`).then(r => r.data.visitor),
+  /** Valet: the car left without a retrieval ever being raised — closes the
+   *  session and frees the bay. See backend closeParkedVisitor. */
+  closeParked: (id: number) =>
+    client.patch(`/visitors/${id}/close-parked`).then(r => r.data.visitor),
 };
 
 // ── Arrival notices ──────────────────────────────────────────────────────

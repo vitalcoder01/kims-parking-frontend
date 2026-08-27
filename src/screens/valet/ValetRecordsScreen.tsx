@@ -114,7 +114,7 @@ export function ValetRecordsScreen() {
   const dialog = useDialog();
   const {colors, isDark} = useTheme();
   const {tasks, visitors, activeVisitors, availableDrivers, hasActiveRetrievalDriver,
-    assignVisitorPickupDriver, assignVisitorRetrievalDriver, assignStaffRetrievalDriver, cancelVisitor, cancelVisitorAssignment, recallVisitor, confirmVisitorDelivered,
+    assignVisitorPickupDriver, assignVisitorRetrievalDriver, assignStaffRetrievalDriver, cancelVisitor, cancelVisitorAssignment, recallVisitor, closeParkedVisitor, confirmVisitorDelivered,
     confirmTaskDelivered, fetchTaskHistory} = useValetActions();
 
   const [tab, setTab] = useState<RecordsTab>('visitors');
@@ -130,6 +130,39 @@ export function ValetRecordsScreen() {
   const [assigningDriverId, setAssigningDriverId] = useState<number | null>(null);
   const [confirmingVisitorId, setConfirmingVisitorId] = useState<number | null>(null);
   const [recallingVisitorId, setRecallingVisitorId] = useState<number | null>(null);
+  const [closingVisitorId, setClosingVisitorId] = useState<number | null>(null);
+
+  /*
+   * "The car has gone and nobody ever asked for it."
+   *
+   * Frees the bay as well as closing the session, so the confirm has to say
+   * so plainly: if the car is in fact still sitting there, the next park job
+   * gets sent to an occupied space. Same wording and same seriousness as the
+   * staff-side handleCloseParked on the Dashboard.
+   */
+  const handleCloseParked = (v: Visitor) => {
+    if (closingVisitorId != null) return;
+    dialog.show({
+      title: 'Car already left?',
+      message: `This closes ${v.carNumber ?? 'this visitor'}'s session${v.slotId ? ` and marks slot ${v.slotId} FREE` : ''}.
+
+Only do this if the car has physically gone — nobody ever asked for a retrieval.`,
+      tone: 'warning',
+      buttons: [
+        {text: 'Never mind', style: 'cancel'},
+        {text: 'Yes, close it', style: 'destructive', onPress: async () => {
+          setClosingVisitorId(v.id);
+          try {
+            await closeParkedVisitor(v.id);
+          } catch (err: any) {
+            dialog.alert(err.message || 'Could not close this session', {title: 'Error'});
+          } finally {
+            setClosingVisitorId(null);
+          }
+        }},
+      ],
+    });
+  };
   const [cancellingAssignmentVisitorId, setCancellingAssignmentVisitorId] = useState<number | null>(null);
   const [confirmingTaskId, setConfirmingTaskId] = useState<number | null>(null);
   // Detail sheet — shared by both tabs, holds whichever ticket was tapped.
@@ -438,11 +471,24 @@ export function ValetRecordsScreen() {
           </View>
 
           {parkedIdle && (
-            <PressableScale style={[s.actionBtn, {backgroundColor: colors.primary}]}
-              onPress={() => { setPendingVisitorId(v.id); setPendingMode('retrieve'); }}>
-              <Text style={[s.actionTxt, {color: colors.textOnPrimary}]}>Request retrieval</Text>
-              <Icon name="arrowRight" size={15} color={colors.textOnPrimary} />
-            </PressableScale>
+            <>
+              <PressableScale style={[s.actionBtn, {backgroundColor: colors.primary}]}
+                onPress={() => { setPendingVisitorId(v.id); setPendingMode('retrieve'); }}>
+                <Text style={[s.actionTxt, {color: colors.textOnPrimary}]}>Request retrieval</Text>
+                <Icon name="arrowRight" size={15} color={colors.textOnPrimary} />
+              </PressableScale>
+              {/* Secondary on purpose — it frees a bay, and it should never be
+                  the button someone hits by muscle memory. */}
+              <PressableScale
+                style={[s.actionBtn, {backgroundColor: 'transparent', borderWidth: 1, borderColor: colors.border, marginTop: 8}]}
+                onPress={() => handleCloseParked(v)}
+                disabled={closingVisitorId === v.id}
+              >
+                <Text style={[s.actionTxt, {color: colors.textSecondary}]}>
+                  {closingVisitorId === v.id ? 'Closing…' : 'Car already left'}
+                </Text>
+              </PressableScale>
+            </>
           )}
           {needsDriver && (
             <PressableScale style={[s.actionBtn, {backgroundColor: colors.warning}]}
