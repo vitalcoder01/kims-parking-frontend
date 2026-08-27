@@ -111,10 +111,14 @@ export function useCopilot(): CopilotState {
       return () => clearTimeout(t);
     }
     if (!id) {
+      // Nothing to report: settle. Both branches of this were 'asleep' —
+      // it read as though foreground and background differed here and they
+      // never did. The distinction that does matter (stop ticking when
+      // backgrounded) is handled by the tick effect above.
       prevTopId.current = null;
-      setMood(active ? 'asleep' : 'asleep');
+      setMood('asleep');
     }
-  }, [top?.id, active]);
+  }, [top?.id]);
 
   const dismiss = useCallback((id: string) => {
     setDismissed(prev => {

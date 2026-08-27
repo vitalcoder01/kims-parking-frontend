@@ -145,6 +145,28 @@ const navRef = createNavigationContainerRef();
  * screens: a doctor waiting for a car, a driver between jobs, an admin
  * looking at dashboards.
  */
+/*
+ * The tabs each role actually has.
+ *
+ * Needed because an insight names a PLACE ('dashboard'), not a route — the
+ * same rule serves every role and the route name differs between them. The
+ * mapping below resolves place to route, and this validates the result.
+ *
+ * Without the check, a target that does not exist for the current role
+ * navigates nowhere useful: 'map' resolves to 'Map' for a driver, who has
+ * no Map tab, and the default 'Home' does not exist for a valet. No rule
+ * hits those combinations today, which is luck rather than design — the
+ * web port had the same shape and a driver tapping their own unaccepted job
+ * landed on the ADMIN dashboard.
+ */
+const TABS_BY_ROLE: Record<string, readonly string[]> = {
+  valet: ['Queue', 'Records', 'Map', 'Analytics', 'Settings'],
+  driver: ['Dashboard', 'Jobs', 'Settings'],
+  admin: ['Dashboard', 'Staff', 'Attendance', 'Map', 'Analytics', 'Settings'],
+  doctor: ['Home', 'Card', 'History', 'Setup', 'Settings'],
+  staff: ['Home', 'Card', 'History', 'Setup', 'Settings'],
+};
+
 const ROAMS_ON: Record<string, readonly string[]> = {
   valet: ['Analytics'],
   driver: ['Dashboard'],
@@ -203,13 +225,16 @@ export function AppNavigator() {
           onNavigate={insight => {
             if (!navRef.isReady() || !insight.action) return;
             const target = insight.action.target;
-            const screen =
+            const wanted =
                 target === 'records'   ? (user.role === 'valet' ? 'Records' : 'Home')
               : target === 'dashboard' ? (user.role === 'valet' ? 'Queue' : 'Dashboard')
               : target === 'map'       ? 'Map'
               : 'Home';
+            // Only navigate somewhere this role can actually reach. A wrong
+            // mapping should be a harmless no-op, never another role's screen.
+            if (!(TABS_BY_ROLE[user.role] ?? []).includes(wanted)) return;
             // @ts-expect-error — route names are per-role and not in one union.
-            navRef.navigate(screen);
+            navRef.navigate(wanted);
           }}
         />
       )}
