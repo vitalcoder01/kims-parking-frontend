@@ -28,6 +28,10 @@ export interface CurrentUser {
   // toggles their own shift, same as any other profile field. Mirrors
   // kims-parking-web's identical field/fix.
   driverStatus?: 'available' | 'busy' | 'off';
+  // Two-station handoff model: 'gate' or 'lot', only meaningful for role
+  // 'valet'; undefined/null for every other role and for a valet with no
+  // station assigned yet (legacy behavior — see ValetHomeScreen).
+  valetStation?: 'gate' | 'lot' | null;
 }
 
 interface AuthContextValue {
@@ -40,6 +44,14 @@ interface AuthContextValue {
 
 const SESSION_KEY = '@kims_session';
 const SESSION_HOURS = 12;
+
+// Drivers no longer get an app at all — no GPS, no login, nothing to tap.
+// They're now purely a name in the valet's assign-driver picker. A
+// driver-role account hitting this app (fresh login, a restored session, or
+// an admin changing someone's role to driver while they're signed in
+// elsewhere) is rejected/logged out the same way, rather than landing on
+// screens nothing points to any more.
+const APP_DISABLED_ROLE_MESSAGE = 'Driver accounts no longer use the app — see your valet or admin.';
 
 const Ctx = createContext<AuthContextValue>({
   user: null,
@@ -87,7 +99,7 @@ export function AuthProvider({children}: {children: React.ReactNode}) {
       try {
         const saved: {user: CurrentUser; token: string; loginTime: number} = JSON.parse(raw);
         const age = (Date.now() - saved.loginTime) / (1000 * 60 * 60);
-        if (age < SESSION_HOURS && saved.token) {
+        if (age < SESSION_HOURS && saved.token && saved.user.role !== 'driver') {
           tokenRef.current = saved.token;
           setAuthToken(saved.token);
           setUser(saved.user);
@@ -97,8 +109,12 @@ export function AuthProvider({children}: {children: React.ReactNode}) {
           // admin may have changed this account's role/name/etc. since the
           // session was cached, and the stale cached role would otherwise
           // keep driving which navigator/tabs/endpoints this session uses
-          // until the next full login.
-          authApi.me().then(fresh => updateProfile(fresh)).catch(() => {});
+          // until the next full login. Also catches a role changed TO
+          // driver while this session was already open.
+          authApi.me().then(fresh => {
+            if (fresh.role === 'driver') { logout(); return; }
+            updateProfile(fresh);
+          }).catch(() => {});
         } else {
           AsyncStorage.removeItem(SESSION_KEY);
         }
@@ -110,6 +126,7 @@ export function AuthProvider({children}: {children: React.ReactNode}) {
 
   const login = useCallback(async (username: string, password: string) => {
     const {token, user: loggedInUser} = await authApi.login(username, password);
+    if (loggedInUser.role === 'driver') throw new Error(APP_DISABLED_ROLE_MESSAGE);
     const withTime: CurrentUser = {...loggedInUser, loginTime: Date.now()};
     tokenRef.current = token;
     setAuthToken(token);

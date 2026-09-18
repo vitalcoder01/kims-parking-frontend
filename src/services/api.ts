@@ -180,6 +180,11 @@ export const tasksApi = {
   // already live) and assigns a driver in one step.
   assignRetrievalDriverForDoctor: (doctorId: number, driverId: number, coords?: {lat: number; lng: number}) =>
     client.patch(`/tasks/doctor/${doctorId}/assign-retrieval`, {driverId, lat: coords?.lat, lng: coords?.lng}).then(r => r.data.task),
+  // Two-station handoff model: raises the request only, no driver — for a
+  // gate-station valet, so it reaches the lot valet the normal way instead
+  // of the calling valet short-circuiting straight to assignRetrievalDriverForDoctor.
+  requestRetrievalForDoctor: (doctorId: number) =>
+    client.post(`/tasks/doctor/${doctorId}/request-retrieval`).then(r => r.data.task),
   // Give up on a driver who hasn't accepted yet, right now, instead of
   // waiting out the accept-timeout window. Job stays open, driver freed.
   cancelAssignment: (id: number) =>
@@ -230,8 +235,23 @@ export const tasksApi = {
   // Driver: "car returned to the valet counter" after a recall.
   markReturned: (id: number) =>
     client.patch(`/tasks/${id}/returned`).then(r => r.data.task),
-  updateLocation: (id: number, lat: number, lng: number) =>
-    client.patch(`/tasks/${id}/location`, {lat, lng}).then(r => r.data.task),
+  // ── Two-station handoff model ──────────────────────────────────────────
+  // Gate-station valet: one action for a new park job (collect key, assign
+  // driver, hand over the key) — the driver is accepted automatically, no
+  // separate accept/reject step exists anymore.
+  gateHandoff: (data: {doctorId: number; carNumber: string; slotId?: string; driverId: number}) =>
+    client.post('/tasks/gate-handoff', data).then(r => r.data.task),
+  // Lot-station valet: confirms the car has been parked, in place of the
+  // driver's own `park` above.
+  confirmParked: (id: number, slotId: string) =>
+    client.patch(`/tasks/${id}/confirm-parked`, {slotId}).then(r => r.data.task),
+  // Gate-station valet: confirms the car has arrived back at the front
+  // gate, in place of the driver's own `retrieve` above.
+  confirmArrived: (id: number) =>
+    client.patch(`/tasks/${id}/confirm-arrived`).then(r => r.data.task),
+  // "No driver available on my station — ask the other side to assign one."
+  requestOtherStation: (id: number) =>
+    client.patch(`/tasks/${id}/request-other-station`).then(r => r.data.task),
 };
 
 // ── Drivers ──────────────────────────────────────────────────────────────
@@ -276,6 +296,11 @@ export const visitorsApi = {
     client.patch(`/visitors/${id}/recall`).then(r => r.data.visitor),
   assignRetrievalDriver: (id: number, driverId: number) =>
     client.patch(`/visitors/${id}/assign-retrieval`, {driverId}).then(r => r.data.visitor),
+  // Two-station handoff model: raises the request only, no driver — for a
+  // gate-station valet, so it reaches the lot valet the normal way instead
+  // of the calling valet short-circuiting straight to assignRetrievalDriver.
+  requestRetrieval: (id: number) =>
+    client.post(`/visitors/${id}/request-retrieval`).then(r => r.data),
   confirmDelivered: (id: number) =>
     client.patch(`/visitors/${id}/confirm-delivered`).then(r => r.data.visitor),
   /** Valet: the car left without a retrieval ever being raised — closes the
@@ -330,10 +355,13 @@ export const adminApi = {
   createUser: (data: {
     employeeId: string; name: string; role: 'doctor' | 'staff' | 'valet' | 'driver' | 'admin';
     password: string; department?: string; cardCode?: string; phone?: string; carNumber?: string;
+    // Two-station handoff model: only meaningful for role 'valet'.
+    valetStation?: 'gate' | 'lot' | null;
   }) => client.post('/admin/users', data).then(r => r.data.user),
   updateUser: (id: number, patch: {
     name?: string; role?: 'doctor' | 'staff' | 'valet' | 'driver' | 'admin';
     department?: string; cardCode?: string; phone?: string; carNumber?: string;
+    valetStation?: 'gate' | 'lot' | null;
   }) => client.patch(`/admin/users/${id}`, patch).then(r => r.data.user),
   resetPassword: (id: number, password: string) =>
     client.patch(`/admin/users/${id}/password`, {password}).then(r => r.data),

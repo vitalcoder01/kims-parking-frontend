@@ -1,5 +1,5 @@
 import type {ParkingTask, ParkingSlot} from '../../../context/AppStateContext';
-import {isMyJobToRun} from '../services/OwnershipService';
+import {isMyJobToRun, isMyStationJob} from '../services/OwnershipService';
 import {departurePriority} from '../../../utils/retrievalClocks';
 
 /**
@@ -41,10 +41,15 @@ export function selectDashboardSections(
   retrievalRequests: ParkingTask[],
   myValetId: number | null | undefined,
   queueTab: 'mine' | 'team',
+  // Two-station handoff model: widens "mine" to also include a job that's
+  // this valet's to finish right now by virtue of their station, even
+  // though canRun's strict valetId ownership still names whoever
+  // dispatched it (see isMyStationJob for why that split matters).
+  myStation?: 'gate' | 'lot' | null,
 ): DashboardSections {
   const dashboardJobs = [...activeTasks, ...retrievalRequests];
-  const mine = dashboardJobs.filter(t => isMyJobToRun(t, myValetId));
-  const team = dashboardJobs.filter(t => !isMyJobToRun(t, myValetId));
+  const mine = dashboardJobs.filter(t => isMyJobToRun(t, myValetId) || isMyStationJob(t, myStation));
+  const team = dashboardJobs.filter(t => !isMyJobToRun(t, myValetId) && !isMyStationJob(t, myStation));
   const forTab = queueTab === 'mine' ? mine : team;
 
   return {

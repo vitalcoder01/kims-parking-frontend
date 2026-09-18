@@ -1,5 +1,5 @@
 import React, {useState, useEffect, useRef} from 'react';
-import {View, Text, StyleSheet, ScrollView, TextInput, Animated, StatusBar, ActivityIndicator} from 'react-native';
+import {View, Text, StyleSheet, ScrollView, Animated, StatusBar} from 'react-native';
 import {useDialog} from '../../components/AppDialog';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useAuth} from '../../context/AuthContext';
@@ -16,26 +16,15 @@ import {SkeletonCard} from '../../components/Skeleton';
 export function DriverJobsScreen() {
   const dialog = useDialog();
   const {user} = useAuth();
-  const {tasks, slots, markParked, markRetrieved, updateTask, pushNotification,
-    acceptTask, rejectTask, fetchTaskHistory, markTaskReturned,
+  const {tasks, markTaskReturned,
+    fetchTaskHistory,
     hydrated, refreshTasks} = useAppState();
   const {colors: c, isDark} = useTheme();
 
-  const [slotInput, setSlotInput] = useState('');
-  // Guards handleMarkParked against a double-tap firing the same "mark
-  // parked" call twice while the first is still in flight.
-  const [markingParked, setMarkingParked] = useState(false);
-  // Shared guard for the rest of the one-tap job actions below (accept,
-  // reject, start retrieval, mark returned, mark retrieved) — only one of
-  // them is ever visible at a time for a given task stage, so a single flag
-  // is enough. None of these had any guard at all before: a slow response
-  // left the button tappable, and a second tap either fired the same action
-  // twice or landed after the job had already moved past that stage.
+  // Guards the one remaining one-tap job action below (mark returned, for
+  // a recalled car) against a double-tap firing it twice while the first
+  // is still in flight.
   const [actionBusy, setActionBusy] = useState(false);
-  // Accept/Reject show together and actionBusy alone can't say which one is
-  // running — without this the tapped button gave no visible feedback (just
-  // a dimmed opacity easy to miss), so a driver would tap it again.
-  const [respondingAction, setRespondingAction] = useState<'accept' | 'reject' | null>(null);
   const carAnim = useRef(new Animated.Value(0)).current;
 
   const myDriverId = useMyDriverId();
@@ -89,65 +78,6 @@ export function DriverJobsScreen() {
     });
   };
 
-  const handleAcceptTask = async () => {
-    if (!activeTask || actionBusy) return;
-    setActionBusy(true);
-    setRespondingAction('accept');
-    try {
-      await acceptTask(activeTask.id);
-    } catch (err: any) {
-      await handleStaleJob(err, 'Could not accept task');
-    } finally {
-      setActionBusy(false);
-      setRespondingAction(null);
-    }
-  };
-
-  const handleRejectTask = async () => {
-    if (!activeTask || actionBusy) return;
-    setActionBusy(true);
-    setRespondingAction('reject');
-    try {
-      await rejectTask(activeTask.id);
-    } catch (err: any) {
-      await handleStaleJob(err, 'Could not reject task');
-    } finally {
-      setActionBusy(false);
-      setRespondingAction(null);
-    }
-  };
-
-  const handleStartRetrieval = async () => {
-    if (!activeTask || actionBusy) return;
-    setActionBusy(true);
-    try {
-      await updateTask(activeTask.id, {status: 'in_transit'});
-    } catch (err: any) {
-      dialog.alert(err.message || 'Could not start retrieval', {title: 'Error'});
-    } finally {
-      setActionBusy(false);
-    }
-  };
-
-  const handleMarkParked = async () => {
-    if (!activeTask || !slotInput.trim() || markingParked) return;
-    setMarkingParked(true);
-    try {
-      // Both "Car Parked" notifications are raised by the server inside
-      // markParked now. They used to be fired from here, which meant a
-      // visitor's park addressed the doctor one to `doctor:undefined` (the
-      // app stores a missing id as undefined, and it went straight into the
-      // template), and a phone dying at this exact moment left the owner and
-      // the valet with no word that the car was down.
-      await markParked(activeTask.id, slotInput.trim().toUpperCase());
-      setSlotInput('');
-    } catch (err: any) {
-      dialog.alert(err.message || 'Could not mark parked', {title: 'Error'});
-    } finally {
-      setMarkingParked(false);
-    }
-  };
-
   // Valet pulled this park job back mid-drive — the car goes back to the
   // counter instead of into a slot. They still have to confirm receipt.
   const handleMarkReturned = async () => {
@@ -162,32 +92,6 @@ export function DriverJobsScreen() {
     }
   };
 
-  const handleMarkRetrieved = async () => {
-    if (!activeTask || actionBusy) return;
-    setActionBusy(true);
-    try {
-      await markRetrieved(activeTask.id);
-      // Alarm-grade — a car is now sitting at the counter waiting on the
-      // owner, and nothing else prompts the valet to confirm the handover.
-      // The valet who owns this retrieval is the one who has to confirm the
-      // handover, so ring them and nobody else. Falls back to the whole team
-      // only when the job genuinely has no owner — an unowned car still has
-      // to be confirmed by someone.
-      const owner = activeTask.retrievalOwnerValetId ?? activeTask.arrivalOwnerValetId;
-      pushNotification({
-        targetRole: owner ? `valet:${owner}` : 'valet',
-        title: '🔔 Car at the counter',
-        body: `${activeTask.carNumber} is ready. Confirm once the owner has taken it.`,
-        type: 'alarm',
-      });
-    } catch (err: any) {
-      dialog.alert(err.message || 'Could not mark retrieved', {title: 'Error'});
-      return;
-    } finally {
-      setActionBusy(false);
-    }
-  };
-
   const carX = carAnim.interpolate({inputRange: [0, 1], outputRange: ['0%', '88%']});
 
   const statusMeta: Record<string, {label: string; color: string; bg: string; icon: IconName}> = {
@@ -196,8 +100,6 @@ export function DriverJobsScreen() {
     in_transit:    {label: 'In transit', color: c.primary, bg: c.cardAlt, icon: 'navigate'},
     completed:     {label: 'Done', color: c.success, bg: c.successLight, icon: 'check'},
   };
-
-  const freeSlots = slots.filter(s => s.status === 'free').slice(0, 6);
 
   return (
     <SafeAreaView style={[s.safe, {backgroundColor: c.background}]}>
@@ -256,32 +158,6 @@ export function DriverJobsScreen() {
                 </View>
               )}
 
-              {/* Accept handshake — a freshly assigned job must be accepted
-                  (or rejected) before anything else; not accepting within
-                  the admin-set window sends it back to the valet. */}
-              {activeTask.status === 'assigned' && !activeTask.acceptedAt && (
-                <View style={{flexDirection: 'row', gap: 8}}>
-                  <PressableScale
-                    style={[s.parkBtn, {backgroundColor: c.cardAlt, flex: 1, opacity: actionBusy ? 0.6 : 1}]}
-                    onPress={handleRejectTask} disabled={actionBusy}
-                  >
-                    {respondingAction === 'reject'
-                      ? <ActivityIndicator color={c.primary} size="small" />
-                      : <Icon name="close" size={15} color={c.primary} />}
-                    <Text style={[s.parkBtnTxt, {color: c.primary}]}>{respondingAction === 'reject' ? 'Rejecting…' : 'Reject'}</Text>
-                  </PressableScale>
-                  <PressableScale
-                    style={[s.parkBtn, {backgroundColor: c.primary, flex: 1, opacity: actionBusy ? 0.6 : 1}]}
-                    onPress={handleAcceptTask} disabled={actionBusy}
-                  >
-                    {respondingAction === 'accept'
-                      ? <ActivityIndicator color={c.textOnPrimary} size="small" />
-                      : <Icon name="check" size={15} color={c.textOnPrimary} />}
-                    <Text style={[s.parkBtnTxt, {color: c.textOnPrimary}]}>{respondingAction === 'accept' ? 'Accepting…' : 'Accept'}</Text>
-                  </PressableScale>
-                </View>
-              )}
-
               {/* A park job has no destination at all — the driver just
                   drives with the key to whichever free slot they pick, so
                   there's nothing to route/ETA against (this used to show
@@ -333,67 +209,35 @@ export function DriverJobsScreen() {
                 </View>
               )}
 
+              {/* No manual "mark parked" any more either — the lot-station
+                  valet confirms this once the car is actually in a slot
+                  (see ValetHomeScreen's confirmParkedByValet). The
+                  driver's only job from here is to drive there. */}
               {activeTask.type === 'park' && !activeTask.recalledAt && (activeTask.status === 'key_collected' || activeTask.status === 'in_transit') && (
-                <View style={s.parkAction}>
-                  <View style={s.slotInputRow}>
-                    <View style={[s.slotInput, {borderColor: c.border, backgroundColor: c.background}]}>
-                      <TextInput
-                        style={[s.slotInputText, {color: c.primary}]}
-                        value={slotInput}
-                        onChangeText={t => setSlotInput(t.toUpperCase())}
-                        placeholder="e.g. A-203"
-                        placeholderTextColor={c.textMuted}
-                        autoCapitalize="characters"
-                        returnKeyType="done"
-                        onSubmitEditing={() => slotInput.trim() && handleMarkParked()}
-                      />
-                    </View>
-                    <PressableScale
-                      style={[s.parkBtn, {backgroundColor: c.primary, opacity: (slotInput.trim() && !markingParked) ? 1 : 0.35}]}
-                      onPress={handleMarkParked} disabled={!slotInput.trim() || markingParked}
-                    >
-                      <Icon name="check" size={15} color={c.textOnPrimary} />
-                      <Text style={[s.parkBtnTxt, {color: c.textOnPrimary}]}>{markingParked ? 'Marking…' : 'Mark parked'}</Text>
-                    </PressableScale>
-                  </View>
-                  {freeSlots.length > 0 && (
-                    <PressableScale
-                      style={[s.autoAssignBtn, {borderColor: c.border, backgroundColor: c.cardAlt}]}
-                      onPress={() => setSlotInput(freeSlots[0].id)}
-                    >
-                      <Icon name="bolt" size={14} color={c.primary} />
-                      <Text style={[s.autoAssignTxt, {color: c.primary}]}>Auto-assign nearest free slot ({freeSlots[0].id})</Text>
-                    </PressableScale>
-                  )}
-                  <Text style={[s.quickPickLabel, {color: c.textMuted}]}>AVAILABLE SLOTS</Text>
-                  <View style={s.quickPicks}>
-                    {freeSlots.map(sl => (
-                      <PressableScale key={sl.id} onPress={() => setSlotInput(sl.id)}
-                        style={[s.quickPick, {backgroundColor: c.cardAlt, borderColor: c.border}]}>
-                        <Text style={[s.quickPickTxt, {color: c.primary}]}>{sl.id}</Text>
-                      </PressableScale>
-                    ))}
-                  </View>
+                <View style={[s.statusRow, {backgroundColor: c.cardAlt}]}>
+                  <Icon name="carKey" size={16} color={c.textSecondary} />
+                  <Text style={[s.statusLabel, {color: c.textSecondary}]}>Drive to a free slot — a valet will confirm once it's parked</Text>
                 </View>
               )}
 
-              {activeTask.type === 'retrieve' && activeTask.status === 'assigned' && !!activeTask.acceptedAt && (
-                <PressableScale
-                  style={[s.retrieveBtn, {backgroundColor: c.primary, opacity: actionBusy ? 0.6 : 1}]}
-                  onPress={handleStartRetrieval} disabled={actionBusy}
-                >
-                  <Icon name="carKey" size={16} color={c.textOnPrimary} />
-                  <Text style={[s.retrieveBtnTxt, {color: c.textOnPrimary}]}>{actionBusy ? 'Please wait…' : 'Start retrieval'}</Text>
-                </PressableScale>
+              {/* No manual "start" tap — the driver's only job is to drive;
+                  reporting GPS itself is what advances this into in_transit
+                  (see AppStateContext.activeDriverTask / the two-station
+                  handoff model). This status just tells them where to go. */}
+              {activeTask.type === 'retrieve' && activeTask.status === 'assigned' && (
+                <View style={[s.statusRow, {backgroundColor: c.cardAlt}]}>
+                  <Icon name="navigate" size={16} color={c.primary} />
+                  <Text style={[s.statusLabel, {color: c.primary}]}>Head to the parking slot — tracking starts automatically</Text>
+                </View>
               )}
+              {/* No manual "delivered" tap either — the gate-station valet
+                  confirms once the car has actually arrived (see
+                  ValetHomeScreen's confirmArrivedByValet). */}
               {activeTask.type === 'retrieve' && activeTask.status === 'in_transit' && (
-                <PressableScale
-                  style={[s.retrieveBtn, {backgroundColor: c.primary, opacity: actionBusy ? 0.6 : 1}]}
-                  onPress={handleMarkRetrieved} disabled={actionBusy}
-                >
-                  <Icon name="check" size={16} color={c.textOnPrimary} />
-                  <Text style={[s.retrieveBtnTxt, {color: c.textOnPrimary}]}>{actionBusy ? 'Please wait…' : 'Delivered to counter'}</Text>
-                </PressableScale>
+                <View style={[s.statusRow, {backgroundColor: c.cardAlt}]}>
+                  <Icon name="carKey" size={16} color={c.textSecondary} />
+                  <Text style={[s.statusLabel, {color: c.textSecondary}]}>Drive to the front gate — a valet will confirm once you arrive</Text>
+                </View>
               )}
             </View>
           </View>

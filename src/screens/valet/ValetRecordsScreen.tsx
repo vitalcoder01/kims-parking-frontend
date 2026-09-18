@@ -1,6 +1,7 @@
 import React, {useState, useEffect} from 'react';
 import {View, Text, StyleSheet, ScrollView, TextInput, StatusBar, ActivityIndicator, Modal, Pressable, Platform, BackHandler} from 'react-native';
 import {useDialog} from '../../components/AppDialog';
+import {useAuth} from '../../context/AuthContext';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useTheme} from '../../context/ThemeContext';
 import {Visitor, ParkingTask, mapVisitor} from '../../context/AppStateContext';
@@ -10,7 +11,7 @@ import {HScrollHint} from '../../components/HScrollHint';
 import {DriverPickerList} from '../../components/DriverPickerList';
 import {CalendarPicker} from '../../components/CalendarPicker';
 import {visitorsApi} from '../../services/api';
-import {useValetActions} from './useValetActions';
+import {useValetActions, canAssignRetrieval} from './useValetActions';
 import {ParkingMapScreen} from '../ParkingMapScreen';
 import {selectVisitorStage, selectStaffStage, Stage} from '../../core/valet/selectors/JobStageSelector';
 import {
@@ -114,8 +115,21 @@ export function ValetRecordsScreen() {
   const dialog = useDialog();
   const {colors, isDark} = useTheme();
   const {tasks, visitors, activeVisitors, availableDrivers, hasActiveRetrievalDriver,
-    assignVisitorPickupDriver, assignVisitorRetrievalDriver, assignStaffRetrievalDriver, cancelVisitor, cancelVisitorAssignment, recallVisitor, closeParkedVisitor, confirmVisitorDelivered,
+    assignVisitorPickupDriver, assignVisitorRetrievalDriver, requestVisitorRetrieval, assignStaffRetrievalDriver, requestStaffRetrieval, cancelVisitor, cancelVisitorAssignment, recallVisitor, closeParkedVisitor, confirmVisitorDelivered,
     confirmTaskDelivered, fetchTaskHistory} = useValetActions();
+  const {user} = useAuth();
+  // Two-station handoff model: a gate-station valet only RAISES a retrieval
+  // request (the lot valet assigns the driver, same as a doctor's own
+  // self-service request) — see requestStaffRetrieval/requestVisitorRetrieval.
+  // A lot-station valet, or one with no station, keeps the old one-tap
+  // raise+assign.
+  const myStation = user?.valetStation ?? null;
+  const myValetId = user?.role === 'valet' ? user.id : null;
+  // The visitor's own live retrieve task, if one's been raised — needed to
+  // run canAssignRetrieval against (Visitor itself doesn't carry station
+  // ownership fields; the ParkingTask it's linked to does).
+  const visitorRetrieveTask = (v: {id: number}) =>
+    tasks.find(t => t.visitorId === v.id && t.type === 'retrieve' && t.status !== 'completed' && t.status !== 'cancelled') ?? null;
 
   const [tab, setTab] = useState<RecordsTab>('visitors');
   const [query, setQuery] = useState('');
@@ -128,6 +142,10 @@ export function ValetRecordsScreen() {
   // below can serve both flows.
   const [pendingDoctorTaskId, setPendingDoctorTaskId] = useState<number | null>(null);
   const [assigningDriverId, setAssigningDriverId] = useState<number | null>(null);
+  // Gate-station valet's "Request retrieval" — raises the request only, no
+  // driver picker for them, so this just needs a per-doctor busy flag.
+  const [requestingRetrievalDoctorId, setRequestingRetrievalDoctorId] = useState<number | null>(null);
+  const [requestingRetrievalVisitorId, setRequestingRetrievalVisitorId] = useState<number | null>(null);
   const [confirmingVisitorId, setConfirmingVisitorId] = useState<number | null>(null);
   const [recallingVisitorId, setRecallingVisitorId] = useState<number | null>(null);
   const [closingVisitorId, setClosingVisitorId] = useState<number | null>(null);
@@ -308,6 +326,36 @@ Only do this if the car has physically gone — nobody ever asked for a retrieva
   };
 
 
+  // Gate-station valet taps "Request retrieval" for a staff/doctor member
+  // who called the desk — this only raises it, same as the doctor's own
+  // self-service request. The lot valet picks the driver from there (or
+  // hands it back via "No driver here" if the lot has none).
+  const handleRequestStaffRetrieval = async (doctorId: number) => {
+    if (requestingRetrievalDoctorId != null) return;
+    setRequestingRetrievalDoctorId(doctorId);
+    try {
+      await requestStaffRetrieval(doctorId);
+    } catch (err: any) {
+      dialog.alert(err.message || 'Could not send the retrieval request', {title: 'Error'});
+    } finally {
+      setRequestingRetrievalDoctorId(null);
+    }
+  };
+
+  // Gate-station valet taps "Request retrieval" for a parked visitor —
+  // this only raises it, same as the staff/doctor equivalent above.
+  const handleRequestVisitorRetrieval = async (visitorId: number) => {
+    if (requestingRetrievalVisitorId != null) return;
+    setRequestingRetrievalVisitorId(visitorId);
+    try {
+      await requestVisitorRetrieval(visitorId);
+    } catch (err: any) {
+      dialog.alert(err.message || 'Could not send the retrieval request', {title: 'Error'});
+    } finally {
+      setRequestingRetrievalVisitorId(null);
+    }
+  };
+
   const handleConfirmVisitorDelivered = async (visitorId: number) => {
     if (confirmingVisitorId != null) return;
     setConfirmingVisitorId(visitorId);
@@ -411,6 +459,13 @@ Only do this if the car has physically gone — nobody ever asked for a retrieva
     const retrieving = v.status === 'parked' && v.retrievalRequested && !needsDriver;
     const parkedIdle = v.status === 'parked' && !v.retrievalRequested;
     const delivered = v.status === 'delivered';
+    // Two-station handoff: a gate valet may see this needing a driver, but
+    // assigning it is the lot valet's job unless the lot side has punted it
+    // back — see canAssignRetrieval. No linked task (shouldn't happen once
+    // needsDriver is true, but there's nothing to gate against) defaults to
+    // allowed rather than silently hiding a real action.
+    const retrieveTask = needsDriver ? visitorRetrieveTask(v) : null;
+    const canAssignThis = !retrieveTask || canAssignRetrieval(retrieveTask, myValetId, myStation);
     // The visitor row itself doesn't track a driver's key handover — that
     // lives on its linked ParkingTask (see backend createVisitor). Reading
     // it here is what tells the difference between "nobody's touched this
@@ -472,10 +527,21 @@ Only do this if the car has physically gone — nobody ever asked for a retrieva
 
           {parkedIdle && (
             <>
-              <PressableScale style={[s.actionBtn, {backgroundColor: colors.primary}]}
-                onPress={() => { setPendingVisitorId(v.id); setPendingMode('retrieve'); }}>
-                <Text style={[s.actionTxt, {color: colors.textOnPrimary}]}>Request retrieval</Text>
-                <Icon name="arrowRight" size={15} color={colors.textOnPrimary} />
+              {/* Two-station handoff: a gate-station valet raises the
+                  retrieval only (lot valet then picks a driver); everyone
+                  else keeps the old one-tap that opens the driver picker
+                  right after this. */}
+              <PressableScale
+                style={[s.actionBtn, {backgroundColor: colors.primary, opacity: requestingRetrievalVisitorId === v.id ? 0.6 : 1}]}
+                disabled={requestingRetrievalVisitorId === v.id}
+                onPress={() => {
+                  if (myStation === 'gate') { handleRequestVisitorRetrieval(v.id); return; }
+                  setPendingVisitorId(v.id); setPendingMode('retrieve');
+                }}>
+                {requestingRetrievalVisitorId === v.id
+                  ? <ActivityIndicator color={colors.textOnPrimary} size="small" />
+                  : <Text style={[s.actionTxt, {color: colors.textOnPrimary}]}>Request retrieval</Text>}
+                {requestingRetrievalVisitorId !== v.id && <Icon name="arrowRight" size={15} color={colors.textOnPrimary} />}
               </PressableScale>
               {/* Secondary on purpose — it frees a bay, and it should never be
                   the button someone hits by muscle memory. */}
@@ -490,13 +556,18 @@ Only do this if the car has physically gone — nobody ever asked for a retrieva
               </PressableScale>
             </>
           )}
-          {needsDriver && (
+          {needsDriver && (canAssignThis ? (
             <PressableScale style={[s.actionBtn, {backgroundColor: colors.warning}]}
               onPress={() => { setPendingVisitorId(v.id); setPendingMode('retrieve'); }}>
               <Text style={[s.actionTxt, {color: '#fff'}]}>Assign driver</Text>
               <Icon name="arrowRight" size={15} color="#fff" />
             </PressableScale>
-          )}
+          ) : (
+            <View style={[s.actionBtn, {borderColor: colors.border, backgroundColor: 'transparent'}]}>
+              <Icon name="clock" size={13} color={colors.textMuted} />
+              <Text style={[s.actionTxt, {color: colors.textMuted}]}>Waiting for the lot valet to assign a driver</Text>
+            </View>
+          ))}
           {retrieving && (
             <View style={[s.actionBtn, {backgroundColor: colors.warningLight}]}>
               <Text style={[s.actionTxt, {color: colors.warning}]}>{v.driverName ?? 'Driver'} en route…</Text>
@@ -654,10 +725,14 @@ Only do this if the car has physically gone — nobody ever asked for a retrieva
           )}
 
           {canRetrieve && (
-            <PressableScale style={[s.actionBtn, {backgroundColor: colors.primary}]}
-              onPress={() => setPendingDoctorTaskId(t.id)}>
-              <Text style={[s.actionTxt, {color: colors.textOnPrimary}]}>Request retrieval</Text>
-              <Icon name="arrowRight" size={15} color={colors.textOnPrimary} />
+            <PressableScale
+              style={[s.actionBtn, {backgroundColor: colors.primary, opacity: requestingRetrievalDoctorId === t.doctorId ? 0.6 : 1}]}
+              disabled={requestingRetrievalDoctorId === t.doctorId}
+              onPress={() => (myStation === 'gate' ? handleRequestStaffRetrieval(t.doctorId) : setPendingDoctorTaskId(t.id))}>
+              {requestingRetrievalDoctorId === t.doctorId
+                ? <ActivityIndicator color={colors.textOnPrimary} size="small" />
+                : <Text style={[s.actionTxt, {color: colors.textOnPrimary}]}>Request retrieval</Text>}
+              {requestingRetrievalDoctorId !== t.doctorId && <Icon name="arrowRight" size={15} color={colors.textOnPrimary} />}
             </PressableScale>
           )}
 

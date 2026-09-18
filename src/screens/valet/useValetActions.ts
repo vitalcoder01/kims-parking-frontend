@@ -1,6 +1,6 @@
 import {useAppState, Visitor, ParkingTask} from '../../context/AppStateContext';
 import {useAuth} from '../../context/AuthContext';
-import {canView, canRun} from '../../core/valet/services/OwnershipService';
+import {canView, canRun, canAssignRetrieval} from '../../core/valet/services/OwnershipService';
 
 // Shared valet data + mutations, used by the Queue, Requests, and Visitors
 // screens (three separate bottom tabs) so none of them re-derive the same
@@ -11,10 +11,12 @@ import {canView, canRun} from '../../core/valet/services/OwnershipService';
 // original names so no existing import elsewhere has to change.
 export const isMyRetrieval = canView;
 export const isMyJobToRun = canRun;
+export {canAssignRetrieval};
 
 export function useValetActions() {
   const {drivers, tasks, visitors, arrivalNotices, dismissArrivalNotice, addTask, assignDriver, cancelTaskAssignment, markKeyCollected, pushNotification, addVisitor,
-    assignVisitorDriver, cancelVisitorAssignment, assignRetrievalDriver, assignStaffRetrievalDriver, cancelVisitor, recallVisitor, closeParkedVisitor,
+    gateHandoff, confirmParkedByValet, confirmArrivedByValet, requestOtherStationDriver,
+    assignVisitorDriver, cancelVisitorAssignment, assignRetrievalDriver, requestVisitorRetrieval, assignStaffRetrievalDriver, requestStaffRetrieval, cancelVisitor, recallVisitor, closeParkedVisitor,
     confirmTaskDelivered, confirmVisitorDelivered, cancelTask, closeParkedSession, recallTask, fetchTaskHistory,
     acceptRetrieval} = useAppState();
   const {user} = useAuth();
@@ -82,12 +84,13 @@ export function useValetActions() {
 
   return {
     drivers, tasks, visitors, dismissArrivalNotice, addTask, addVisitor, pushNotification, markKeyCollected, cancelVisitor, recallVisitor, closeParkedVisitor,
+    gateHandoff, confirmParkedByValet, confirmArrivedByValet, requestOtherStationDriver,
     // Every valet sees every expected arrival — it is a heads-up, not a job,
     // so there is nothing to claim and nobody to filter it for.
     arrivalNotices,
     acceptRetrieval, myValetId,
     activeTasks, availableDrivers, retrievalRequests, activeVisitors, hasActiveRetrievalDriver,
-    assignTaskDriver, assignVisitorPickupDriver, assignVisitorRetrievalDriver, assignStaffRetrievalDriver,
+    assignTaskDriver, assignVisitorPickupDriver, assignVisitorRetrievalDriver, requestVisitorRetrieval, assignStaffRetrievalDriver, requestStaffRetrieval,
     cancelTaskAssignment, cancelVisitorAssignment,
     confirmTaskDelivered, confirmVisitorDelivered, cancelTask, closeParkedSession, recallTask, fetchTaskHistory,
   };

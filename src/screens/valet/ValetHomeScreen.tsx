@@ -12,7 +12,7 @@ import {DriverPickerList} from '../../components/DriverPickerList';
 import {usersApi, tasksApi, visitorsApi, isJobGone} from '../../services/api';
 import {formatPlate, isCompletePlate} from '../../utils/plate';
 import {VehicleNumberInput} from '../../components/VehicleNumberInput';
-import {useValetActions, isMyJobToRun} from './useValetActions';
+import {useValetActions, isMyJobToRun, canAssignRetrieval} from './useValetActions';
 import type {ParkingTask} from '../../context/AppStateContext';
 import {useAppState} from '../../context/AppStateContext';
 import {SkeletonCard} from '../../components/Skeleton';
@@ -85,7 +85,13 @@ export function ValetHomeScreen() {
     activeTasks, availableDrivers, retrievalRequests, assignTaskDriver, assignVisitorPickupDriver,
     cancelTaskAssignment,
     confirmTaskDelivered, cancelTask, closeParkedSession, recallTask, arrivalNotices, dismissArrivalNotice,
-    acceptRetrieval, myValetId} = useValetActions();
+    acceptRetrieval, myValetId,
+    gateHandoff, confirmParkedByValet, confirmArrivedByValet, requestOtherStationDriver} = useValetActions();
+  // Two-station handoff model: which physical station this valet works, if
+  // any. Undefined/null (the vast majority of accounts, until an admin
+  // assigns one) means this screen behaves exactly as it always has — every
+  // change below is additive and gated on this being 'gate' or 'lot'.
+  const myStation = user?.valetStation ?? null;
   const {hydrated} = useAppState();
   const {colors, isDark} = useTheme();
 
@@ -130,6 +136,20 @@ export function ValetHomeScreen() {
   // who they want and would rather scan a fixed order than a shifting one.
   const [driverSearch, setDriverSearch] = useState('');
   const [assigningDriverId, setAssigningDriverId] = useState<number | null>(null);
+  // Two-station handoff model, gate side: a doctor/plate found via scan/code
+  // but not yet turned into a task at all — gateHandoff creates it, assigns
+  // the driver, and hands over the key all at once once one is picked.
+  const [pendingGateJob, setPendingGateJob] = useState<{doctorId: number; doctorName: string; carNumber: string} | null>(null);
+  // Lot side: which park job's "Confirm Parked" slot input is open, its
+  // typed value, and which one is mid-submit.
+  const [confirmParkTaskId, setConfirmParkTaskId] = useState<number | null>(null);
+  const [confirmParkSlotInput, setConfirmParkSlotInput] = useState('');
+  const [confirmingParkedId, setConfirmingParkedId] = useState<number | null>(null);
+  // Gate side: which retrieval's "Confirm Arrived" is mid-submit.
+  const [confirmingArrivedId, setConfirmingArrivedId] = useState<number | null>(null);
+  // Either side: "no driver available here, ask the other station" —
+  // tracks which job's hand-off request is in flight.
+  const [handingOffTaskId, setHandingOffTaskId] = useState<number | null>(null);
 
   // Android hardware/gesture back — this screen has its own internal
   // sub-screens (scan/assign/visitor/retrievals) that React Navigation
@@ -332,6 +352,18 @@ export function ValetHomeScreen() {
   // into the (same, reused) Assign Driver screen with it pre-selected —
   // the common case is they already know which driver they want.
   const createKeyTask = async (user: any, plate: string) => {
+    // Gate-station valet: defer creating anything at all until a driver is
+    // picked (see handleAssignDriver below) — gateHandoff then does
+    // create + assign + key-handover in one call instead of three separate
+    // steps, since the driver no longer has an accept step to wait through
+    // in between.
+    if (myStation === 'gate') {
+      setFoundUser(null); setCarNumber('');
+      setPendingVisitorId(null); setPendingTaskId(null);
+      setPendingGateJob({doctorId: user.id, doctorName: user.name, carNumber: plate.toUpperCase()});
+      setScreen('assign');
+      return;
+    }
     try {
       const taskId = await addTask({
         type: 'park',
@@ -368,7 +400,13 @@ export function ValetHomeScreen() {
     if (assigningDriverId != null) return;
     setAssigningDriverId(driverId);
     try {
-      if (pendingVisitorId) {
+      if (pendingGateJob) {
+        await gateHandoff({
+          doctorId: pendingGateJob.doctorId, doctorName: pendingGateJob.doctorName,
+          carNumber: pendingGateJob.carNumber, driverId,
+        });
+        setPendingGateJob(null);
+      } else if (pendingVisitorId) {
         await assignVisitorPickupDriver(pendingVisitorId, driverId);
         setPendingVisitorId(null);
       } else if (pendingTaskId) {
@@ -385,7 +423,7 @@ export function ValetHomeScreen() {
       // taps. If it's only that THIS driver got taken, the job is still
       // theirs: stay put so they can pick another without navigating back in.
       if (isJobGone(err)) {
-        setPendingTaskId(null); setPendingVisitorId(null);
+        setPendingTaskId(null); setPendingVisitorId(null); setPendingGateJob(null);
         setScreen('home');
       }
       dialog.alert(err.message || 'Something went wrong', {
@@ -880,6 +918,33 @@ export function ValetHomeScreen() {
 
           <DriverPickerList drivers={visibleDrivers} onAssign={handleAssignDriver} assigningId={assigningDriverId} />
 
+          {/* Two-station handoff model: this screen is also what opens from
+              the Retrieval Requests inbox — it never had this escape hatch
+              at all (only the Dashboard's inline job card did), so a lot
+              valet with nobody free had no way to hand the job back to the
+              gate side without leaving the screen first. */}
+          {isRetrieve && !!pendingTask && !!myStation && (
+            <PressableScale
+              style={[s.taskActionBtn, {marginTop: 10, borderColor: colors.border, backgroundColor: colors.cardAlt}]}
+              disabled={handingOffTaskId === pendingTask.id}
+              onPress={async () => {
+                if (handingOffTaskId != null) return;
+                setHandingOffTaskId(pendingTask.id);
+                try {
+                  await requestOtherStationDriver(pendingTask.id);
+                  closeAssign();
+                } catch (err: any) {
+                  dialog.alert(err.message || 'Could not hand off this job', {title: 'Error'});
+                } finally {
+                  setHandingOffTaskId(null);
+                }
+              }}>
+              <Text style={[s.taskActionTxt, {color: colors.textSecondary}]}>
+                {handingOffTaskId === pendingTask.id ? 'Sending…' : 'No driver here'}
+              </Text>
+            </PressableScale>
+          )}
+
           <View style={[s.assignNoteCard, {backgroundColor: colors.cardAlt, borderColor: colors.border}]}>
             <View style={[s.assignNoteIconWrap, {backgroundColor: colors.successLight}]}>
               <Icon name="shield" size={16} color={colors.success} />
@@ -1045,11 +1110,24 @@ export function ValetHomeScreen() {
                 </View>
               )}
 
-              <PressableScale style={[s.taskActionBtn, s.jobActions, {borderColor: 'transparent', backgroundColor: colors.primary}]}
-                onPress={() => handleAssignDriverTo(t)}>
-                <Icon name="people" size={13} color={colors.textOnPrimary} />
-                <Text style={[s.taskActionTxt, {color: colors.textOnPrimary}]}>Assign driver</Text>
-              </PressableScale>
+              {/* Two-station handoff: a gate valet sees every request they
+                  raised (canView), but assigning the driver is the lot
+                  valet's job unless the lot side has already punted it
+                  back via "No driver here" — see canAssignRetrieval. Read-
+                  only here rather than hidden entirely, so the gate valet
+                  can still see it's in flight and waiting on the lot side. */}
+              {canAssignRetrieval(t, myValetId, myStation) ? (
+                <PressableScale style={[s.taskActionBtn, s.jobActions, {borderColor: 'transparent', backgroundColor: colors.primary}]}
+                  onPress={() => handleAssignDriverTo(t)}>
+                  <Icon name="people" size={13} color={colors.textOnPrimary} />
+                  <Text style={[s.taskActionTxt, {color: colors.textOnPrimary}]}>Assign driver</Text>
+                </PressableScale>
+              ) : (
+                <View style={s.taskMetaRow}>
+                  <Icon name="clock" size={13} color={colors.textMuted} />
+                  <Text style={[s.taskMeta, {color: colors.textMuted}]}>Waiting for the lot valet to assign a driver</Text>
+                </View>
+              )}
             </View>
             );
           })}
@@ -1295,7 +1373,7 @@ export function ValetHomeScreen() {
   const {
     mine: dashboardMine, team: dashboardTeam, forTab: dashboardJobsForTab,
     assignPendingJobs, acceptPendingJobs, inProgressJobs, notCompletedJobs,
-  } = selectDashboardSections(activeTasks, retrievalRequests, myValetId, queueTab);
+  } = selectDashboardSections(activeTasks, retrievalRequests, myValetId, queueTab, myStation);
 
   const parkedVehicles = selectParkedVehicles(slots, tasks);
   // Longest-waiting / most-urgent first — see sortAssignPendingByUrgency's
@@ -1311,7 +1389,7 @@ export function ValetHomeScreen() {
     // now derived in one place — core/valet/state/JobAction.ts (Phase 1 of
     // VALET_ARCHITECTURE_REFACTOR.md) — instead of ~8 booleans re-computed
     // inline here. Same conditions, same resulting UI, just centralized.
-    const action = deriveJobAction(t, {myValetId, myUserId: user?.id, now});
+    const action = deriveJobAction(t, {myValetId, myUserId: user?.id, now, myStation});
 
     // Urgency wash for a still-unclaimed retrieval — restores the "hot to
     // cool" visual weight the old standalone Retrieval Requests inbox had,
@@ -1393,17 +1471,51 @@ export function ValetHomeScreen() {
         )}
 
         {action.kind === 'assign_retrieval_request' && (
-          <PressableScale style={[s.taskActionBtn, s.jobActions, {borderColor: 'transparent', backgroundColor: colors.primary}]}
-            onPress={() => handleAssignDriverTo(t)}>
-            <Icon name="people" size={13} color={colors.textOnPrimary} />
-            <Text style={[s.taskActionTxt, {color: colors.textOnPrimary}]}>Assign driver</Text>
-          </PressableScale>
+          <View style={[s.jobActions, {flexDirection: 'row', gap: 8}]}>
+            <PressableScale style={[s.taskActionBtn, {flex: 1, borderColor: 'transparent', backgroundColor: colors.primary}]}
+              onPress={() => handleAssignDriverTo(t)}>
+              <Icon name="people" size={13} color={colors.textOnPrimary} />
+              <Text style={[s.taskActionTxt, {color: colors.textOnPrimary}]}>Assign driver</Text>
+            </PressableScale>
+            {/* Two-station handoff model, lot side: no driver free here right
+               now — hand the job to the gate station's queue instead of
+               leaving it stuck on this screen. Gate-station valets get the
+               mirror of this ("ask the lot side") for the same reason. */}
+            {myStation && (
+              <PressableScale
+                style={[s.taskActionBtn, {borderColor: colors.border, backgroundColor: colors.cardAlt, paddingHorizontal: 12}]}
+                disabled={handingOffTaskId === t.id}
+                onPress={async () => {
+                  if (handingOffTaskId != null) return;
+                  setHandingOffTaskId(t.id);
+                  try {
+                    await requestOtherStationDriver(t.id);
+                  } catch (err: any) {
+                    dialog.alert(err.message || 'Could not hand off this job', {title: 'Error'});
+                  } finally {
+                    setHandingOffTaskId(null);
+                  }
+                }}>
+                <Text style={[s.taskActionTxt, {color: colors.textSecondary}]} numberOfLines={1}>
+                  {handingOffTaskId === t.id ? 'Sending…' : 'No driver here'}
+                </Text>
+              </PressableScale>
+            )}
+          </View>
         )}
         {action.kind === 'locked' && (
           <View style={[s.taskActionBtn, s.jobActions, {borderColor: colors.border, backgroundColor: 'transparent'}]}>
             <Icon name="lock" size={13} color={colors.textMuted} />
             <Text style={[s.taskActionTxt, {color: colors.textMuted}]}>
               {action.lockedByName} is handling this
+            </Text>
+          </View>
+        )}
+        {action.kind === 'awaiting_station_assign' && (
+          <View style={[s.taskActionBtn, s.jobActions, {borderColor: colors.border, backgroundColor: 'transparent'}]}>
+            <Icon name="clock" size={13} color={colors.textMuted} />
+            <Text style={[s.taskActionTxt, {color: colors.textMuted}]}>
+              Waiting for the lot valet to assign a driver
             </Text>
           </View>
         )}
@@ -1436,7 +1548,14 @@ export function ValetHomeScreen() {
                 </Text>
               </PressableScale>
             </View>
-          ) : (
+          ) : action.isMine ? (
+            // Only the gate valet who physically has the key gets to say
+            // "handed over" — for anyone else this button was actionable
+            // but firing markKeyCollected as someone who doesn't hold the
+            // key is dishonest and just as importantly the backend refuses
+            // it (see task.service.js's markKeyCollected + canRun). The
+            // team view (lot valet, admin) gets the waitingNote line from
+            // JobAction instead: "Driver X is at the gate to collect the key".
             <PressableScale
               style={[s.taskActionBtn, s.jobActions, {borderColor: 'transparent', backgroundColor: colors.success, opacity: collectingKeyTaskId === t.id ? 0.6 : 1}]}
               disabled={collectingKeyTaskId === t.id}
@@ -1458,7 +1577,7 @@ export function ValetHomeScreen() {
                 {collectingKeyTaskId === t.id ? 'Please wait…' : 'Key handed over'}
               </Text>
             </PressableScale>
-          )
+          ) : null
         )}
         {action.canRecall && (
           <PressableScale style={[s.taskActionBtn, s.jobActions, {borderColor: colors.warning, backgroundColor: 'transparent'}]}
@@ -1472,6 +1591,117 @@ export function ValetHomeScreen() {
             <Icon name="timer" size={13} color={colors.textMuted} />
             <Text style={[s.taskActionTxt, {color: colors.textMuted}]}>Driver is bringing it back…</Text>
           </View>
+        )}
+        {/* Two-station handoff model, lot side: confirms the car has been
+           parked, in place of the driver's own "Mark parked" (the driver's
+           only job now is to drive). Only for a park job that's genuinely
+           on its way and hasn't been recalled — matches markParked's own
+           allowed states. */}
+        {myStation === 'lot' && t.type === 'park' && !t.recalledAt && !!t.driverId
+          && (t.status === 'key_collected' || t.status === 'in_transit') && (
+          confirmParkTaskId === t.id ? (
+            <View style={{gap: 8}}>
+              <View style={[s.jobActions, {flexDirection: 'row', gap: 8}]}>
+                <View style={[s.taskActionBtn, {flex: 1, borderColor: colors.border, backgroundColor: colors.cardAlt, paddingHorizontal: 10}]}>
+                  <TextInput
+                    style={{flex: 1, color: colors.textPrimary, fontSize: 13, fontWeight: '700', padding: 0}}
+                    value={confirmParkSlotInput}
+                    onChangeText={txt => setConfirmParkSlotInput(txt.toUpperCase())}
+                    placeholder="Slot, e.g. A-203"
+                    placeholderTextColor={colors.textMuted}
+                    autoCapitalize="characters"
+                    autoFocus
+                  />
+                </View>
+                <PressableScale
+                  style={[s.taskActionBtn, {borderColor: 'transparent', backgroundColor: colors.success, opacity: (confirmParkSlotInput.trim() && confirmingParkedId !== t.id) ? 1 : 0.5}]}
+                  disabled={!confirmParkSlotInput.trim() || confirmingParkedId === t.id}
+                  onPress={async () => {
+                    if (!confirmParkSlotInput.trim() || confirmingParkedId != null) return;
+                    setConfirmingParkedId(t.id);
+                    try {
+                      await confirmParkedByValet(t.id, confirmParkSlotInput.trim());
+                      setConfirmParkTaskId(null); setConfirmParkSlotInput('');
+                    } catch (err: any) {
+                      dialog.alert(err.message || 'Could not confirm parked', {title: 'Error'});
+                    } finally {
+                      setConfirmingParkedId(null);
+                    }
+                  }}>
+                  {confirmingParkedId === t.id
+                    ? <ActivityIndicator color="#fff" size="small" />
+                    : <Icon name="check" size={14} color="#fff" />}
+                  <Text style={[s.taskActionTxt, {color: '#fff'}]}>
+                    {confirmingParkedId === t.id ? 'Please wait…' : 'Confirm'}
+                  </Text>
+                </PressableScale>
+              </View>
+              {(() => {
+                const freeSlots = slots.filter(sl => sl.status === 'free').slice(0, 6);
+                if (freeSlots.length === 0) return null;
+                return (
+                  <>
+                    <PressableScale
+                      style={[s.taskActionBtn, s.jobActions, {borderColor: colors.border, backgroundColor: colors.cardAlt}]}
+                      onPress={() => setConfirmParkSlotInput(freeSlots[0].id)}>
+                      <Icon name="bolt" size={13} color={colors.primary} />
+                      <Text style={[s.taskActionTxt, {color: colors.primary, fontSize: 11.5}]}>
+                        Auto-assign nearest free slot ({freeSlots[0].id})
+                      </Text>
+                    </PressableScale>
+                    <View style={{flexDirection: 'row', flexWrap: 'wrap', gap: 6}}>
+                      {freeSlots.map(sl => (
+                        <PressableScale key={sl.id} onPress={() => setConfirmParkSlotInput(sl.id)}
+                          style={{borderRadius: 8, borderWidth: 1, borderColor: colors.border, paddingVertical: 5, paddingHorizontal: 10, backgroundColor: colors.cardAlt}}>
+                          <Text style={{fontSize: 11, fontWeight: '700', color: colors.primary}}>{sl.id}</Text>
+                        </PressableScale>
+                      ))}
+                    </View>
+                  </>
+                );
+              })()}
+            </View>
+          ) : (
+            <PressableScale
+              style={[s.taskActionBtn, s.jobActions, {borderColor: 'transparent', backgroundColor: colors.success}]}
+              onPress={() => { setConfirmParkTaskId(t.id); setConfirmParkSlotInput(''); }}>
+              <Icon name="check" size={14} color="#fff" />
+              <Text style={[s.taskActionTxt, {color: '#fff'}]}>Confirm parked</Text>
+            </PressableScale>
+          )
+        )}
+        {/* Two-station handoff model, gate side: confirms the car has
+           arrived back at the front gate, in place of the driver's own
+           "Delivered to counter" (the driver's only job now is to drive).
+           Mirrors the lot side's Confirm parked above. 'assigned' is the
+           real state now — no GPS left to ever advance a retrieval into
+           'in_transit' (see task.service.js's widened assertTransition),
+           so gating on that alone made this button unreachable for every
+           retrieval, forever. 'in_transit' stays checked too for any task
+           that predates this change. */}
+        {myStation === 'gate' && t.type === 'retrieve' && !!t.driverId
+          && (t.status === 'assigned' || t.status === 'in_transit') && (
+          <PressableScale
+            style={[s.taskActionBtn, s.jobActions, {borderColor: 'transparent', backgroundColor: colors.success, opacity: confirmingArrivedId === t.id ? 0.6 : 1}]}
+            disabled={confirmingArrivedId === t.id}
+            onPress={async () => {
+              if (confirmingArrivedId != null) return;
+              setConfirmingArrivedId(t.id);
+              try {
+                await confirmArrivedByValet(t.id);
+              } catch (err: any) {
+                dialog.alert(err.message || 'Could not confirm arrival', {title: 'Error'});
+              } finally {
+                setConfirmingArrivedId(null);
+              }
+            }}>
+            {confirmingArrivedId === t.id
+              ? <ActivityIndicator color="#fff" size="small" />
+              : <Icon name="check" size={14} color="#fff" />}
+            <Text style={[s.taskActionTxt, {color: '#fff'}]}>
+              {confirmingArrivedId === t.id ? 'Please wait…' : 'Car arrived at gate'}
+            </Text>
+          </PressableScale>
         )}
         {action.kind === 'confirm_handover' && (
           <PressableScale

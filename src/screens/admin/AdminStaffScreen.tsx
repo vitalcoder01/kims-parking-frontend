@@ -4,7 +4,7 @@ import {useDialog} from '../../components/AppDialog';
 import {PressableScale} from '../../components/PressableScale';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useTheme} from '../../context/ThemeContext';
-import {adminApi} from '../../services/api';
+import {adminApi, driversApi} from '../../services/api';
 import {Badge} from '../../components/Badge';
 import {Icon} from '../../components/Icon';
 
@@ -21,6 +21,14 @@ interface AdminUser {
   cardCode?: string;
   phone?: string;
   driverStatus?: 'available' | 'busy' | 'off';
+  // Backend's serializeUser always includes this alongside driverStatus
+  // when the account has a linked Driver row — needed here now that
+  // drivers have no app of their own to toggle their own shift status
+  // from (see handleToggleDriverShift below).
+  linkedDriverId?: number;
+  // Two-station handoff model: which physical station this valet works,
+  // if any (only meaningful for role 'valet').
+  valetStation?: 'gate' | 'lot' | null;
 }
 
 const FILTER_TABS: {key: Filter; label: string}[] = [
@@ -30,6 +38,12 @@ const FILTER_TABS: {key: Filter; label: string}[] = [
   {key: 'valet',  label: 'Valets'},
   {key: 'driver', label: 'Drivers'},
   {key: 'admin',  label: 'Admins'},
+];
+
+const STATION_OPTIONS: {key: 'gate' | 'lot' | ''; label: string; icon: any}[] = [
+  {key: '',     label: 'Unassigned', icon: 'close'},
+  {key: 'gate', label: 'Gate',       icon: 'arrowDown'},
+  {key: 'lot',  label: 'Lot',        icon: 'parking'},
 ];
 
 const ROLE_OPTIONS: {key: Role; label: string; icon: any}[] = [
@@ -65,8 +79,16 @@ export function AdminStaffScreen() {
   const [department, setDepartment] = useState('');
   const [cardCode, setCardCode] = useState('');
   const [phone, setPhone] = useState('');
+  // Two-station handoff model: which physical station a valet works, if
+  // any. Null/'' means unassigned — that valet keeps behaving exactly as
+  // before (eligible for anything, no station-scoped routing).
+  const [valetStation, setValetStation] = useState<'gate' | 'lot' | ''>('');
   const [submitting, setSubmitting] = useState(false);
   const [resettingPassword, setResettingPassword] = useState(false);
+  // Drivers have no app of their own to toggle shift status from any more
+  // (no GPS, no login — see the two-station handoff follow-up). This
+  // replaces that self-service toggle from the admin side.
+  const [togglingShift, setTogglingShift] = useState(false);
   const [deletingAccount, setDeletingAccount] = useState(false);
   // Return-key chaining — role-dependent fields aren't always mounted, so
   // "next" focuses the first ref in the candidate list that actually exists.
@@ -95,7 +117,7 @@ export function AdminStaffScreen() {
 
   const resetForm = () => {
     setName(''); setEmployeeId(''); setRole('staff'); setPassword(genPassword());
-    setDepartment(''); setCardCode(''); setPhone('');
+    setDepartment(''); setCardCode(''); setPhone(''); setValetStation('');
   };
 
   const closeForm = () => {
@@ -125,6 +147,7 @@ export function AdminStaffScreen() {
     setDepartment(u.department ?? '');
     setCardCode(u.cardCode ?? '');
     setPhone(u.phone ?? '');
+    setValetStation(u.valetStation ?? '');
     setShowAdd(true);
   };
 
@@ -145,6 +168,7 @@ export function AdminStaffScreen() {
         department: department.trim() || undefined,
         cardCode: (role === 'doctor' || role === 'staff') && cardCode.trim() ? cardCode.trim() : undefined,
         phone: role === 'driver' && phone.trim() ? phone.trim() : undefined,
+        valetStation: role === 'valet' && valetStation ? valetStation : undefined,
       });
       dialog.alert(`${name.trim()} can now sign in with:\n\nUsername: ${(created as any).username}\nPassword: ${password.trim()}\n\nShare these credentials securely — they won't be shown again here.`, {title: 'Staff Added', tone: 'info'});
       closeForm();
@@ -167,6 +191,7 @@ export function AdminStaffScreen() {
         department: department.trim(),
         cardCode: (role === 'doctor' || role === 'staff') ? cardCode.trim() : '',
         phone: role === 'driver' ? phone.trim() : '',
+        valetStation: role === 'valet' ? (valetStation || null) : null,
       });
       closeForm();
       loadUsers();
@@ -203,6 +228,26 @@ export function AdminStaffScreen() {
         },
       ],
     });
+  };
+
+  // Toggles between available/off only — 'busy' (genuinely on a job)
+  // stays read-only here too, same guard the backend itself enforces
+  // (driver.service.js's setStatus refuses to move a driver off 'busy'
+  // while a live task still names them, and there is no such thing as an
+  // admin manually declaring someone "busy" with nothing assigned).
+  const handleToggleDriverShift = async () => {
+    if (!editingUser?.linkedDriverId || togglingShift || editingUser.driverStatus === 'busy') return;
+    const next = editingUser.driverStatus === 'available' ? 'off' : 'available';
+    setTogglingShift(true);
+    try {
+      await driversApi.setStatus(editingUser.linkedDriverId, next);
+      setEditingUser(prev => (prev ? {...prev, driverStatus: next} : prev));
+      loadUsers();
+    } catch (err: any) {
+      dialog.alert(err.message || 'Could not change shift status', {title: 'Error', tone: 'info'});
+    } finally {
+      setTogglingShift(false);
+    }
   };
 
   const handleDelete = () => {
@@ -336,6 +381,65 @@ export function AdminStaffScreen() {
                 ref={phoneRef}
                 value={phone} onChangeText={setPhone} placeholder="10-digit number" keyboardType="numeric" placeholderTextColor={colors.textMuted}
                 returnKeyType="done" />
+            </>
+          )}
+
+          {/* Drivers have no app of their own to toggle this from any more
+              — no GPS, no login, nothing to sign into. This is now the
+              only place shift status changes. Only shown editing an
+              existing driver: a brand-new one starts 'available'
+              server-side, and there's nothing to toggle before the
+              account even exists. */}
+          {isEdit && role === 'driver' && editingUser?.linkedDriverId && (
+            <>
+              <Text style={[s.fieldLabel, {color: colors.textMuted}]}>SHIFT STATUS</Text>
+              {editingUser.driverStatus === 'busy' ? (
+                <View style={[s.shiftRow, {borderColor: colors.border, backgroundColor: colors.surface}]}>
+                  <Icon name="bolt" size={15} color={colors.warning} />
+                  <Text style={[s.shiftTxt, {color: colors.textSecondary, flex: 1}]}>
+                    On a job right now — can't change shift status until it's done.
+                  </Text>
+                </View>
+              ) : (
+                <PressableScale
+                  onPress={handleToggleDriverShift}
+                  disabled={togglingShift}
+                  style={[s.shiftRow, {
+                    borderColor: editingUser.driverStatus === 'available' ? colors.success + '55' : colors.border,
+                    backgroundColor: editingUser.driverStatus === 'available' ? colors.success + '18' : colors.surface,
+                    opacity: togglingShift ? 0.6 : 1,
+                  }]}>
+                  <Icon name={editingUser.driverStatus === 'available' ? 'check' : 'timer'} size={15}
+                    color={editingUser.driverStatus === 'available' ? colors.success : colors.textMuted} />
+                  <Text style={[s.shiftTxt, {flex: 1, color: colors.textPrimary}]}>
+                    {editingUser.driverStatus === 'available' ? 'On shift — ready for jobs' : 'Off shift'}
+                  </Text>
+                  <Text style={{fontSize: 11.5, fontWeight: '800', color: colors.primary}}>
+                    {togglingShift ? 'Please wait…' : editingUser.driverStatus === 'available' ? 'Tap to go off shift' : 'Tap to go on shift'}
+                  </Text>
+                </PressableScale>
+              )}
+            </>
+          )}
+
+          {role === 'valet' && (
+            <>
+              <Text style={[s.fieldLabel, {color: colors.textMuted}]}>STATION (OPTIONAL) — two-station handoff model</Text>
+              <View style={s.roleRow}>
+                {STATION_OPTIONS.map(opt => (
+                  <PressableScale
+                    key={opt.key || 'none'}
+                    style={[s.roleChip, {borderColor: valetStation === opt.key ? colors.primary : colors.border, backgroundColor: valetStation === opt.key ? colors.primary + '15' : colors.surface}]}
+                    onPress={() => setValetStation(opt.key)}
+                  >
+                    <Icon name={opt.icon} size={18} color={valetStation === opt.key ? colors.primary : colors.textMuted} />
+                    <Text style={[s.roleChipTxt, {color: valetStation === opt.key ? colors.primary : colors.textSecondary}]}>{opt.label}</Text>
+                  </PressableScale>
+                ))}
+              </View>
+              <Text style={[s.helperNote, {color: colors.textMuted}]}>
+                Gate collects keys and dispatches drivers; Lot confirms parking and hands off retrievals. Leave unassigned for the regular shared-queue behavior.
+              </Text>
             </>
           )}
 
@@ -493,6 +597,8 @@ export function AdminStaffScreen() {
 
 const s = StyleSheet.create({
   safe: {flex: 1},
+  shiftRow: {flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 12, borderWidth: 1.5, paddingHorizontal: 14, paddingVertical: 12},
+  shiftTxt: {fontSize: 13, fontWeight: '700'},
   scroll: {padding: 16, paddingBottom: 40},
   addBtn: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 999, paddingVertical: 16, marginBottom: 16},
   addBtnTxt: {color: '#fff', fontSize: 14, fontWeight: '700'},

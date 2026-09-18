@@ -1,92 +1,35 @@
-import React, {useEffect, useMemo, useRef, useState} from 'react';
-import {View, Text, StyleSheet, Animated, Dimensions} from 'react-native';
+import React from 'react';
+import {View, Text, StyleSheet} from 'react-native';
 import {PressableScale} from '../../components/PressableScale';
-import {WebView} from 'react-native-webview';
 import {useTheme} from '../../context/ThemeContext';
 import {useAppState, ParkingTask} from '../../context/AppStateContext';
 import {useAuth} from '../../context/AuthContext';
 import {useMyDriverId, isMyJob} from '../../hooks/useMyDriverId';
-import {computeTrip} from '../../utils/geo';
 import {Icon} from '../../components/Icon';
 
-const {height} = Dimensions.get('window');
-
-// buildMapHTML centers on whatever real position is actually known (the
-// driver's current fix, falling back to the destination, falling back to a
-// neutral world view) — never a fixed hardcoded location, since that made
-// the map jump wildly the moment a real GPS fix arrived from wherever the
-// device actually is.
-function buildMapHTML(
-  centerLat: number, centerLng: number,
-  destLat: number | null, destLng: number | null,
-  isDark: boolean,
-) {
-  const bgColor = isDark ? '#0F1829' : '#EEF2FF';
-
-  return `<!DOCTYPE html>
-<html>
-<head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body, #map { width: 100%; height: 100%; background: ${bgColor}; }
-  .leaflet-tile-pane { ${isDark ? 'filter: brightness(0.7) saturate(0.8) hue-rotate(190deg);' : ''} }
-  .car-icon { font-size: 28px; line-height: 1; filter: drop-shadow(0 2px 6px rgba(0,0,0,0.4)); }
-</style>
-</head>
-<body>
-<div id="map"></div>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script>
-  var map = L.map('map', {zoomControl: false, attributionControl: false}).setView([${centerLat}, ${centerLng}], 17);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19}).addTo(map);
-
-  var destination = ${destLat != null && destLng != null ? `[${destLat}, ${destLng}]` : 'null'};
-  var routeLine = null;
-
-  if (destination) {
-    L.circleMarker(destination, {
-      radius: 10, color: '${isDark ? '#F59E0B' : '#D97706'}',
-      fillColor: '${isDark ? '#F59E0B' : '#D97706'}', fillOpacity: 1, weight: 3,
-    }).addTo(map).bindPopup('<b>Destination</b>');
-  }
-
-  // Car marker — starts at the map's initial center (a real known position)
-  // and only moves when a real GPS fix arrives from React Native.
-  var carIcon = L.divIcon({className: '', html: '<div class="car-icon">🚗</div>', iconSize: [32, 32], iconAnchor: [16, 16]});
-  var carMarker = L.marker([${centerLat}, ${centerLng}], {icon: carIcon}).addTo(map);
-
-  function refreshRoute(pos) {
-    if (!destination) return;
-    if (routeLine) map.removeLayer(routeLine);
-    routeLine = L.polyline([pos, destination], {
-      color: '${isDark ? '#818CF8' : '#4F46E5'}', weight: 4, opacity: 0.75, dashArray: '8, 6', lineCap: 'round',
-    }).addTo(map);
-  }
-  refreshRoute([${centerLat}, ${centerLng}]);
-
-  // Listen for real GPS location from React Native
-  document.addEventListener('message', function(e) {
-    try {
-      var data = JSON.parse(e.data);
-      if (data.type === 'realGPS') {
-        var pos = [data.lat, data.lng];
-        carMarker.setLatLng(pos);
-        map.panTo(pos, {animate: true, duration: 1.0});
-        refreshRoute(pos);
-      }
-    } catch(err) {}
-  });
-</script>
-</body>
-</html>`;
-}
+// No driver GPS any more (drivers don't get an app at all — see the
+// two-station handoff model's follow-up: valets assign a driver, confirm
+// each end themselves, and that's the whole trip). This used to be a live
+// Leaflet map (in a WebView) with a moving car marker, an ETA, and a
+// distance-remaining readout, all computed from a continuous GPS feed.
+// With no feed, this screen used to show a permanent "Waiting for driver's
+// location…" screen that never resolved — worse than no map at all, since
+// it hid the status checklist behind it too. Replaced with what the task
+// record actually still has: real status transitions with real timestamps,
+// pushed live over the same socket this screen already re-renders from —
+// "LIVE" still means something, it's just a status feed now, not a
+// position one. The isDriver/myDriverId branch below is now structurally
+// unreachable (driver accounts can no longer sign in at all — see
+// AuthContext), left in place as a harmless fallback rather than ripped out
+// along with every other now-dead driver code path.
 
 // How many of the 3 checklist steps (Key Collected / In Transit /
-// Parked-or-Delivered) are done, purely from the task's real status — never
-// from GPS/trip progress, which may not exist at all (no destination set,
-// no fix yet) even while the task has genuinely moved forward.
+// Parked-or-Delivered) are done, purely from the task's real status. A job
+// now skips 'in_transit' entirely (nothing left to advance it there without
+// GPS — see task.service.js's widened assertTransition), so this is a
+// threshold check, not an exact match: reaching the final status marks
+// every earlier step done too, which is the correct picture for a trip
+// that had no separate "en route" stage to actually observe.
 const STAGE_ORDER: Record<string, number> = {
   requested: -1,
   assigned: -1,
@@ -96,19 +39,22 @@ const STAGE_ORDER: Record<string, number> = {
   completed: 2,
 };
 
+function fmtTime(epochMs?: number | null): string | null {
+  if (!epochMs) return null;
+  const d = new Date(epochMs);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+}
+
 interface Props {
   task?: ParkingTask;
   onBack?: () => void;
 }
 
 export function LiveTrackingScreen({task: taskProp, onBack}: Props) {
-  const {colors, isDark} = useTheme();
+  const {colors} = useTheme();
   const {user} = useAuth();
   const {tasks} = useAppState();
-  const webRef = useRef<any>(null);
-  const [trip, setTrip] = useState<{progress: number; etaMinutes: number; distanceRemainingM: number | null} | null>(null);
-  const progressAnim = useRef(new Animated.Value(0)).current;
-  const sheetAnim = useRef(new Animated.Value(260)).current;
 
   const isDriver = user?.role === 'driver';
   const myDriverId = useMyDriverId();
@@ -119,258 +65,131 @@ export function LiveTrackingScreen({task: taskProp, onBack}: Props) {
   // arrived at the valet counter — the trip visually "arrives" there even
   // though the record itself isn't closed out until the valet confirms.
   const arrived = task?.status === 'completed' || task?.status === 'delivered';
-  const realLat = task?.driverLat ?? null;
-  const realLng = task?.driverLng ?? null;
-
-  // Frozen the first time a real fix arrives, and never touched again for
-  // the rest of this trip — this (not the live realLat/realLng, which
-  // change on every GPS tick) is what the map's HTML gets built from, so
-  // the WebView's `source` stays stable and only ever loads the page once.
-  // Every position update after that goes exclusively through postMessage
-  // below, which is what actually lets the marker glide instead of the
-  // whole page reloading and flashing back into existence on every tick.
-  const [initialCenter, setInitialCenter] = useState<{lat: number; lng: number} | null>(null);
-  useEffect(() => {
-    if (initialCenter == null && realLat != null && realLng != null) {
-      setInitialCenter({lat: realLat, lng: realLng});
-    }
-  }, [initialCenter, realLat, realLng]);
-
-  const mapHTML = useMemo(() => {
-    const c = initialCenter ?? {lat: 20.5937, lng: 78.9629};
-    return buildMapHTML(c.lat, c.lng, task?.destinationLat ?? null, task?.destinationLng ?? null, isDark);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialCenter, task?.id, isDark]);
-
-  // GPS collection itself is centralized in AppStateContext (one watcher for
-  // the whole app, driver-only) — this screen, on any role's phone, just
-  // renders whatever `task.driverLat/driverLng` the last poll delivered.
-  useEffect(() => {
-    if (realLat == null || realLng == null) return;
-    webRef.current?.postMessage(JSON.stringify({type: 'realGPS', lat: realLat, lng: realLng}));
-
-    const result = computeTrip({
-      startLat: task?.driverStartLat, startLng: task?.driverStartLng,
-      lat: realLat, lng: realLng,
-      destinationLat: task?.destinationLat, destinationLng: task?.destinationLng,
-      mode: 'drive',
-    });
-    if (!result) return;
-    setTrip(result);
-    Animated.timing(progressAnim, {toValue: result.progress, duration: 400, useNativeDriver: false}).start();
-  }, [realLat, realLng, task?.driverStartLat, task?.driverStartLng, task?.destinationLat, task?.destinationLng, task?.type]);
-
-  // Animate bottom sheet in
-  useEffect(() => {
-    Animated.spring(sheetAnim, {toValue: 0, useNativeDriver: true, speed: 12, bounciness: 4}).start();
-  }, []);
-
-  const progress = trip?.progress ?? 0;
-  const progressWidth = progressAnim.interpolate({inputRange: [0, 1], outputRange: ['0%', '100%']});
 
   if (!task) {
     return (
       <View style={[s.root, s.emptyRoot, {backgroundColor: colors.background}]}>
         <Icon name="parking" size={40} color={colors.textMuted} style={{marginBottom: 8}} />
         <Text style={[s.emptyTitle, {color: colors.textPrimary}]}>No Active Task</Text>
-        <Text style={[s.emptyDesc, {color: colors.textMuted}]}>Live tracking will appear here once you have an assigned task.</Text>
+        <Text style={[s.emptyDesc, {color: colors.textMuted}]}>Tracking will appear here once you have an assigned task.</Text>
       </View>
     );
   }
 
-  // Don't render the map at all until a real GPS fix actually exists — it
-  // used to fall back to a hardcoded coordinate (India's geographic center)
-  // the instant this screen opened, which looked like a real, wrong
-  // location for the car rather than "no fix yet". Once arrived, the last
-  // known real fix is always already in hand, so this only ever gates the
-  // brief window before the driver's first ping comes in.
-  if (!arrived && (realLat == null || realLng == null)) {
-    return (
-      <View style={[s.root, s.emptyRoot, {backgroundColor: colors.background}]}>
-        {onBack && (
-          <PressableScale style={[s.backBtn, {backgroundColor: colors.surface, position: 'relative', top: 0, left: 0, marginBottom: 20}]} onPress={onBack}>
-            <Icon name="back" size={20} color={colors.textPrimary} />
-          </PressableScale>
-        )}
-        <Icon name="car" size={40} color={colors.textMuted} style={{marginBottom: 8}} />
-        <Text style={[s.emptyTitle, {color: colors.textPrimary}]}>Waiting for driver's location…</Text>
-        <Text style={[s.emptyDesc, {color: colors.textMuted}]}>The map will appear as soon as the driver's live position comes in.</Text>
-      </View>
-    );
-  }
+  // Each checklist step's real timestamp, where one exists. 'In Transit'
+  // has none of its own any more (see STAGE_ORDER's comment) — it just
+  // inherits "done" from whichever later step actually happened.
+  const stepTimes: (string | null)[] = [
+    fmtTime(task.keyCollectedAt),
+    null,
+    fmtTime(task.type === 'park' ? task.completedAt : task.deliveredAt),
+  ];
 
   return (
     <View style={[s.root, {backgroundColor: colors.background}]}>
-      {/* Back button overlay */}
       {onBack && (
-        <PressableScale style={[s.backBtn, {backgroundColor: colors.surface}]} onPress={onBack}>
-          <Icon name="back" size={20} color={colors.textPrimary} />
-        </PressableScale>
-      )}
-
-      {/* Live badge overlay — nothing's actually "live" once the trip has
-          arrived, whether or not the valet has confirmed the handover yet. */}
-      {!arrived && (
-        <View style={[s.liveBadge, {backgroundColor: colors.error}]}>
-          <Text style={s.liveTxt}>LIVE</Text>
-        </View>
-      )}
-
-      {/* Real GPS badge — shown once an actual fix is in hand, driver or viewer */}
-      {realLat != null && (
-        <View style={[s.gpsBadge, {backgroundColor: colors.success}]}>
-          <Icon name="live" size={12} color="#fff" />
-          <Text style={s.gpsTxt}>{isDriver ? 'GPS Active' : 'Live GPS'}</Text>
-        </View>
-      )}
-
-      {/* Map */}
-      <WebView
-        ref={webRef}
-        style={s.map}
-        source={{html: mapHTML}}
-        javaScriptEnabled
-        domStorageEnabled
-        geolocationEnabled
-        allowsInlineMediaPlayback
-        mixedContentMode="always"
-        originWhitelist={['*']}
-      />
-
-      {/* Bottom info sheet */}
-      <Animated.View style={[s.sheet, {backgroundColor: colors.surface, transform: [{translateY: sheetAnim}]}]}>
-
-        {/* Progress bar */}
-        <View style={[s.progressTrack, {backgroundColor: colors.border}]}>
-          <Animated.View style={[s.progressFill, {width: progressWidth, backgroundColor: arrived ? colors.success : colors.primary}]} />
-        </View>
-
-        {arrived ? (
-          <View style={s.arrivedRow}>
-            <View style={[s.arrivedIconWrap, {backgroundColor: colors.successLight}]}>
-              <Icon name="check" size={24} color={colors.success} />
+        <View style={s.headerRow}>
+          <PressableScale style={[s.backBtn, {backgroundColor: colors.surface, borderColor: colors.border}]} onPress={onBack}>
+            <Icon name="back" size={20} color={colors.textPrimary} />
+          </PressableScale>
+          {!arrived && (
+            <View style={[s.liveBadge, {backgroundColor: colors.error}]}>
+              <View style={s.liveDot} />
+              <Text style={s.liveTxt}>LIVE</Text>
             </View>
-            <View>
-              <Text style={[s.arrivedTitle, {color: colors.success}]}>
-                {task?.type === 'park'
-                  ? 'Car Parked Successfully!'
-                  : task?.status === 'delivered'
-                  // Driver's dropped it off, but the valet hasn't confirmed
-                  // the handover yet — don't tell the doctor "Retrieved!"
-                  // (past tense, done) before that's actually true.
-                  ? 'Car Has Arrived!'
-                  : 'Car Retrieved!'}
-              </Text>
-              <Text style={[s.arrivedSub, {color: colors.textMuted}]}>
-                {task?.type === 'retrieve'
-                  ? (task?.status === 'delivered' ? 'Please collect it at the valet counter' : 'Waiting at the valet counter')
-                  : task?.slotId ? `Slot: ${task.slotId}` : 'Delivered to valet counter'}
-              </Text>
-            </View>
-          </View>
-        ) : (
-          <>
-            <View style={s.sheetHeader}>
+          )}
+        </View>
+      )}
+
+      <View style={s.centerWrap}>
+        <View style={[s.card, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+          {arrived ? (
+            <View style={s.arrivedRow}>
+              <View style={[s.arrivedIconWrap, {backgroundColor: colors.successLight}]}>
+                <Icon name="check" size={24} color={colors.success} />
+              </View>
               <View>
-                <Text style={[s.sheetTitle, {color: colors.textPrimary}]}>
-                  {task?.type === 'park' ? 'Parking your car' : 'Retrieving your car'}
+                <Text style={[s.arrivedTitle, {color: colors.success}]}>
+                  {task.type === 'park'
+                    ? 'Car Parked Successfully!'
+                    : task.status === 'delivered'
+                    ? 'Car Has Arrived!'
+                    : 'Car Retrieved!'}
                 </Text>
-                <Text style={[s.sheetSub, {color: colors.textMuted}]}>
-                  {task?.carNumber ?? 'Vehicle'} · {task?.driverName ?? 'Driver en route'}
+                <Text style={[s.arrivedSub, {color: colors.textMuted}]}>
+                  {task.type === 'retrieve'
+                    ? (task.status === 'delivered' ? 'Please collect it at the valet counter' : 'Waiting at the valet counter')
+                    : task.slotId ? `Slot: ${task.slotId}` : 'Delivered to valet counter'}
                 </Text>
               </View>
-              {/* A park job has no destination — the driver just drives
-                  with the key to whichever free slot they pick, so there's
-                  nothing to estimate an ETA against (that used to show
-                  "Waiting for GPS" forever for exactly that reason). Only a
-                  retrieve job has a real destination (the assigning valet's
-                  own location, captured at assignment time). */}
-              {task?.type === 'retrieve' && (
-                trip ? (
-                  <View style={[s.etaBox, {backgroundColor: colors.primary}]}>
-                    <Text style={s.etaNum}>{trip.etaMinutes}</Text>
-                    <Text style={s.etaUnit}>min</Text>
-                  </View>
-                ) : (
-                  <View style={[s.etaBox, {backgroundColor: colors.textMuted}]}>
-                    <Text style={s.etaUnit}>Waiting{'\n'}for GPS</Text>
-                  </View>
-                )
-              )}
             </View>
-
-            {trip?.distanceRemainingM != null && (
-              <Text style={[s.distanceNote, {color: colors.textMuted}]}>
-                {trip.distanceRemainingM < 1000 ? `${trip.distanceRemainingM} m` : `${(trip.distanceRemainingM / 1000).toFixed(1)} km`} remaining
+          ) : (
+            <View style={s.headerBlock}>
+              <Text style={[s.sheetTitle, {color: colors.textPrimary}]}>
+                {task.type === 'park' ? 'Parking your car' : 'Retrieving your car'}
               </Text>
-            )}
-
-            <View style={s.stepsRow}>
-              {['Key Collected', 'In Transit', task?.type === 'park' ? 'Parked' : 'Delivered'].map((step, i) => {
-                // Driven by the task's real status, never GPS/trip progress —
-                // "Key Collected" already happened the moment the valet
-                // marked the handoff, regardless of whether a GPS fix (or
-                // even a destination) exists yet. GPS progress is a nice-to-
-                // have for the ETA/map above, not a precondition for the
-                // checklist reflecting what's actually already true.
-                const done = (STAGE_ORDER[task?.status ?? ''] ?? -1) >= i;
-                return (
-                  <View key={step} style={s.step}>
-                    <View style={[s.stepDot, {backgroundColor: done ? colors.success : colors.border}]}>
-                      {done && <Icon name="checkBold" size={12} color="#fff" />}
-                    </View>
-                    <Text style={[s.stepLabel, {color: done ? colors.textPrimary : colors.textMuted}]} numberOfLines={1}>{step}</Text>
-                    {i < 2 && <View style={[s.stepLine, {backgroundColor: done ? colors.success : colors.border}]} />}
-                  </View>
-                );
-              })}
+              <Text style={[s.sheetSub, {color: colors.textMuted}]}>
+                {task.carNumber ?? 'Vehicle'} · {task.driverName ?? 'Driver assigned'}
+              </Text>
             </View>
+          )}
 
-            {task?.slotId && (
-              <View style={[s.slotChip, {backgroundColor: colors.primary + '12', borderColor: colors.primary + '30'}]}>
-                <Icon name={task.type === 'retrieve' ? 'pin' : 'parking'} size={14} color={colors.primary} />
-                <Text style={[s.slotChipTxt, {color: colors.primary}]}>
-                  {task.type === 'retrieve' ? 'Retrieving from' : 'Destination'}: <Text style={{fontWeight: '900'}}>{task.slotId}</Text>
-                </Text>
-              </View>
-            )}
-          </>
-        )}
-      </Animated.View>
+          <View style={s.stepsRow}>
+            {['Key Collected', 'In Transit', task.type === 'park' ? 'Parked' : 'Delivered'].map((step, i) => {
+              const done = (STAGE_ORDER[task.status ?? ''] ?? -1) >= i;
+              return (
+                <View key={step} style={s.step}>
+                  <View style={[s.stepDot, {backgroundColor: done ? colors.success : colors.border}]}>
+                    {done && <Icon name="checkBold" size={12} color="#fff" />}
+                  </View>
+                  <Text style={[s.stepLabel, {color: done ? colors.textPrimary : colors.textMuted}]} numberOfLines={1}>{step}</Text>
+                  {done && stepTimes[i] && (
+                    <Text style={[s.stepTime, {color: colors.textMuted}]}>{stepTimes[i]}</Text>
+                  )}
+                  {i < 2 && <View style={[s.stepLine, {backgroundColor: done ? colors.success : colors.border}]} />}
+                </View>
+              );
+            })}
+          </View>
+
+          {task.slotId && (
+            <View style={[s.slotChip, {backgroundColor: colors.primary + '12', borderColor: colors.primary + '30'}]}>
+              <Icon name={task.type === 'retrieve' ? 'pin' : 'parking'} size={14} color={colors.primary} />
+              <Text style={[s.slotChipTxt, {color: colors.primary}]}>
+                {task.type === 'retrieve' ? 'Retrieving from' : 'Destination'}: <Text style={{fontWeight: '900'}}>{task.slotId}</Text>
+              </Text>
+            </View>
+          )}
+        </View>
+      </View>
     </View>
   );
 }
 
 const s = StyleSheet.create({
   root: {flex: 1},
-  map: {flex: 1},
   emptyRoot: {alignItems: 'center', justifyContent: 'center', padding: 40, gap: 8},
   emptyTitle: {fontSize: 18, fontWeight: '800'},
   emptyDesc: {fontSize: 13, textAlign: 'center', lineHeight: 19},
-  backBtn: {position: 'absolute', top: 52, left: 16, zIndex: 10, width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: {width: 0, height: 2}, shadowOpacity: 0.2, shadowRadius: 8, elevation: 8},
-  backTxt: {fontSize: 20, fontWeight: '700'},
-  liveBadge: {position: 'absolute', top: 52, right: 16, zIndex: 10, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6},
+  headerRow: {flexDirection: 'row', alignItems: 'center', gap: 12, paddingTop: 52, paddingHorizontal: 16, paddingBottom: 4},
+  backBtn: {width: 42, height: 42, borderRadius: 21, borderWidth: 1, alignItems: 'center', justifyContent: 'center'},
+  liveBadge: {flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6},
+  liveDot: {width: 7, height: 7, borderRadius: 4, backgroundColor: '#fff'},
   liveTxt: {color: '#fff', fontSize: 11, fontWeight: '900', letterSpacing: 1},
-  gpsBadge: {position: 'absolute', top: 100, right: 16, zIndex: 10, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 5},
-  gpsTxt: {color: '#fff', fontSize: 10, fontWeight: '700'},
-  sheet: {position: 'absolute', bottom: 0, left: 0, right: 0, borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 20, paddingTop: 8, paddingBottom: 32, shadowColor: '#000', shadowOffset: {width: 0, height: -4}, shadowOpacity: 0.15, shadowRadius: 16, elevation: 24},
-  progressTrack: {height: 4, borderRadius: 2, marginVertical: 16, overflow: 'hidden'},
-  progressFill: {height: '100%', borderRadius: 2},
-  sheetHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8},
+  centerWrap: {flex: 1, justifyContent: 'center', paddingHorizontal: 20, paddingBottom: 32},
+  card: {borderRadius: 28, borderWidth: 1, paddingHorizontal: 20, paddingTop: 8, paddingBottom: 28},
+  headerBlock: {paddingTop: 20, paddingBottom: 4},
   sheetTitle: {fontSize: 17, fontWeight: '800'},
   sheetSub: {fontSize: 12, marginTop: 3},
-  distanceNote: {fontSize: 11, fontWeight: '600', marginBottom: 12},
-  etaBox: {borderRadius: 14, paddingHorizontal: 14, paddingVertical: 10, alignItems: 'center'},
-  etaNum: {color: '#fff', fontSize: 22, fontWeight: '900'},
-  etaUnit: {color: '#fff', fontSize: 10, fontWeight: '700', textAlign: 'center'},
-  stepsRow: {flexDirection: 'row', alignItems: 'center', marginBottom: 16, marginTop: 8},
+  stepsRow: {flexDirection: 'row', alignItems: 'flex-start', marginBottom: 16, marginTop: 20},
   step: {flex: 1, alignItems: 'center', position: 'relative'},
   stepDot: {width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginBottom: 6},
   stepLabel: {fontSize: 10, fontWeight: '700', textAlign: 'center'},
+  stepTime: {fontSize: 9, fontWeight: '600', marginTop: 2},
   stepLine: {position: 'absolute', top: 14, right: '-50%', width: '100%', height: 2},
   slotChip: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 12, borderWidth: 1, padding: 12},
   slotChipTxt: {fontSize: 13, fontWeight: '600'},
-  arrivedRow: {flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 8},
+  arrivedRow: {flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 20},
   arrivedIconWrap: {width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center'},
   arrivedTitle: {fontSize: 17, fontWeight: '800'},
   arrivedSub: {fontSize: 12, marginTop: 4},

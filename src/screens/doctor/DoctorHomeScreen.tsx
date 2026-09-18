@@ -1,7 +1,6 @@
 import React, {useState, useEffect, useRef} from 'react';
 import {View, Text, StyleSheet, ScrollView, Animated, Modal, Pressable, Easing, ActivityIndicator} from 'react-native';
 import {useDialog} from '../../components/AppDialog';
-import {computeTrip} from '../../utils/geo';
 import {PressableScale} from '../../components/PressableScale';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import LinearGradient from 'react-native-linear-gradient';
@@ -323,44 +322,30 @@ export function DoctorHomeScreen() {
             // What was here before counted UP in mm:ss — elapsed time since
             // the driver set off. "02:47" answers a question nobody asked; a
             // doctor deciding whether to walk down needs time REMAINING.
-            const onTheWay = activeRetrieve.status === 'in_transit' && activeRetrieve.startedAt != null;
-            const trip = onTheWay
-              ? computeTrip({
-                  startLat: activeRetrieve.driverStartLat, startLng: activeRetrieve.driverStartLng,
-                  lat: activeRetrieve.driverLat, lng: activeRetrieve.driverLng,
-                  destinationLat: activeRetrieve.destinationLat, destinationLng: activeRetrieve.destinationLng,
-                  mode: 'drive',
-                })
-              : null;
+            // No driver GPS any more (no driver app at all — see the
+            // two-station handoff follow-up), so there's no ETA to compute.
+            // 'assigned' already means a driver has been picked — that's
+            // the whole signal now, not a separate "in_transit" stage
+            // nothing ever advances to without GPS (see task.service.js's
+            // widened assertTransition). 'in_transit' stays checked too
+            // for any task that predates this change.
+            const onTheWay = (activeRetrieve.status === 'assigned' || activeRetrieve.status === 'in_transit')
+              && activeRetrieve.driverId != null;
             return (
               <Animated.View style={{transform: [{scale: onTheWay ? pulse : 1}]}}>
                 <LinearGradient colors={isDark ? BRAND_GRADIENT_DARK : BRAND_GRADIENT} style={s.countdownCard} start={{x:0,y:0}} end={{x:1,y:1}}>
                   {onTheWay ? (
                     <>
-                      <View style={s.countdownLabelRow}>
-                        <Icon name="car" size={13} color="rgba(255,255,255,0.8)" />
-                        <Text style={s.countdownLabel}>Vehicle on the way</Text>
+                      <View style={s.sentIconWrap}>
+                        <Icon name="car" size={24} color="#fff" />
                       </View>
-                      {/* No GPS fix yet means no honest estimate — say that
-                          rather than showing a number the phone cannot back
-                          up, or falling back to the elapsed clock that made
-                          no sense in the first place. */}
-                      {trip ? (
-                        <>
-                          <Text style={s.countdownTimer}>
-                            {trip.etaMinutes <= 0 ? 'Now' : `~${trip.etaMinutes}`}
-                          </Text>
-                          {trip.etaMinutes > 0 && <Text style={s.countdownUnit}>min away</Text>}
-                        </>
-                      ) : (
-                        <Text style={s.countdownLocating}>Locating your car…</Text>
-                      )}
+                      <Text style={s.sentTitle}>Vehicle on the way</Text>
                       <Text style={s.countdownSub}>
                         {activeRetrieve.driverName ?? 'Your driver'} is bringing it to the valet counter
                       </Text>
                       <PressableScale style={s.countdownTrackBtn} onPress={() => setShowTracking(true)}>
                         <Icon name="map" size={15} color="#fff" />
-                        <Text style={s.countdownTrackBtnTxt}>Track live</Text>
+                        <Text style={s.countdownTrackBtnTxt}>Track status</Text>
                       </PressableScale>
                     </>
                   ) : (
