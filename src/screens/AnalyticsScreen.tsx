@@ -6,12 +6,20 @@ import {useTheme} from '../context/ThemeContext';
 import {BRAND_GRADIENT, BRAND_GRADIENT_DARK} from '../theme/colors';
 import {Icon} from '../components/Icon';
 import {PressableScale} from '../components/PressableScale';
-import {analyticsApi, AnalyticsOverview, DriverAnalytics} from '../services/api';
+import {analyticsApi, AnalyticsOverview, AnalyticsPeriod, DriverAnalytics} from '../services/api';
+
+const PERIODS: {key: AnalyticsPeriod; label: string}[] = [
+  {key: 'daily', label: 'Today'},
+  {key: 'weekly', label: 'This Week'},
+  {key: 'monthly', label: 'This Month'},
+  {key: 'yearly', label: 'This Year'},
+  {key: 'all', label: 'All-time'},
+];
 
 // Shared by both the valet and admin tabs — the data isn't role-scoped (see
-// analytics.service.js: it's the whole operation's all-time picture), so a
-// valet reads it as "how is my shift going" and admin reads the identical
-// screen as "how is the operation going". One screen, two doors in.
+// analytics.service.js: it's the whole operation's picture for the selected
+// period), so a valet reads it as "how is my shift going" and admin reads the
+// identical screen as "how is the operation going". One screen, two doors in.
 
 const MEDALS = ['#F5C168', '#C7CDD6', '#D3946B']; // gold / silver / bronze
 
@@ -36,11 +44,15 @@ function relativeTime(iso: string | undefined): string {
   return `Updated ${Math.floor(secs / 3600)}h ago`;
 }
 
+const PERIOD_TITLES: Record<AnalyticsPeriod, string> = {
+  daily: 'Today', weekly: 'This Week', monthly: 'This Month', yearly: 'This Year', all: 'All-Time',
+};
+
 function buildShareText(data: AnalyticsOverview): string {
   const visitorTotal = data.visitorJobs + data.staffJobs;
   const visitorPct = visitorTotal > 0 ? Math.round((data.visitorJobs / visitorTotal) * 100) : 0;
   const lines = [
-    `📊 KIMS Parking — All-Time Analytics`,
+    `📊 KIMS Parking — ${PERIOD_TITLES[data.period]} Analytics`,
     ``,
     `🚗 ${data.totalCarsParked} parked · ${data.totalCarsRetrieved} retrieved · ${data.totalJobsCompleted} total jobs`,
     `⏱ Avg park ${minutesLabel(data.avgParkMinutes)} · Avg retrieve ${minutesLabel(data.avgRetrieveMinutes)}`,
@@ -61,18 +73,22 @@ export function AnalyticsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [selectedHour, setSelectedHour] = useState<number | null>(null);
+  const [trendIndex, setTrendIndex] = useState<number | null>(null);
   const [expandedDriverId, setExpandedDriverId] = useState<number | null>(null);
   const [idleExpanded, setIdleExpanded] = useState(false);
+  const [period, setPeriod] = useState<AnalyticsPeriod>('all');
 
-  const load = useCallback((silent?: boolean) => {
+  const load = useCallback((p: AnalyticsPeriod, silent?: boolean) => {
     if (!silent) setLoading(true);
-    analyticsApi.overview()
+    analyticsApi.overview(p)
       .then(d => { setData(d); setErr(null); })
       .catch(() => setErr('Could not load analytics'))
       .finally(() => { setLoading(false); setRefreshing(false); });
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  // Switching periods re-fetches fresh (not silent — the old period's
+  // numbers would otherwise sit on screen, wrong, while the new ones load).
+  useEffect(() => { load(period); setTrendIndex(null); }, [period, load]);
 
   const s = styles;
   const visitorTotal = (data?.visitorJobs ?? 0) + (data?.staffJobs ?? 0);
@@ -118,19 +134,19 @@ export function AnalyticsScreen() {
       <ScrollView
         contentContainerStyle={s.scroll}
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(true); }} tintColor={colors.primary} />}>
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(period, true); }} tintColor={colors.primary} />}>
 
         <LinearGradient colors={isDark ? BRAND_GRADIENT_DARK : BRAND_GRADIENT} style={s.gradHeader} start={{x:0,y:0}} end={{x:1,y:1}}>
           <View style={s.gradTopRow}>
             <View>
-              <Text style={s.eyebrow}>ALL-TIME · LIVE</Text>
+              <Text style={s.eyebrow}>{PERIODS.find(p => p.key === period)?.label.toUpperCase()} · LIVE</Text>
               <Text style={s.gradTitle}>Analytics</Text>
             </View>
             <View style={{flexDirection: 'row', gap: 8}}>
               <PressableScale style={[s.headerBtn, sharing && {opacity: 0.6}]} disabled={sharing} onPress={onShare}>
                 {sharing ? <ActivityIndicator color="#fff" size="small" /> : <Icon name="share" size={17} color="#fff" />}
               </PressableScale>
-              <PressableScale style={[s.headerBtn, refreshing && {opacity: 0.6}]} disabled={refreshing} onPress={() => { setRefreshing(true); load(true); }}>
+              <PressableScale style={[s.headerBtn, refreshing && {opacity: 0.6}]} disabled={refreshing} onPress={() => { setRefreshing(true); load(period, true); }}>
                 <Icon name="refresh" size={18} color="#fff" />
               </PressableScale>
             </View>
@@ -159,13 +175,39 @@ export function AnalyticsScreen() {
           {data && <Text style={s.updatedTxt}>{relativeTime(data.generatedAt)}</Text>}
         </LinearGradient>
 
+        {/* Period selector — switches the whole overview (stats, hourly
+            histogram, leaderboard) to a real, database-scoped answer for that
+            window, not an all-time number relabeled. */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={s.periodScroll}
+          contentContainerStyle={s.periodRow}>
+          {PERIODS.map(p => {
+            const on = p.key === period;
+            return (
+              <PressableScale
+                key={p.key}
+                disabled={loading}
+                onPress={() => setPeriod(p.key)}
+                style={[s.periodChip, {
+                  backgroundColor: on ? colors.primary : colors.surface,
+                  borderColor: on ? colors.primary : colors.border,
+                  opacity: loading ? 0.6 : 1,
+                }]}>
+                <Text style={[s.periodChipTxt, {color: on ? colors.textOnPrimary : colors.textSecondary}]}>{p.label}</Text>
+              </PressableScale>
+            );
+          })}
+        </ScrollView>
+
         {loading && !data ? (
           <View style={s.centerBox}><ActivityIndicator color={colors.primary} /></View>
         ) : err && !data ? (
           <View style={s.centerBox}>
             <Icon name="alert" size={26} color={colors.textMuted} style={{marginBottom: 8}} />
             <Text style={{color: colors.textMuted, marginBottom: 12}}>{err}</Text>
-            <PressableScale disabled={loading} onPress={() => load()} style={[s.retryBtn, {backgroundColor: colors.primary, opacity: loading ? 0.6 : 1}]}>
+            <PressableScale disabled={loading} onPress={() => load(period)} style={[s.retryBtn, {backgroundColor: colors.primary, opacity: loading ? 0.6 : 1}]}>
               {loading
                 ? <ActivityIndicator color={colors.background} size="small" />
                 : <Text style={{color: colors.background, fontWeight: '800'}}>Retry</Text>}
@@ -228,6 +270,108 @@ export function AnalyticsScreen() {
               <Text style={[s.axisTxt, {color: colors.textMuted}]}>11PM</Text>
             </View>
           </View>
+
+          {/* Park vs Retrieve — the SAME jobs Activity by Hour counts above,
+              split by type instead of combined, at whatever bucket
+              resolution suits the selected period (hourly/daily/monthly,
+              see backend trendBuckets). Absent for All-time, where a
+              calendar trend can't usefully answer "when" over a multi-year
+              span. Tap any bar to inspect it, same interaction Activity by
+              Hour already uses — no reading required, tap and the numbers
+              are right there. */}
+          {data?.trend && (
+            <View style={[s.chartCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+              <View style={[s.chartHeadRow, {marginBottom: 2}]}>
+                <View style={s.chartTitleRow}>
+                  <Icon name="carKey" size={15} color={colors.primary} />
+                  <Text style={[s.chartTitle, {color: colors.textPrimary}]}>Park vs Retrieve</Text>
+                </View>
+                <View style={s.legendRow}>
+                  <View style={s.legendItem}>
+                    <View style={[s.legendDot, {backgroundColor: colors.primary}]} />
+                    <Text style={[s.legendTxt, {color: colors.textMuted}]}>Park</Text>
+                  </View>
+                  <View style={s.legendItem}>
+                    <View style={[s.legendDot, {backgroundColor: colors.info}]} />
+                    <Text style={[s.legendTxt, {color: colors.textMuted}]}>Retrieve</Text>
+                  </View>
+                </View>
+              </View>
+              <Text style={[s.chartHint, {color: colors.textMuted}]}>
+                Same activity as above, broken down by job type — tap a bar for that {period === 'daily' ? 'hour' : period === 'yearly' ? 'month' : 'day'}.
+              </Text>
+              {(() => {
+                const {labels, park, retrieve} = data.trend;
+                const maxVal = Math.max(1, ...park, ...retrieve);
+                const n = labels.length;
+                // Hourly (24 buckets) reuses the exact tick set Activity by
+                // Hour uses above, so the two charts visibly read as the
+                // same time axis. Everything else (7 weekdays, 12 months) is
+                // few enough / already meaningful enough to label directly;
+                // only a long month's 28-31 raw day numbers gets thinned to
+                // first/mid/last.
+                const isHourly = n === 24;
+                const thinned = !isHourly && n > 14;
+                const ticks = isHourly
+                  ? ['12AM', '6AM', '12PM', '6PM', '11PM']
+                  : thinned ? [labels[0], labels[Math.floor(n / 2)], labels[n - 1]] : labels;
+                const selected = trendIndex != null && trendIndex < n ? trendIndex : null;
+                const peak = park.reduce((best, _, i) => ((park[i] + retrieve[i]) > (park[best] + retrieve[best]) ? i : best), 0);
+                const dispIndex = selected ?? peak;
+                return (
+                  <>
+                    {(park[dispIndex] + retrieve[dispIndex]) > 0 && (
+                      <Text style={[s.trendReadout, {color: colors.textPrimary}]}>
+                        {isHourly ? hourLabel(dispIndex) : labels[dispIndex]}: {park[dispIndex]} parked, {retrieve[dispIndex]} retrieved
+                      </Text>
+                    )}
+                    <View style={[s.barsRow, {gap: n > 20 ? 1 : 2}]}>
+                      {labels.map((_, i) => {
+                        const dim = selected != null && selected !== i;
+                        return (
+                          <Pressable key={i} style={s.trendCol} onPress={() => setTrendIndex(i === trendIndex ? null : i)} hitSlop={2}>
+                            <View style={[s.trendBar, {height: park[i] ? 4 + (park[i] / maxVal) * 50 : 2, backgroundColor: colors.primary, opacity: dim ? 0.35 : 1}]} />
+                            <View style={[s.trendBar, {height: retrieve[i] ? 4 + (retrieve[i] / maxVal) * 50 : 2, backgroundColor: colors.info, opacity: dim ? 0.35 : 1}]} />
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                    <View style={s.axisRow}>
+                      {ticks.map((t, i) => (
+                        <Text key={i} style={[s.axisTxt, !isHourly && !thinned && s.axisCell, {color: colors.textMuted}]}>{t}</Text>
+                      ))}
+                    </View>
+                  </>
+                );
+              })()}
+            </View>
+          )}
+
+          {/* Block utilization — which block actually got used this period,
+              computed from completed park jobs (real slot ids), never
+              invented. */}
+          {!!data?.blockUtilization.length && (
+            <View style={[s.chartCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+              <View style={[s.chartTitleRow, {marginBottom: 12}]}>
+                <Icon name="parking" size={15} color={colors.primary} />
+                <Text style={[s.chartTitle, {color: colors.textPrimary}]}>Block Utilization</Text>
+              </View>
+              <View style={{gap: 10}}>
+                {(() => {
+                  const maxCount = Math.max(...data.blockUtilization.map(b => b.count));
+                  return data.blockUtilization.map(b => (
+                    <View key={b.block} style={s.blockRow}>
+                      <Text style={[s.blockLbl, {color: colors.textSecondary}]}>Block {b.block}</Text>
+                      <View style={[s.blockTrack, {backgroundColor: colors.border}]}>
+                        <View style={[s.blockFill, {width: `${(b.count / maxCount) * 100}%`, backgroundColor: colors.primary}]} />
+                      </View>
+                      <Text style={[s.blockCount, {color: colors.textPrimary}]}>{b.count}</Text>
+                    </View>
+                  ));
+                })()}
+              </View>
+            </View>
+          )}
 
           {/* Visitor vs staff */}
           <View style={[s.insightCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
@@ -391,6 +535,25 @@ const styles = StyleSheet.create({
   bar: {width: '55%', borderRadius: 2, minHeight: 4},
   axisRow: {flexDirection: 'row', justifyContent: 'space-between'},
   axisTxt: {fontSize: 9.5, fontWeight: '700'},
+  axisCell: {flex: 1, textAlign: 'center'},
+  periodScroll: {flexGrow: 0},
+  periodRow: {gap: 8, paddingHorizontal: 20, paddingTop: 14, paddingBottom: 4},
+  periodChip: {paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, borderWidth: 1},
+  periodChipTxt: {fontSize: 12.5, fontWeight: '800'},
+  chartTitleRow: {flexDirection: 'row', alignItems: 'center', gap: 6},
+  legendRow: {flexDirection: 'row', alignItems: 'center', gap: 10},
+  legendItem: {flexDirection: 'row', alignItems: 'center', gap: 4},
+  legendDot: {width: 7, height: 7, borderRadius: 2},
+  legendTxt: {fontSize: 10.5, fontWeight: '700'},
+  chartHint: {fontSize: 11, marginBottom: 10},
+  trendReadout: {fontSize: 11, fontWeight: '700', marginBottom: 8},
+  trendCol: {flex: 1, height: 58, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'center', gap: 1},
+  trendBar: {width: '45%', borderRadius: 1},
+  blockRow: {flexDirection: 'row', alignItems: 'center', gap: 10},
+  blockLbl: {width: 56, fontSize: 12, fontWeight: '700'},
+  blockTrack: {flex: 1, height: 8, borderRadius: 4, overflow: 'hidden'},
+  blockFill: {height: 8, borderRadius: 4},
+  blockCount: {width: 28, fontSize: 12, fontWeight: '800', textAlign: 'right', fontVariant: ['tabular-nums']},
   insightCard: {borderRadius: 16, borderWidth: 1, padding: 14, marginBottom: 22},
   insightRow: {flexDirection: 'row', alignItems: 'center', gap: 12},
   insightIconWrap: {width: 32, height: 32, borderRadius: 9, alignItems: 'center', justifyContent: 'center'},

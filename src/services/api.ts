@@ -260,6 +260,10 @@ export const driversApi = {
     client.get('/drivers', {params}).then(r => r.data.drivers),
   setStatus: (id: number, status: 'available' | 'busy' | 'off') =>
     client.patch(`/drivers/${id}/status`, {status}).then(r => r.data.driver),
+  // Admin-only escape hatch for a driver stuck 'busy' with no live job the
+  // normal flow can reach — cancels whatever's holding them and frees them.
+  forceFree: (id: number) =>
+    client.patch(`/drivers/${id}/force-free`).then(r => r.data.driver),
 };
 
 // ── Slots ────────────────────────────────────────────────────────────────
@@ -385,17 +389,25 @@ export type DriverAnalytics = {
   parksCompleted: number; retrievesCompleted: number; totalCompleted: number;
   avgParkMinutes: number | null; avgRetrieveMinutes: number | null;
 };
+export type AnalyticsPeriod = 'daily' | 'weekly' | 'monthly' | 'yearly' | 'all';
+export type BlockUtilization = {block: string; count: number};
+export type AnalyticsTrend = {labels: string[]; park: number[]; retrieve: number[]};
 export type AnalyticsOverview = {
   totalCarsParked: number; totalCarsRetrieved: number; totalJobsCompleted: number;
   avgParkMinutes: number | null; avgRetrieveMinutes: number | null;
   busiestHour: number | null;
   hourlyDistribution: number[];
+  blockUtilization: BlockUtilization[];
+  // null only for period 'all' — see backend analytics.service.js trendBuckets.
+  trend: AnalyticsTrend | null;
   visitorJobs: number; staffJobs: number;
   drivers: DriverAnalytics[];
   generatedAt: string;
+  period: AnalyticsPeriod;
 };
 export const analyticsApi = {
-  overview: (): Promise<AnalyticsOverview> => client.get('/analytics/overview').then(r => r.data),
+  overview: (period?: AnalyticsPeriod): Promise<AnalyticsOverview> =>
+    client.get('/analytics/overview', {params: period && period !== 'all' ? {period} : undefined}).then(r => r.data),
 };
 
 // ── App version / updates ───────────────────────────────────────────────

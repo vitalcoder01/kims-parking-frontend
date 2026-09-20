@@ -89,6 +89,7 @@ export function AdminStaffScreen() {
   // (no GPS, no login — see the two-station handoff follow-up). This
   // replaces that self-service toggle from the admin side.
   const [togglingShift, setTogglingShift] = useState(false);
+  const [forcingFree, setForcingFree] = useState(false);
   const [deletingAccount, setDeletingAccount] = useState(false);
   // Return-key chaining — role-dependent fields aren't always mounted, so
   // "next" focuses the first ref in the candidate list that actually exists.
@@ -250,6 +251,42 @@ export function AdminStaffScreen() {
     }
   };
 
+  // The escape hatch handleToggleDriverShift explicitly refuses to be: a
+  // driver stuck 'busy' with no way back through the normal flow because
+  // whatever job holds them is itself stuck (a past bug, an abandoned test
+  // job). Cancels that job outright and frees the driver — see
+  // driver.service.js's forceFreeDriver for why this is deliberately blunt
+  // and admin-only.
+  const handleForceFreeDriver = () => {
+    if (!editingUser?.linkedDriverId || forcingFree) return;
+    const driverId = editingUser.linkedDriverId;
+    dialog.show({
+      title: 'Force Free This Driver?',
+      message: `${editingUser.name} will be marked available immediately, and whatever job is currently stuck on them will be cancelled. Only do this if you're sure that job is genuinely dead — this can't be undone.`,
+      tone: 'warning',
+      buttons: [
+        {text: 'Cancel', style: 'cancel'},
+        {
+          text: 'Force Free',
+          style: 'destructive',
+          onPress: async () => {
+            if (forcingFree) return;
+            setForcingFree(true);
+            try {
+              await driversApi.forceFree(driverId);
+              setEditingUser(prev => (prev ? {...prev, driverStatus: 'available'} : prev));
+              loadUsers();
+            } catch (err: any) {
+              dialog.alert(err.message || 'Could not free this driver', {title: 'Error', tone: 'info'});
+            } finally {
+              setForcingFree(false);
+            }
+          },
+        },
+      ],
+    });
+  };
+
   const handleDelete = () => {
     if (deletingAccount || !editingUser) return;
     dialog.show({
@@ -394,12 +431,32 @@ export function AdminStaffScreen() {
             <>
               <Text style={[s.fieldLabel, {color: colors.textMuted}]}>SHIFT STATUS</Text>
               {editingUser.driverStatus === 'busy' ? (
-                <View style={[s.shiftRow, {borderColor: colors.border, backgroundColor: colors.surface}]}>
-                  <Icon name="bolt" size={15} color={colors.warning} />
-                  <Text style={[s.shiftTxt, {color: colors.textSecondary, flex: 1}]}>
-                    On a job right now — can't change shift status until it's done.
-                  </Text>
-                </View>
+                <>
+                  <View style={[s.shiftRow, {borderColor: colors.border, backgroundColor: colors.surface}]}>
+                    <Icon name="bolt" size={15} color={colors.warning} />
+                    <Text style={[s.shiftTxt, {color: colors.textSecondary, flex: 1}]}>
+                      On a job right now — can't change shift status until it's done.
+                    </Text>
+                  </View>
+                  {/* Only for the case the note above can't resolve on its
+                      own: the job itself is stuck (bug, abandoned test data)
+                      and will never finish or cancel through the normal
+                      flow. See handleForceFreeDriver. */}
+                  <PressableScale
+                    onPress={handleForceFreeDriver}
+                    disabled={forcingFree}
+                    style={[s.shiftRow, {
+                      marginTop: 8,
+                      borderColor: colors.error + '55',
+                      backgroundColor: colors.error + '14',
+                      opacity: forcingFree ? 0.6 : 1,
+                    }]}>
+                    <Icon name="alert" size={15} color={colors.error} />
+                    <Text style={[s.shiftTxt, {flex: 1, color: colors.textPrimary}]}>
+                      {forcingFree ? 'Freeing…' : 'Job stuck? Force free this driver'}
+                    </Text>
+                  </PressableScale>
+                </>
               ) : (
                 <PressableScale
                   onPress={handleToggleDriverShift}

@@ -460,8 +460,70 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
   const userRef = useRef(user);
   userRef.current = user;
 
+  // A handful of mutators need the freshest `tasks` AFTER an await, not the
+  // snapshot closed over when they were called — see assignVisitorDriver's
+  // linkedTaskId lookup below for why.
+  const tasksRef = useRef(tasks);
+  tasksRef.current = tasks;
+
   const reassignShownAt = useRef(0);
-  const clearReassignPrompt = useCallback(() => setReassignPrompt(null), []);
+
+  // reassignPrompt is a single dialog slot, but the events that fill it
+  // (accept-timeout, driver reject, the repeating driver-reminder) can land
+  // for TWO DIFFERENT jobs close together. The old code just overwrote the
+  // slot — whichever event landed second silently discarded whatever job
+  // the valet hadn't dismissed yet, with no way to see it again short of
+  // the 60s reminder loop happening to cover it. Queue-backed instead: only
+  // one prompt is ever on screen, but a second one waits its turn instead
+  // of erasing the first.
+  const reassignQueueRef = useRef<ReassignPrompt[]>([]);
+  const reassignPromptKey = (p: ReassignPrompt) =>
+    `${p.kind}:${p.kind === 'task' ? p.task?.id : p.visitor?.id}:${p.source ?? 'escalation'}`;
+
+  const enqueueReassignPrompt = useCallback((next: ReassignPrompt) => {
+    const key = reassignPromptKey(next);
+    setReassignPrompt(prev => {
+      if (prev && reassignPromptKey(prev) === key) return prev; // already the one showing
+      const q = reassignQueueRef.current;
+      const idx = q.findIndex(p => reassignPromptKey(p) === key);
+      if (idx >= 0) q[idx] = next; else q.push(next);
+      if (prev) return prev; // something else showing — this one waits
+      reassignQueueRef.current = q.filter(p => reassignPromptKey(p) !== key);
+      reassignShownAt.current = Date.now();
+      return next;
+    });
+  }, []);
+
+  // Dismiss whichever queued/active prompt(s) match — used both when the
+  // valet explicitly closes the current one and when a job resolves itself
+  // (someone else staffed it) while its prompt is still queued or showing.
+  const closeReassignPromptFor = useCallback((matches: (p: ReassignPrompt) => boolean) => {
+    reassignQueueRef.current = reassignQueueRef.current.filter(p => !matches(p));
+    setReassignPrompt(prev => {
+      if (!prev || !matches(prev)) return prev;
+      const q = reassignQueueRef.current;
+      if (q.length === 0) return null;
+      const [next, ...rest] = q;
+      reassignQueueRef.current = rest;
+      reassignShownAt.current = Date.now();
+      return next;
+    });
+  }, []);
+
+  // The valet dismissing the current prompt (Reassign now / Later) advances
+  // to whatever's next in the queue, if anything. Deliberately NOT
+  // closeReassignPromptFor(() => true): that filters the whole queue away
+  // before looking for a successor, so a second job's prompt would be
+  // discarded instead of shown next.
+  const clearReassignPrompt = useCallback(() => {
+    setReassignPrompt(prev => {
+      if (!prev) return prev;
+      const [next, ...rest] = reassignQueueRef.current;
+      reassignQueueRef.current = rest;
+      if (next) reassignShownAt.current = Date.now();
+      return next ?? null;
+    });
+  }, []);
 
   // ── True-WebSocket sync — full fetch on login/reconnect, deltas after.
   useEffect(() => {
@@ -469,6 +531,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
       setDrivers([]); setTasks([]); setSlots([]); setVisitors([]); setNotifs([]); setArrivals([]);
       setHydrated(false);
       setDriverLocations({}); setOnlineDriverIds([]); setReassignPrompt(null);
+      reassignQueueRef.current = [];
       disconnectSocket();
       return;
     }
@@ -486,8 +549,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
       // Someone else just staffed this job — close any open "needs a
       // driver" prompt rather than inviting a second, conflicting assignment.
       if (task.driverId) {
-        setReassignPrompt(prev =>
-          prev?.kind === 'task' && prev.task?.id === task.id ? null : prev);
+        closeReassignPromptFor(p => p.kind === 'task' && p.task?.id === task.id);
       }
       const me = userRef.current;
       // linkedDriverId only — Driver.id and User.id are separate sequences,
@@ -510,8 +572,7 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
       const visitor = mapVisitor(raw);
       setVisitors(p => upsertById(p, visitor));
       if (visitor.driverId) {
-        setReassignPrompt(prev =>
-          prev?.kind === 'visitor' && prev.visitor?.id === visitor.id ? null : prev);
+        closeReassignPromptFor(p => p.kind === 'visitor' && p.visitor?.id === visitor.id);
       }
     });
 
@@ -613,31 +674,19 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     // ── accept-timeout / reject prompts (valet + admin rooms only) ──
     // One prompt per job while it's open — the same job can legitimately
     // raise this event twice (owner alone, then the whole team on escalate),
-    // and the owner receives both.
+    // and the owner receives both. enqueueReassignPrompt (not a direct
+    // setReassignPrompt) — two of these can legitimately land for two
+    // different jobs seconds apart, and this is a queue, not an
+    // overwritable single slot.
     socket.on('task:needs-reassign', ({task, driverName, rejected}: any) => {
-      const mapped = mapTask(task);
-      setReassignPrompt(prev => {
-        if (prev?.kind === 'task' && prev.task?.id === mapped.id) return prev;
-        reassignShownAt.current = Date.now();
-        return {kind: 'task', task: mapped, driverName, rejected};
-      });
+      enqueueReassignPrompt({kind: 'task', task: mapTask(task), driverName, rejected});
     });
     socket.on('visitor:needs-reassign', ({visitor, driverName, rejected}: any) => {
-      const mapped = mapVisitor(visitor);
-      setReassignPrompt(prev => {
-        if (prev?.kind === 'visitor' && prev.visitor?.id === mapped.id) return prev;
-        reassignShownAt.current = Date.now();
-        return {kind: 'visitor', visitor: mapped, driverName, rejected};
-      });
+      enqueueReassignPrompt({kind: 'visitor', visitor: mapVisitor(visitor), driverName, rejected});
     });
     // Repeats every 60s until staffed or silenced (driverReminder.js).
     socket.on('task:driver-reminder', ({task}: any) => {
-      const mapped = mapTask(task);
-      setReassignPrompt(prev => {
-        if (prev?.kind === 'task' && prev.task?.id === mapped.id && prev.source === 'reminder') return prev;
-        reassignShownAt.current = Date.now();
-        return {kind: 'task', task: mapped, driverName: null, source: 'reminder'};
-      });
+      enqueueReassignPrompt({kind: 'task', task: mapTask(task), driverName: null, source: 'reminder'});
     });
 
     // FCM device registration + foreground push handling. `pushCancelled`
@@ -667,8 +716,8 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     const stillNeedsDriver = reassignPrompt.kind === 'task'
       ? tasks.some(t => t.id === reassignPrompt.task?.id && !t.driverId)
       : visitors.some(v => v.id === reassignPrompt.visitor?.id && !v.driverId);
-    if (!stillNeedsDriver) setReassignPrompt(null);
-  }, [reassignPrompt, tasks, visitors]);
+    if (!stillNeedsDriver) clearReassignPrompt();
+  }, [reassignPrompt, tasks, visitors, clearReassignPrompt]);
 
   // Socket reconnect is the only other refetch trigger — a socket that
   // drops without reconnecting (wifi wobble, doze, backgrounded app) would
@@ -805,7 +854,12 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     const coords = task?.type === 'retrieve' ? await getCurrentPositionSafe() : null;
     const updated = mapTask(await tasksApi.assignDriver(taskId, driverId, coords ? {lat: coords.lat, lng: coords.lng} : undefined));
     setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
-    setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'busy', currentTaskId: taskId} : d)));
+    // Only trust driverId as confirmed if the server actually agrees it's
+    // who ended up on this task — defensive, since assignDriver's own
+    // request already asked for exactly this driver.
+    if (updated.driverId === driverId) {
+      setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'busy', currentTaskId: taskId} : d)));
+    }
   }, [tasks]);
 
   // Gate-station valet: one call replaces addTask -> assignDriver ->
@@ -856,17 +910,40 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     const freedDriverId = tasks.find(t => t.id === taskId)?.driverId;
     const updated = mapTask(await tasksApi.cancelAssignment(taskId));
     setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
-    if (freedDriverId != null) setDrivers(p => p.map(d => (d.id === freedDriverId ? {...d, status: 'available', currentTaskId: undefined} : d)));
+    // Guard against the driver having already moved on to a genuinely new
+    // job while this cancel was in flight — only clear currentTaskId if
+    // it's still pointing at the job we just cancelled (or already empty).
+    // Without this, a driver who got reassigned in that window would have
+    // their live currentTaskId wiped out from under their actual new job.
+    if (freedDriverId != null) {
+      setDrivers(p => p.map(d => (d.id === freedDriverId && (d.currentTaskId == null || d.currentTaskId === taskId)
+        ? {...d, status: 'available', currentTaskId: undefined} : d)));
+    }
   }, [tasks]);
 
   const acceptTask = useCallback(simpleTaskAction(tasksApi.accept), []);
 
   const rejectTask = useCallback(async (taskId: number) => {
     await stopAssignmentAlarm().catch(() => {});
+    // The task's own driverId at call time, not myDriverId blindly — a
+    // driver only ever rejects their own job so these normally agree, but
+    // if the watchdog reassigned this exact task to someone else in the
+    // same instant this tap landed, freeing "myDriverId" unconditionally
+    // would wipe THIS driver's own currentTaskId even if the backend had,
+    // at that same moment, already handed them something new. Falls back
+    // to myDriverId only if the task had somehow already dropped off local
+    // state.
+    const freedDriverId = tasks.find(t => t.id === taskId)?.driverId ?? myDriverId;
     const updated = mapTask(await tasksApi.reject(taskId));
     setTasks(p => p.map(t => (t.id === taskId ? updated : t)));
-    if (myDriverId != null) setDrivers(p => p.map(d => (d.id === myDriverId ? {...d, status: 'available', currentTaskId: undefined} : d)));
-  }, [myDriverId]);
+    // Same currentTaskId guard as cancelTaskAssignment — don't clobber a
+    // driver who's already moved on to a different job by the time this
+    // resolves.
+    if (freedDriverId != null) {
+      setDrivers(p => p.map(d => (d.id === freedDriverId && (d.currentTaskId == null || d.currentTaskId === taskId)
+        ? {...d, status: 'available', currentTaskId: undefined} : d)));
+    }
+  }, [tasks, myDriverId]);
 
   const markKeyCollected = useCallback(simpleTaskAction(tasksApi.keyCollected), []);
 
@@ -960,17 +1037,32 @@ export function AppStateProvider({children}: {children: React.ReactNode}) {
     setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
     // Driver.currentTaskId is a ParkingTask id, never a visitor id — mixing
     // the two once left a driver stuck "busy" server-side (see
-    // visitor.service.js's freeDriverIfStillOn). The linked park task
-    // should already be in `tasks`; falls back to undefined otherwise.
-    const linkedTaskId = tasks.find(t => t.visitorId === visitorId && t.type === 'park' && t.status !== 'completed' && t.status !== 'cancelled')?.id;
+    // visitor.service.js's freeDriverIfStillOn). The linked park task is
+    // usually already in `tasks` by the time the request above resolves, but
+    // reading `tasks` directly would mean reading whatever snapshot was
+    // closed over when this function was CALLED, before that await — if the
+    // backend created the linked task as a side effect of this very call
+    // and its task:upsert delta hadn't landed yet, that stale snapshot would
+    // never see it. tasksRef.current is read fresh, after the await; falls
+    // back to undefined only if the task genuinely still isn't in.
+    const linkedTaskId = tasksRef.current.find(t => t.visitorId === visitorId && t.type === 'park' && t.status !== 'completed' && t.status !== 'cancelled')?.id;
     setDrivers(p => p.map(d => (d.id === driverId ? {...d, status: 'busy', currentTaskId: linkedTaskId} : d)));
-  }, [tasks]);
+  }, []);
 
   const cancelVisitorAssignment = useCallback(async (visitorId: number) => {
     const freedDriverId = visitors.find(v => v.id === visitorId)?.driverId;
+    // The linked park task's id, same lookup assignVisitorDriver uses — the
+    // reference point for the guard below, not the value being freed.
+    const linkedTaskId = tasksRef.current.find(t => t.visitorId === visitorId && t.type === 'park' && t.status !== 'completed' && t.status !== 'cancelled')?.id;
     const updated = mapVisitor(await visitorsApi.cancelAssignment(visitorId));
     setVisitors(p => p.map(v => (v.id === visitorId ? updated : v)));
-    if (freedDriverId != null) setDrivers(p => p.map(d => (d.id === freedDriverId ? {...d, status: 'available', currentTaskId: undefined} : d)));
+    // Same race as cancelTaskAssignment: only clear this driver's
+    // currentTaskId if it's still pointing at the job we just cancelled (or
+    // already empty).
+    if (freedDriverId != null) {
+      setDrivers(p => p.map(d => (d.id === freedDriverId && (d.currentTaskId == null || d.currentTaskId === linkedTaskId)
+        ? {...d, status: 'available', currentTaskId: undefined} : d)));
+    }
   }, [visitors]);
 
   const cancelVisitor = useCallback(async (visitorId: number, reason: 'no_show' | 'valet_cancelled' | 'parking_failed') => {
