@@ -6,7 +6,7 @@ import {useTheme} from '../context/ThemeContext';
 import {BRAND_GRADIENT, BRAND_GRADIENT_DARK} from '../theme/colors';
 import {Icon} from '../components/Icon';
 import {PressableScale} from '../components/PressableScale';
-import {analyticsApi, AnalyticsOverview, AnalyticsPeriod, DriverAnalytics} from '../services/api';
+import {analyticsApi, AnalyticsOverview, AnalyticsPeriod} from '../services/api';
 
 const PERIODS: {key: AnalyticsPeriod; label: string}[] = [
   {key: 'daily', label: 'Today'},

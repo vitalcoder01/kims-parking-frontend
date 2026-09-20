@@ -118,7 +118,7 @@ export function LiveTrackingScreen({task: taskProp, onBack}: Props) {
                 </Text>
                 <Text style={[s.arrivedSub, {color: colors.textMuted}]}>
                   {task.type === 'retrieve'
-                    ? (task.status === 'delivered' ? 'Please collect it at the valet counter' : 'Waiting at the valet counter')
+                    ? (task.status === 'delivered' ? 'Please collect it at the valet counter' : 'Delivered to you')
                     : task.slotId ? `Slot: ${task.slotId}` : 'Delivered to valet counter'}
                 </Text>
               </View>

@@ -1,5 +1,6 @@
-import React, {useState, useMemo} from 'react';
+import React, {useState, useMemo, useEffect} from 'react';
 import {View, Text, StyleSheet, ScrollView, Dimensions} from 'react-native';
+import {useRoute} from '@react-navigation/native';
 import {PressableScale} from '../components/PressableScale';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {useTheme} from '../context/ThemeContext';
@@ -44,6 +45,13 @@ export function ParkingMapScreen() {
 
   const [picked, setPicked] = useState<string | undefined>(mySlot);
   const pickedSlot = picked ? slots.find(sl => sl.id === picked) : undefined;
+
+  // The dashboard can open the map already on one block (its slot map links
+  // to the selected slot's block); with no hint the first block shows.
+  const focusBlock = useRoute<any>().params?.focusBlock as string | undefined;
+  const [activeBlock, setActiveBlock] = useState<string | undefined>(focusBlock);
+  useEffect(() => { if (focusBlock) setActiveBlock(focusBlock); }, [focusBlock]);
+
   // Cross-referenced against the live task list (already carries the
   // owner's name, department, driver — works uniformly for staff/doctor AND
   // visitor sessions since both run through the same ParkingTask) rather
@@ -68,6 +76,8 @@ export function ParkingMapScreen() {
         free: list.filter(sl => sl.status === 'free').length,
       }));
   }, [slots]);
+
+  const currentBlock = blocks.find(b => b.name === activeBlock) ?? blocks[0];
 
   const occupied = slots.filter(sl => sl.status === 'occupied').length;
   const total = slots.length;
@@ -131,6 +141,25 @@ export function ParkingMapScreen() {
           </View>
         )}
 
+        {/* Block selector — one block's grid at a time, so the whole grid fits
+            without a long scroll. Mirrors the web app's map. */}
+        {blocks.length > 1 && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.blockScroll} contentContainerStyle={s.blockChips}>
+            {blocks.map(bl => {
+              const on = bl.name === currentBlock?.name;
+              return (
+                <PressableScale
+                  key={bl.name}
+                  onPress={() => { setActiveBlock(bl.name); setPicked(undefined); }}
+                  style={[s.blockChip, {backgroundColor: on ? colors.primary : colors.surface, borderColor: on ? colors.primary : colors.border}]}>
+                  <Text style={[s.blockChipTxt, {color: on ? colors.textOnPrimary : colors.textPrimary}]}>Block {bl.name}</Text>
+                  <Text style={[s.blockChipFree, {color: on ? colors.textOnPrimary + 'CC' : colors.textMuted}]}>{bl.free}/{bl.slots.length}</Text>
+                </PressableScale>
+              );
+            })}
+          </ScrollView>
+        )}
+
         {/* Legend + selection */}
         <View style={s.legendRow}>
           {[
@@ -157,24 +186,24 @@ export function ParkingMapScreen() {
         </View>
 
         {/* Blocks */}
-        {blocks.length === 0 ? (
+        {!currentBlock ? (
           <View style={[s.emptyBox, {borderColor: colors.border}]}>
             <Icon name="parking" size={26} color={colors.textMuted} style={{marginBottom: 8}} />
             <Text style={[s.emptyTxt, {color: colors.textMuted}]}>No parking slots configured yet</Text>
           </View>
-        ) : blocks.map(bl => (
-          <View key={bl.name} style={[s.blockCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
+        ) : (
+          <View style={[s.blockCard, {backgroundColor: colors.surface, borderColor: colors.border}]}>
             <View style={[s.blockHead, {borderBottomColor: colors.divider}]}>
               <View style={[s.blockBadge, {backgroundColor: colors.cardAlt}]}>
-                <Text style={[s.blockBadgeTxt, {color: colors.textPrimary}]}>{bl.name}</Text>
+                <Text style={[s.blockBadgeTxt, {color: colors.textPrimary}]}>{currentBlock.name}</Text>
               </View>
-              <Text style={[s.blockTitle, {color: colors.textPrimary}]}>Block {bl.name}</Text>
-              <Text style={[s.blockFree, {color: bl.free > 0 ? colors.success : colors.error}]}>
-                {bl.free > 0 ? `${bl.free} free` : 'Full'}
+              <Text style={[s.blockTitle, {color: colors.textPrimary}]}>Block {currentBlock.name}</Text>
+              <Text style={[s.blockFree, {color: currentBlock.free > 0 ? colors.success : colors.error}]}>
+                {currentBlock.free > 0 ? `${currentBlock.free} free` : 'Full'}
               </Text>
             </View>
             <View style={s.grid}>
-              {bl.slots.map(sl => {
+              {currentBlock.slots.map(sl => {
                 const isMe = sl.id === mySlot;
                 const isSel = sl.id === picked;
                 const free = sl.status === 'free';
@@ -194,7 +223,7 @@ export function ParkingMapScreen() {
               })}
             </View>
           </View>
-        ))}
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -226,6 +255,12 @@ const s = StyleSheet.create({
   legendTxt: {fontSize: 11, fontWeight: '600'},
   pickedChip: {flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 10, borderWidth: 1.5, paddingHorizontal: 10, paddingVertical: 5},
   pickedChipTxt: {fontSize: 11, fontWeight: '800'},
+
+  blockScroll: {flexGrow: 0, marginBottom: 12},
+  blockChips: {gap: 8},
+  blockChip: {flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 999, borderWidth: 1},
+  blockChipTxt: {fontSize: 13, fontWeight: '800'},
+  blockChipFree: {fontSize: 11, fontWeight: '700'},
 
   emptyBox: {borderRadius: 14, borderWidth: 1, borderStyle: 'dashed', padding: 24, alignItems: 'center'},
   emptyTxt: {fontSize: 13, fontWeight: '600'},

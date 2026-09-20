@@ -1,5 +1,5 @@
 /*
- * Runs the co-pilot specs without jest.
+ * Runs the co-pilot and command-center specs without jest.
  *
  * jest.config.js points at @react-native/jest-preset, which is not installed
  * in this checkout — `npx jest` fails to resolve the preset before it runs a
@@ -31,6 +31,7 @@ let pass = 0, fail = 0, suite = '';
 Promise.all([
   import('../src/core/copilot/insights.test'),
   import('../src/core/copilot/reporter.test'),
+  import('../src/screens/admin/commandcenter/ccLogic.test'),
 ]).then(() => {
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

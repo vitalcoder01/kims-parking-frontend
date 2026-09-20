@@ -10,6 +10,8 @@ import {useAuth} from '../context/AuthContext';
 import {Icon, IconName} from '../components/Icon';
 
 import {LoginScreen}             from '../screens/auth/LoginScreen';
+import {SignUpScreen}            from '../screens/auth/SignUpScreen';
+import {DesignationScreen}       from '../screens/auth/DesignationScreen';
 import {DoctorHomeScreen}        from '../screens/doctor/DoctorHomeScreen';
 import {VirtualCardScreen}       from '../screens/doctor/VirtualCardScreen';
 import {VehicleSetupScreen}      from '../screens/doctor/VehicleSetupScreen';
@@ -21,6 +23,8 @@ import {ValetMapScreen}          from '../screens/valet/ValetMapScreen';
 import {DriverDashboardScreen}   from '../screens/driver/DriverDashboardScreen';
 import {DriverJobsScreen}        from '../screens/driver/DriverJobsScreen';
 import {AdminDashboardScreen}    from '../screens/admin/AdminDashboardScreen';
+import {AdminCommandCenterScreen} from '../screens/admin/AdminCommandCenterScreen';
+import {ErrorBoundary}           from '../components/ErrorBoundary';
 import {AdminStaffScreen}        from '../screens/admin/AdminStaffScreen';
 import {AdminAttendanceScreen}   from '../screens/admin/AdminAttendanceScreen';
 import {AnalyticsScreen}         from '../screens/AnalyticsScreen';
@@ -104,11 +108,22 @@ function DriverNavigator() {
   );
 }
 
+// The admin's landing tab. If the command-center dashboard ever fails to
+// render, the previous Operations screen stands in (the fault is still
+// reported) rather than leaving the admin on a dead first tab.
+function AdminDashboardTab() {
+  return (
+    <ErrorBoundary fallback={<AdminDashboardScreen />}>
+      <AdminCommandCenterScreen />
+    </ErrorBoundary>
+  );
+}
+
 function AdminNavigator() {
   const {colors} = useTheme();
   return (
     <Tab.Navigator screenOptions={tabOpts(colors)}>
-      <Tab.Screen name="Dashboard"   component={AdminDashboardScreen}  options={{title:'Operations', tabBarLabel:'Dashboard',  tabBarIcon:({size,color})=>ic('dashboard',size,color)}} />
+      <Tab.Screen name="Dashboard"   component={AdminDashboardTab}     options={{title:'Dashboard',  tabBarLabel:'Dashboard',  tabBarIcon:({size,color})=>ic('dashboard',size,color)}} />
       <Tab.Screen name="Staff"       component={AdminStaffScreen}      options={{title:'Staff',      tabBarLabel:'Staff',      tabBarIcon:({size,color})=>ic('staff',size,color)}} />
       <Tab.Screen name="Attendance"  component={AdminAttendanceScreen} options={{title:'Attendance', tabBarLabel:'Attendance', tabBarIcon:({size,color})=>ic('calendar',size,color)}} />
       <Tab.Screen name="Map"         component={ParkingMapScreen}      options={{title:'Live Map',   tabBarLabel:'Map',        tabBarIcon:({size,color})=>ic('map',size,color)}} />
@@ -177,7 +192,7 @@ const ROAMS_ON: Record<string, readonly string[]> = {
 
 export function AppNavigator() {
   const {colors, isDark} = useTheme();
-  const {user, isLoading} = useAuth();
+  const {user, isLoading, needsDesignation} = useAuth();
   const [route, setRoute] = useState<string | undefined>(undefined);
 
   if (isLoading) {
@@ -211,15 +226,22 @@ export function AppNavigator() {
   return (
     <NavigationContainer ref={navRef} theme={navTheme} onReady={trackRoute} onStateChange={trackRoute}>
       <Stack.Navigator screenOptions={{headerShown: false}}>
-        {user
-          ? <Stack.Screen name="App"   component={RoleRouter}  />
-          : <Stack.Screen name="Login" component={LoginScreen} />
-        }
+        {user ? (
+          needsDesignation
+            ? <Stack.Screen name="Designation" component={DesignationScreen} />
+            : <Stack.Screen name="App" component={RoleRouter} />
+        ) : (
+          <>
+            <Stack.Screen name="Login"  component={LoginScreen} />
+            <Stack.Screen name="SignUp" component={SignUpScreen} />
+          </>
+        )}
       </Stack.Navigator>
 
       {/* Only once signed in: there is nothing to observe on the login
-          screen, and no session to report a crash against anyway. */}
-      {!!user && (
+          screen, and no session to report a crash against anyway. Nor on the
+          one-time designation step, which is not a real screen yet. */}
+      {!!user && !needsDesignation && (
         <CopilotOverlay
           idleScreen={!!route && roams.includes(route)}
           onNavigate={insight => {

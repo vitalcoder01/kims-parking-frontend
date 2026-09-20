@@ -28,6 +28,11 @@ interface Props {
   children: React.ReactNode;
   /** Shown above the message. Defaults to a generic line. */
   label?: string;
+  /**
+   * Rendered in place of the crash screen when something simpler can stand in
+   * for the failed subtree. The fault is still reported either way.
+   */
+  fallback?: React.ReactNode;
 }
 
 interface State {
@@ -53,6 +58,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
   render() {
     const {error, componentStack} = this.state;
     if (!error) return this.props.children;
+    if (this.props.fallback) return this.props.fallback;
 
     /*
      * Fixed colours, no theme hook, no shared components.

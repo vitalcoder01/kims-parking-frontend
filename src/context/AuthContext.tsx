@@ -38,8 +38,14 @@ interface AuthContextValue {
   user: CurrentUser | null;
   isLoading: boolean;
   login: (username: string, password: string) => Promise<CurrentUser>;
+  register: (name: string, phone: string, password: string) => Promise<CurrentUser>;
   logout: () => Promise<void>;
   updateProfile: (patch: Partial<CurrentUser>) => void;
+  // True only right after a self-registration: the one-time doctor/staff
+  // designation screen has to be answered before the app opens. Not
+  // persisted — a session restored later opens straight to the default role.
+  needsDesignation: boolean;
+  clearNeedsDesignation: () => void;
 }
 
 const SESSION_KEY = '@kims_session';
@@ -57,13 +63,17 @@ const Ctx = createContext<AuthContextValue>({
   user: null,
   isLoading: true,
   login: async () => ({} as CurrentUser),
+  register: async () => ({} as CurrentUser),
   logout: async () => {},
   updateProfile: () => {},
+  needsDesignation: false,
+  clearNeedsDesignation: () => {},
 });
 
 export function AuthProvider({children}: {children: React.ReactNode}) {
   const [user, setUser]         = useState<CurrentUser | null>(null);
   const [isLoading, setLoading] = useState(true);
+  const [needsDesignation, setNeedsDesignation] = useState(false);
   const tokenRef = useRef<string | null>(null);
 
   const logout = useCallback(async () => {
@@ -80,6 +90,7 @@ export function AuthProvider({children}: {children: React.ReactNode}) {
       unregisterCurrentDevice().catch(() => {}),
       new Promise<void>(resolve => setTimeout(() => resolve(), 3000)),
     ]);
+    setNeedsDesignation(false);
     setUser(null);
     tokenRef.current = null;
     setAuthToken(null);
@@ -136,6 +147,25 @@ export function AuthProvider({children}: {children: React.ReactNode}) {
     return withTime;
   }, []);
 
+  // Same session setup as login. The backend always creates a doctor for a
+  // self-registration, so there is no role to gate here (unlike login's
+  // driver check).
+  const register = useCallback(async (name: string, phone: string, password: string) => {
+    const {token, user: newUser} = await authApi.register(name, phone, password);
+    const withTime: CurrentUser = {...newUser, loginTime: Date.now()};
+    tokenRef.current = token;
+    setAuthToken(token);
+    clearConditionalGetCache();
+    // Before setUser, so the navigator never renders the role's home screen
+    // for a frame ahead of the designation step.
+    setNeedsDesignation(true);
+    setUser(withTime);
+    await AsyncStorage.setItem(SESSION_KEY, JSON.stringify({user: withTime, token, loginTime: Date.now()}));
+    return withTime;
+  }, []);
+
+  const clearNeedsDesignation = useCallback(() => setNeedsDesignation(false), []);
+
   const updateProfile = useCallback((patch: Partial<CurrentUser>) => {
     setUser(prev => {
       if (!prev) return prev;
@@ -149,7 +179,7 @@ export function AuthProvider({children}: {children: React.ReactNode}) {
   }, []);
 
   return (
-    <Ctx.Provider value={{user, isLoading, login, logout, updateProfile}}>
+    <Ctx.Provider value={{user, isLoading, login, register, logout, updateProfile, needsDesignation, clearNeedsDesignation}}>
       {children}
     </Ctx.Provider>
   );

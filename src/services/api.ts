@@ -130,6 +130,11 @@ client.interceptors.response.use(
 export const authApi = {
   login: (username: string, password: string) =>
     client.post('/auth/login', {username, password}).then(r => r.data as {token: string; user: any}),
+  // Public self-registration for a doctor/staff member — the backend creates
+  // a 'doctor' account and the one-time designation screen can flip it to
+  // 'staff' (see usersApi.updateMyDesignation).
+  register: (name: string, phone: string, password: string) =>
+    client.post('/auth/register', {name, phone, password}).then(r => r.data as {token: string; user: any}),
   me: () => client.get('/auth/me').then(r => r.data.user),
 };
 
@@ -143,6 +148,8 @@ export const usersApi = {
   // just makes sure the shape is right.
   updateMe: (patch: {carNumber?: string; phone?: string; carModel?: string; carColor?: string; vehicleType?: 'car' | 'bike'; name?: string; username?: string}) =>
     client.patch('/users/me', patch).then(r => r.data.user),
+  updateMyDesignation: (role: 'doctor' | 'staff') =>
+    client.patch('/users/me/designation', {role}).then(r => r.data.user),
   // Password change: always requires the current password, always on its
   // own call (never bundled with updateMe) so the security guarantee is
   // impossible to skip by accident. Returns nothing on success — the
@@ -405,9 +412,71 @@ export type AnalyticsOverview = {
   generatedAt: string;
   period: AnalyticsPeriod;
 };
+
+// ── Command center (admin only) ──────────────────────────────────────────
+// Only the fields the mobile dashboard reads are typed; the endpoint returns
+// more (anomalies, insights, health, ...) that this screen does not show.
+export type SlotClassification = 'HIGH' | 'NORMAL' | 'UNDERUTILIZED' | 'OVERLOADED' | 'NO_DATA';
+export type SlotIntelligence = {
+  meanUsage: number;
+  totalSlots: number;
+  slots: {
+    id: string; block: string; number: number; currentStatus: 'free' | 'occupied' | 'reserved';
+    usageCount: number; lastUsedAt: string | null; classification: SlotClassification;
+  }[];
+  underutilizedCount: number;
+  overloadedCount: number;
+  note: string;
+};
+export type FunnelStage = {key: string; label: string; avgMinutes: number | null; sampleSize: number};
+export type TaskFunnel = {
+  park: {stages: FunnelStage[]; sampleSize: number; bottleneck: FunnelStage | null};
+  retrieve: {stages: FunnelStage[]; sampleSize: number; bottleneck: FunnelStage | null};
+};
+export type ActivityTrendDay = {date: string; tasks: number; visitors: number; slotUsage: number};
+export type HeatmapCell = {tasks: number; visitors: number};
+export type DemandHeatmap = {weekdayLabels: string[]; grid: HeatmapCell[][]; maxTasks: number};
+export type FunnelVolumeStage = {key: string; label: string; count: number; avgMinutesFromCreation: number | null};
+export type TaskFunnelVolume = {
+  park: {sampleSize: number; stages: FunnelVolumeStage[]};
+  retrieve: {sampleSize: number; stages: FunnelVolumeStage[]};
+};
+export type KpiDelta = {current: number; previous: number | null; pctChange: number | null};
+export type KpiComparison = {tasks: KpiDelta; visitors: KpiDelta; drivers: KpiDelta; users: KpiDelta};
+// Real friction events (driver non-acceptance, assignment timeouts, unstaffed
+// alerts, recalls, escalations, recovery broadcasts) — see the backend's
+// analytics.service.js operationalFriction for the exact sourcing.
+export type OperationalFriction = {
+  totalTasks: number;
+  cancelledTasks: number;
+  cancellationRatePct: number;
+  driverNoResponseCount: number;
+  assignmentExpiredCount: number;
+  unstaffedAlertCount: number;
+  jobsRecalledCount: number;
+  escalatedTasksCount: number;
+  retrieveTasks: number;
+  recoveryBroadcastCount: number;
+  recoveryBroadcastRatePct: number;
+};
+export type CommandCenterBundle = {
+  period: AnalyticsPeriod;
+  overview: AnalyticsOverview;
+  slots: SlotIntelligence;
+  taskFunnel: TaskFunnel;
+  taskFunnelVolume: TaskFunnelVolume;
+  activityTrend: {days: ActivityTrendDay[]};
+  demandHeatmap: DemandHeatmap;
+  visitorIntelligence: {total: number};
+  kpiComparison: KpiComparison;
+  operationalFriction: OperationalFriction;
+};
+
 export const analyticsApi = {
   overview: (period?: AnalyticsPeriod): Promise<AnalyticsOverview> =>
     client.get('/analytics/overview', {params: period && period !== 'all' ? {period} : undefined}).then(r => r.data),
+  commandCenter: (period?: AnalyticsPeriod): Promise<CommandCenterBundle> =>
+    client.get('/analytics/command-center', {params: period && period !== 'all' ? {period} : undefined}).then(r => r.data),
 };
 
 // ── App version / updates ───────────────────────────────────────────────

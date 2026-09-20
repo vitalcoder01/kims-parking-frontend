@@ -76,7 +76,7 @@ STEP 2 — Sync the short-path build copy
   This `reset --hard` always wipes one line from
   android/gradle.properties (org.gradle.java.home), because that
   line is gitignored/local-only. It has to be re-added every time:
-      org.gradle.java.home=C:/tools/jdk-17.0.19+10
+      org.gradle.java.home=C:/Program Files/Eclipse Adoptium/jdk-17.0.20.8-hotspot
   (Forward slashes — backslashes get mangled by shell escaping and
   silently corrupt the path, which was a real bug hit earlier.)
 
@@ -108,6 +108,23 @@ STEP 5 — Verify the signature
         302a85f1
   (apksigner.bat lives under the Android SDK's build-tools folder,
   e.g. .../Sdk/build-tools/36.0.0/apksigner.bat)
+
+STEP 5b — Verify what is actually INSIDE the APK
+  The signature only proves who signed it. Also check the file itself:
+      aapt.exe dump badging app-release.apk | findstr package:
+  versionCode and versionName MUST be the numbers bumped in Step 1. An
+  APK built from a checkout taken BEFORE the version-bump commit carries
+  the old versionCode: advertise it and every phone installs it, relaunches,
+  still sees itself as older than the backend's number and loops on
+  "Update Required" forever (v1.9.19, 2026-09-18). So build from a fresh
+  clone of the COMMITTED release commit and check its HEAD hash first.
+  Then list the native libraries:
+      unzip -l app-release.apk | findstr lib/
+  Only arm64-v8a and armeabi-v7a should appear (about 40 MB in total). If
+  x86 / x86_64 show up, reactNativeArchitectures in android/gradle.properties
+  has been widened — React Native copies that list into the default ABI
+  filter, and a release-only filter in build.gradle cannot narrow it. That is
+  how v1.9.19 shipped at 71 MB.
 
 STEP 6 — Ship the APK
   Copy the signed APK into the main repo and commit it:

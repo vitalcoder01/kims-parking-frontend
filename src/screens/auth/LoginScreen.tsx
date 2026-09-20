@@ -3,6 +3,7 @@ import {View, Text, TextInput, StyleSheet, KeyboardAvoidingView, Platform, Scrol
 import {PressableScale} from '../../components/PressableScale';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import LinearGradient from 'react-native-linear-gradient';
+import {useNavigation} from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {useAuth} from '../../context/AuthContext';
 import {useTheme} from '../../context/ThemeContext';
@@ -52,6 +53,7 @@ async function forgetAccount(username: string) {
 export function LoginScreen() {
   const {login} = useAuth();
   const {colors, isDark} = useTheme();
+  const navigation = useNavigation<any>();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError]       = useState('');
@@ -286,6 +288,12 @@ export function LoginScreen() {
                   </>
               }
             </PressableScale>
+
+            <PressableScale onPress={() => navigation.navigate('SignUp')} style={s.signUpRow}>
+              <Text style={[s.signUpTxt, {color: colors.textMuted}]}>
+                New here? <Text style={{color: colors.primary, fontWeight: '800'}}>Create an account</Text>
+              </Text>
+            </PressableScale>
           </Animated.View>
 
           <View style={s.footer}>
@@ -349,6 +357,8 @@ const s = StyleSheet.create({
 
   loginBtn: {borderRadius: 999, height: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 26},
   loginBtnTxt: {fontSize: 16, fontWeight: '800'},
+  signUpRow: {alignItems: 'center', marginTop: 20, paddingVertical: 4},
+  signUpTxt: {fontSize: 13, fontWeight: '600'},
 
   footer: {alignItems: 'center', paddingBottom: 8, gap: 6},
   footerBadge: {flexDirection: 'row', alignItems: 'center', gap: 6},
