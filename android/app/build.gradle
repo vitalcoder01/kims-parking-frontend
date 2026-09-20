@@ -155,17 +155,10 @@ android {
             // for anything actually distributed.
             signingConfig keystorePropertiesFile.exists() ? signingConfigs.release : signingConfigs.debug
 
-            // Ship ARM only.
-            //
-            // x86 and x86_64 are emulator architectures -- no Android phone
-            // runs them -- and they were 29.5 MB of the APK's 53.4 MB of
-            // native libraries. Every user was downloading two full copies
-            // of the native runtime that their device can never load.
-            //
-            // Deliberately scoped to the release build rather than set via
-            // gradle.properties' reactNativeArchitectures, so debug builds
-            // keep all four and an x86_64 emulator still works for local
-            // development. Nothing about the dev workflow changes.
+            // Ship ARM only. What actually narrows the APK is
+            // reactNativeArchitectures in gradle.properties: AGP unions this
+            // filter with the one React Native's plugin sets on defaultConfig,
+            // so this block alone can never drop an ABI. Keep the two in step.
             //
             // armeabi-v7a stays: it covers older 32-bit handsets, and a
             // phone that cannot install the APK at all is a far worse
