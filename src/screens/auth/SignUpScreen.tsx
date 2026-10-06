@@ -7,6 +7,7 @@ import {PressableScale} from '../../components/PressableScale';
 import {useAuth} from '../../context/AuthContext';
 import {useTheme} from '../../context/ThemeContext';
 import {BRAND_GRADIENT, BRAND_GRADIENT_DARK} from '../../theme/colors';
+import {shadow} from '../../theme';
 import {Icon} from '../../components/Icon';
 
 // Self-registration for a doctor/staff member. Mirrors the web portal's
@@ -75,7 +76,7 @@ export function SignUpScreen() {
             <Text style={s.heroSub}>Create your account</Text>
           </LinearGradient>
 
-          <Animated.View style={[s.card, {backgroundColor: colors.surface, borderColor: colors.border, transform: [{translateX: shake}]}]}>
+          <Animated.View style={[s.card, shadow(isDark, 'e4'), {backgroundColor: colors.surface, borderColor: colors.border, transform: [{translateX: shake}]}]}>
             <Text style={[s.cardTitle, {color: colors.textPrimary}]}>Create Your Login</Text>
             <Text style={[s.cardSub, {color: colors.textMuted}]}>Just your name, phone, and a password</Text>
 
@@ -182,6 +183,7 @@ const s = StyleSheet.create({
   logoTile: {
     width: 76, height: 76, borderRadius: 22, backgroundColor: '#FFFFFF',
     alignItems: 'center', justifyContent: 'center', marginBottom: 22,
+    shadowColor: '#000', shadowOffset: {width: 0, height: 10}, shadowOpacity: 0.35, shadowRadius: 20, elevation: 10,
   },
   heroTitle: {color: '#fff', fontSize: 30, fontWeight: '900', letterSpacing: -0.8},
   heroSub: {color: 'rgba(255,255,255,0.62)', fontSize: 13.5, marginTop: 7, fontWeight: '500'},
