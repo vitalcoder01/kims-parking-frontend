@@ -8,6 +8,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {useAuth} from '../../context/AuthContext';
 import {useTheme} from '../../context/ThemeContext';
 import {BRAND_GRADIENT, BRAND_GRADIENT_DARK} from '../../theme/colors';
+import {shadow} from '../../theme';
 import {Icon} from '../../components/Icon';
 import {APP_VERSION_NAME} from '../../config/version';
 
@@ -146,8 +147,8 @@ export function LoginScreen() {
             <Text style={s.heroSub}>Smart Parking Management</Text>
           </LinearGradient>
 
-          {/* Login card */}
-          <Animated.View style={[s.card, {backgroundColor: colors.surface, borderColor: colors.border, transform: [{translateX: shake}]}]}>
+          {/* Login card — floats over the hero on real elevation (e4). */}
+          <Animated.View style={[s.card, shadow(isDark, 'e4'), {backgroundColor: colors.surface, borderColor: colors.border, transform: [{translateX: shake}]}]}>
             <Text style={[s.cardTitle, {color: colors.textPrimary}]}>Welcome back</Text>
             <Text style={[s.cardSub, {color: colors.textMuted}]}>Sign in to continue your shift</Text>
 
@@ -317,6 +318,7 @@ const s = StyleSheet.create({
   logoTile: {
     width: 76, height: 76, borderRadius: 22, backgroundColor: '#FFFFFF',
     alignItems: 'center', justifyContent: 'center', marginBottom: 22,
+    shadowColor: '#000', shadowOffset: {width: 0, height: 10}, shadowOpacity: 0.35, shadowRadius: 20, elevation: 10,
   },
   heroTitle: {color: '#fff', fontSize: 30, fontWeight: '900', letterSpacing: -0.8},
   heroSub: {color: 'rgba(255,255,255,0.62)', fontSize: 13.5, marginTop: 7, fontWeight: '500'},
